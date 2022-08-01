@@ -20,5 +20,7 @@ openat = "0.1.21"
 rand = "0.8.5"
 
 [profile.release]
-strip = true
+codegen-units = 1
 lto = true
+panic = "abort"
+strip = true
