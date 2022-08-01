@@ -693,8 +693,9 @@ fn execute_command(
             // Listen for events
             use nix::sys::epoll::*;
             let epollfd = epoll_create().context("Failed to create epollfd")?;
+            let epollfd = unsafe { OwnedFd::from_raw_fd(epollfd) };
             epoll_ctl(
-                epollfd,
+                epollfd.as_raw_fd(),
                 EpollOp::EpollCtlAdd,
                 pidfd.as_raw_fd(),
                 &mut EpollEvent::new(EpollFlags::EPOLLIN, 0),
@@ -791,7 +792,7 @@ fn execute_command(
                 }
 
                 let mut events = [EpollEvent::empty()];
-                let n_events = epoll_wait(epollfd, &mut events, timeout_ms as isize)
+                let n_events = epoll_wait(epollfd.as_raw_fd(), &mut events, timeout_ms as isize)
                     .context("epoll_wait failed")?;
 
                 match n_events {
