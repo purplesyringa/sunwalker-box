@@ -179,6 +179,11 @@ impl UserCgroup {
             .write(format!("{limit}\n").as_ref())
             .context("Failed to set memory limit")?;
         self.proc_cgroup_fd
+            .write_file(format!("box-{}/memory.swap.max", self.box_id), 0o700)
+            .context("Failed to open memory.swap.max for writing")?
+            .write(b"0\n")
+            .context("Failed to disable swap")?;
+        self.proc_cgroup_fd
             .write_file(format!("box-{}/memory.oom.group", self.box_id), 0o700)
             .context("Failed to open memory.oom.group for writing")?
             .write(b"1\n")
