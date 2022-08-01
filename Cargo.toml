@@ -11,17 +11,13 @@ description = "Sandbox for sunwalker judge system"
 [dependencies]
 anyhow = "1.0"
 clap = { version = "3.1.6", features = ["derive"] }
-futures = "0.3.21"
-futures-util = "0.3.21"
+interfaces = "0.0.8"
 json = "0.12.4"
-nix = "0.23.1"
 libc = "0.2.120"
 multiprocessing = { path = "multiprocessing" }
+nix = "0.23.1"
 openat = "0.1.21"
-path-clean = "0.1.0"
-tokio = { version = "1", features = ["full"] }
 rand = "0.8.5"
-rtnetlink = "0.11.0"
 
 [profile.release]
 strip = true

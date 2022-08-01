@@ -1,6 +1,5 @@
 use crate::system;
 use anyhow::{bail, Context, Result};
-use futures_util::stream::TryStreamExt;
 use libc::{c_char, c_int, CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM};
 use std::io::BufRead;
 use std::os::unix::fs::PermissionsExt;
@@ -40,7 +39,7 @@ pub fn sanity_checks() -> Result<()> {
     Ok(())
 }
 
-pub async fn unshare_persistent_namespaces() -> Result<()> {
+pub fn unshare_persistent_namespaces() -> Result<()> {
     if unsafe { libc::unshare(CLONE_NEWIPC | CLONE_NEWUTS | CLONE_SYSVSEM | CLONE_NEWNET) } != 0 {
         return Err(std::io::Error::last_os_error()).context("Failed to unshare namespaces");
     }
@@ -81,29 +80,11 @@ pub async fn unshare_persistent_namespaces() -> Result<()> {
     // in the interpretation of the IPv6 RFC by the Linux kernel.
 
     // Bring lo down
-    {
-        let (connection, handle, _) =
-            rtnetlink::new_connection().context("Failed to connect to rtnetlink")?;
-        tokio::spawn(connection);
-
-        if let Some(link) = handle
-            .link()
-            .get()
-            .match_name("lo".to_string())
-            .execute()
-            .try_next()
-            .await
-            .context("Failed to find lo link")?
-        {
-            handle
-                .link()
-                .set(link.header.index)
-                .down()
-                .execute()
-                .await
-                .context("Failed to bring lo down")?;
-        }
-    }
+    interfaces::Interface::get_by_name("lo")
+        .context("Failed to get lo interface")?
+        .context("lo interface is missing")?
+        .set_up(false)
+        .context("Failed to bring lo down")?;
 
     Ok(())
 }

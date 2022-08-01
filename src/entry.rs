@@ -91,7 +91,7 @@ enum Command {
     },
 }
 
-pub async fn main() {
+pub fn main() {
     let cli_args = CLIArgs::parse();
 
     sandbox::sanity_checks().expect("Sanity checks failed");
@@ -104,12 +104,12 @@ pub async fn main() {
             cgroups::revert_core_isolation(core).expect("Failed to core revert isolation");
         }
         CLICommand::Start(command) => {
-            start(command).await.expect("Failed to start box");
+            start(command).expect("Failed to start box");
         }
     }
 }
 
-async fn start(cli_command: CLIStartCommand) -> Result<()> {
+fn start(cli_command: CLIStartCommand) -> Result<()> {
     let cgroup = cgroups::Cgroup::new(cli_command.core).context("Failed to create cgroup")?;
 
     // Move self to the right core so that spawning processes on the right core is fast. This also
@@ -141,6 +141,9 @@ async fn start(cli_command: CLIStartCommand) -> Result<()> {
     // We need to synchronize mountns with userns, so it has to be remounted
     mountns::unshare_mountns().expect("Failed to unshare mount namespace");
 
+    // Isolate various non-important namespaces
+    sandbox::unshare_persistent_namespaces().expect("Failed to unshare persistent namespaces");
+
     // We need a separate worker to monitor the child (and no, using tokio won't work because then
     // using stdio would require a dedicated thread), but threads can't be created after unsharing
     // pidns, so we create the thread beforehand. We couldn't do this before because userns can't be
@@ -154,11 +157,6 @@ async fn start(cli_command: CLIStartCommand) -> Result<()> {
 
     // Run a child in a new PID namespace
     procs::unshare_pidns().context("Failed to unshare pid namespace")?;
-
-    // Isolate various non-important namespaces
-    sandbox::unshare_persistent_namespaces()
-        .await
-        .expect("Failed to unshare persistent namespaces");
 
     // Recreate environment, exposing reasonable defaults
     for (key, _) in std::env::vars_os() {
