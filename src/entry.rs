@@ -708,24 +708,31 @@ fn execute_command(
             )
             .context("Failed to configure epoll")?;
 
+            let has_peak = user_cgroup.get_memory_peak()?.is_some();
+
             struct Metrics {
                 real_time: Duration,
                 cpu_time: Duration,
                 idleness_time: Duration,
                 memory: usize,
             }
-            let mut metrics;
+            let mut metrics = Metrics {
+                cpu_time: Duration::ZERO,
+                real_time: Duration::ZERO,
+                idleness_time: Duration::ZERO,
+                memory: 0,
+            };
+
             let mut exitted = false;
 
             loop {
                 let cpu_stats = user_cgroup.get_cpu_stats()?;
-                metrics = Metrics {
-                    cpu_time: cpu_stats.total,
-                    real_time: start_time.elapsed(),
-                    idleness_time: Duration::ZERO,
-                    memory: 0,
-                };
+                metrics.cpu_time = cpu_stats.total;
+                metrics.real_time = start_time.elapsed();
                 metrics.idleness_time = metrics.real_time.saturating_sub(metrics.cpu_time);
+                if !has_peak {
+                    metrics.memory = metrics.memory.max(user_cgroup.get_memory_total()?);
+                }
 
                 if exitted {
                     break;
@@ -735,6 +742,7 @@ fn execute_command(
                 if real_time_limit.is_some_and(|&limit| metrics.real_time > limit)
                     || cpu_time_limit.is_some_and(|&limit| metrics.cpu_time > limit)
                     || idleness_time_limit.is_some_and(|&limit| metrics.idleness_time > limit)
+                    || memory_limit.is_some_and(|&limit| metrics.memory > limit)
                 {
                     break;
                 }
@@ -771,6 +779,12 @@ fn execute_command(
                 // with multicore programs, so ve should forbid the limit in this case (TODO).
                 if let Some(idleness_time_limit) = idleness_time_limit {
                     timeout = timeout.min(idleness_time_limit - metrics.idleness_time);
+                }
+
+                // Old kernels don't reveal memory.peak, so the only way to get memory usage stats
+                // is to use polling
+                if !has_peak {
+                    timeout = Duration::ZERO;
                 }
 
                 // Switching context takes time, some other operations take time too, etc., so less
@@ -818,15 +832,25 @@ fn execute_command(
                 }
             }
 
+            if has_peak {
+                metrics.memory = metrics.memory.max(
+                    user_cgroup
+                        .get_memory_peak()?
+                        .context("memory.peak is unexpectedly unavailable")?,
+                );
+            }
+
             let mut limit_verdict;
-            if user_cgroup.was_oom_killed()? {
-                limit_verdict = "MemoryLimitExceeded";
-            } else if cpu_time_limit.is_some_and(|&limit| metrics.cpu_time > limit) {
+            if cpu_time_limit.is_some_and(|&limit| metrics.cpu_time > limit) {
                 limit_verdict = "CPUTimeLimitExceeded";
             } else if real_time_limit.is_some_and(|&limit| metrics.real_time > limit) {
                 limit_verdict = "RealTimeLimitExceeded";
             } else if idleness_time_limit.is_some_and(|&limit| metrics.idleness_time > limit) {
                 limit_verdict = "IdlenessTimeLimitExceeded";
+            } else if user_cgroup.was_oom_killed()?
+                || memory_limit.is_some_and(|&limit| metrics.memory > limit)
+            {
+                limit_verdict = "MemoryLimitExceeded";
             } else {
                 limit_verdict = "OK";
             }
