@@ -87,6 +87,7 @@ enum Command {
         cpu_time_limit: Option<Duration>,
         idleness_time_limit: Option<Duration>,
         memory_limit: Option<usize>,
+        processes_limit: Option<usize>,
     },
 }
 
@@ -458,6 +459,15 @@ async fn handle_command(
                         .context("Invalid 'memory_limit' argument")?,
                 )
             };
+            let processes_limit = if arg["processes_limit"].is_null() {
+                None
+            } else {
+                Some(
+                    arg["processes_limit"]
+                        .as_usize()
+                        .context("Invalid 'processes_limit' argument")?,
+                )
+            };
 
             sent_command = Command::Run {
                 argv,
@@ -468,6 +478,7 @@ async fn handle_command(
                 cpu_time_limit,
                 idleness_time_limit,
                 memory_limit,
+                processes_limit,
             };
         }
         _ => {
@@ -625,6 +636,7 @@ fn execute_command(
             cpu_time_limit,
             idleness_time_limit,
             memory_limit,
+            processes_limit,
         } => {
             let stdin = std::fs::File::open(stdin).context("Failed to open stdin file")?;
             let stdout = std::fs::File::options()
@@ -660,6 +672,11 @@ fn execute_command(
                 user_cgroup
                     .set_memory_limit(memory_limit)
                     .context("Failed to apply memory limit")?;
+            }
+            if let Some(processes_limit) = processes_limit {
+                user_cgroup
+                    .set_processes_limit(processes_limit)
+                    .context("Failed to apply processes limit")?;
             }
             user_cgroup
                 .add_process(pid)

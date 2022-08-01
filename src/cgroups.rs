@@ -186,6 +186,15 @@ impl UserCgroup {
         Ok(())
     }
 
+    pub fn set_processes_limit(&self, limit: usize) -> Result<()> {
+        self.proc_cgroup_fd
+            .write_file(format!("box-{}/pids.max", self.box_id), 0o700)
+            .context("Failed to open pids.max for writing")?
+            .write(format!("{limit}\n").as_ref())
+            .context("Failed to set processes limit")?;
+        Ok(())
+    }
+
     pub fn get_cpu_stats(&self) -> Result<CpuStats> {
         let mut buf = String::new();
         self.proc_cgroup_fd
