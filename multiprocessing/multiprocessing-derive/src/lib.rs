@@ -147,6 +147,7 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
             impl #generic_params ::multiprocessing::Entrypoint<(::std::os::unix::io::RawFd,)> for #entry_ident #generics {
                 type Output = i32;
                 #tokio_attr
+                #[allow(unreachable_code)] // If func returns !
                 async fn call(self, args: (::std::os::unix::io::RawFd,)) -> Self::Output {
                     let output_tx_fd = args.0;
                     use ::std::os::unix::io::FromRawFd;
@@ -186,6 +187,7 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
             impl #generic_params ::multiprocessing::Entrypoint<(::std::os::unix::io::RawFd,)> for #entry_ident #generics {
                 type Output = i32;
+                #[allow(unreachable_code)] // If func returns !
                 fn call(self, args: (::std::os::unix::io::RawFd,)) -> Self::Output {
                     let output_tx_fd = args.0;
                     use ::std::os::unix::io::FromRawFd;
