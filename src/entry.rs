@@ -73,6 +73,11 @@ struct CLIStartCommand {
     /// Environment variables
     #[clap(short = 'E', long, parse(try_from_str = parse_key_val), number_of_values = 1)]
     env: Vec<(String, String)>,
+
+    /// (insecure) Don't abort preemptively if a non-CLOEXEC file descriptor is found. This should
+    /// only be used for benchmarking.
+    #[clap(long)]
+    ignore_non_cloexec: bool,
 }
 
 #[derive(Object)]
@@ -526,24 +531,27 @@ fn reaper(
         std::process::exit(0);
     }
 
-    // O_CLOEXEC is great and all, but better safe than sorry. We make sure all streams except the
-    // standard ones are closed on exec.
-    for entry in std::fs::read_dir("/proc/self/fd").expect("Failed to read /proc/self/fd") {
-        let entry = entry.expect("Failed to read /proc/self/fd");
-        let fd: RawFd = entry
-            .file_name()
-            .into_string()
-            .expect("Invalid filename in /proc/self/fd")
-            .parse()
-            .expect("Invalid filename in /proc/self/fd");
-        if fd < 3 {
-            continue;
-        }
-        let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFD)
-            .expect("Failed to fcntl a file descriptor");
-        if !nix::fcntl::FdFlag::from_bits_truncate(flags).intersects(nix::fcntl::FdFlag::FD_CLOEXEC)
-        {
-            panic!("File descriptor {fd} is not CLOEXEC");
+    if !cli_command.ignore_non_cloexec {
+        // O_CLOEXEC is great and all, but better safe than sorry. We make sure all streams except
+        // the standard ones are closed on exec.
+        for entry in std::fs::read_dir("/proc/self/fd").expect("Failed to read /proc/self/fd") {
+            let entry = entry.expect("Failed to read /proc/self/fd");
+            let fd: RawFd = entry
+                .file_name()
+                .into_string()
+                .expect("Invalid filename in /proc/self/fd")
+                .parse()
+                .expect("Invalid filename in /proc/self/fd");
+            if fd < 3 {
+                continue;
+            }
+            let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFD)
+                .expect("Failed to fcntl a file descriptor");
+            if !nix::fcntl::FdFlag::from_bits_truncate(flags)
+                .intersects(nix::fcntl::FdFlag::FD_CLOEXEC)
+            {
+                panic!("File descriptor {fd} is not CLOEXEC");
+            }
         }
     }
 
