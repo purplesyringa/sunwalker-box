@@ -1,4 +1,4 @@
-use libc::{gid_t, uid_t};
+use nix::libc::{gid_t, uid_t};
 
 // Not mapping external uid 0 to anything ensures it's impossible to do anything real root can from
 // inside the sandbox

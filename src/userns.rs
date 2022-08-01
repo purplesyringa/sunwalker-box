@@ -1,6 +1,6 @@
 use crate::ids::*;
 use anyhow::{Context, Result};
-use libc::CLONE_NEWUSER;
+use nix::{libc, libc::CLONE_NEWUSER};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map

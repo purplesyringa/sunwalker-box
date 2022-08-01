@@ -13,7 +13,6 @@ anyhow = "1.0"
 clap = { version = "3.1.6", features = ["derive"] }
 interfaces = "0.0.8"
 json = "0.12.4"
-libc = "0.2.120"
 multiprocessing = { path = "multiprocessing" }
 nix = "0.23.1"
 openat = "0.1.21"

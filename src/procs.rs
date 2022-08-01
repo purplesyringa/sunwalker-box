@@ -1,6 +1,6 @@
 use crate::system;
 use anyhow::{Context, Result};
-use libc::CLONE_NEWPID;
+use nix::{libc, libc::CLONE_NEWPID};
 use std::path::PathBuf;
 
 pub fn unshare_pidns() -> std::io::Result<()> {

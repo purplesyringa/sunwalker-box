@@ -652,7 +652,6 @@ dependencies = [
  "clap",
  "interfaces",
  "json",
- "libc",
  "multiprocessing",
  "nix",
  "openat",

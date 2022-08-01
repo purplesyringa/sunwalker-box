@@ -1,7 +1,7 @@
 use crate::ids;
 use anyhow::{Context, Result};
-use libc::pid_t;
 use multiprocessing::Object;
+use nix::libc::pid_t;
 use rand::Rng;
 use std::ffi::OsStr;
 use std::io::{Read, Write};

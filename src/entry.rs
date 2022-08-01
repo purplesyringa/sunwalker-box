@@ -1,8 +1,11 @@
 use crate::{cgroups, mountns, procs, rootfs, sandbox, system, userns};
 use anyhow::{bail, Context, Result};
 use clap::{Args, Parser, Subcommand};
-use libc::{PR_SET_PDEATHSIG, SIGKILL};
 use multiprocessing::Object;
+use nix::{
+    libc,
+    libc::{SYS_pidfd_open, PR_SET_PDEATHSIG, SIGKILL},
+};
 use std::error::Error;
 use std::ffi::CString;
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
@@ -190,7 +193,7 @@ fn start(cli_command: CLIStartCommand) -> Result<()> {
     // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
     // communication doesn't work well, so we use pidfd. As a side note, pidfd_open sets O_CLOEXEC
     // automatically.
-    let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, nix::unistd::getpid(), 0) } as RawFd;
+    let pidfd = unsafe { libc::syscall(SYS_pidfd_open, nix::unistd::getpid(), 0) } as RawFd;
     if pidfd == -1 {
         panic!(
             "Failed to get pidfd of self: {}",
@@ -650,7 +653,7 @@ fn execute_command(
             let pid = user_process.id();
 
             // Acquire pidfd. This is safe because the process hasn't been awaited yet.
-            let pidfd = unsafe { libc::syscall(libc::SYS_pidfd_open, pid, 0) } as RawFd;
+            let pidfd = unsafe { libc::syscall(SYS_pidfd_open, pid, 0) } as RawFd;
             if pidfd == -1 {
                 return Err(std::io::Error::last_os_error())
                     .context("Failed to open pidfd for child process");

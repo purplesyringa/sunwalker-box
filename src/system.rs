@@ -1,6 +1,9 @@
-use libc::{c_int, c_ulong, c_void};
+use nix::{
+    libc,
+    libc::{c_int, c_ulong, c_void},
+};
 
-pub use libc::{
+pub use nix::libc::{
     MNT_DETACH, MNT_EXPIRE, MNT_FORCE, MS_BIND, MS_DIRSYNC, MS_LAZYTIME, MS_MANDLOCK, MS_MOVE,
     MS_NOATIME, MS_NODEV, MS_NODIRATIME, MS_NOEXEC, MS_NOSUID, MS_PRIVATE, MS_RDONLY, MS_REC,
     MS_RELATIME, MS_REMOUNT, MS_SHARED, MS_SILENT, MS_SLAVE, MS_STRICTATIME, MS_SYNCHRONOUS,

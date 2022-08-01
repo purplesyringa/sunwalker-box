@@ -1,4 +1,4 @@
-use libc::CLONE_NEWNS;
+use nix::{libc, libc::CLONE_NEWNS};
 
 pub fn unshare_mountns() -> std::io::Result<()> {
     if unsafe { libc::unshare(CLONE_NEWNS) } != 0 {

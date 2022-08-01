@@ -1,6 +1,9 @@
 use crate::system;
 use anyhow::{bail, Context, Result};
-use libc::{c_char, c_int, CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM};
+use nix::{
+    libc,
+    libc::{c_char, c_int, CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM},
+};
 use std::io::BufRead;
 use std::os::unix::fs::PermissionsExt;
 
