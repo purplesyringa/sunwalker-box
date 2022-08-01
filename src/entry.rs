@@ -244,9 +244,7 @@ fn handle_command(
     command: &str,
     arg: &str,
 ) -> Result<Option<String>> {
-    let sent_command;
-
-    match command {
+    let sent_command = match command {
         "mkdir" => {
             let path = json::parse(arg)
                 .context("Invalid JSON")?
@@ -384,9 +382,7 @@ fn handle_command(
             )?;
             return Ok(None);
         }
-        "reset" => {
-            sent_command = Command::Reset;
-        }
+        "reset" => Command::Reset,
         "run" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
             if !arg["argv"].is_array() {
@@ -469,7 +465,7 @@ fn handle_command(
                 )
             };
 
-            sent_command = Command::Run {
+            Command::Run {
                 argv,
                 stdin,
                 stdout,
@@ -479,7 +475,7 @@ fn handle_command(
                 idleness_time_limit,
                 memory_limit,
                 processes_limit,
-            };
+            }
         }
         _ => {
             bail!("Unknown command {command}");
@@ -682,7 +678,7 @@ fn execute_command(
             let start_time = Instant::now();
 
             // Tell the child it's alright to start
-            if let Err(_) = ours.send(&()) {
+            if ours.send(&()).is_err() {
                 // This most likely indicates that the child has terminated before having a chance
                 // to wait on the pipe, i.e. a preparation failure
                 bail!(
@@ -807,17 +803,16 @@ fn execute_command(
                     timeout += Duration::from_millis(50);
                 }
 
-                let timeout_ms: i32;
-                if timeout == Duration::MAX {
-                    timeout_ms = -1;
+                let timeout_ms: i32 = if timeout == Duration::MAX {
+                    -1
                 } else {
                     // Old kernels don't support very large timeouts
-                    timeout_ms = timeout
+                    timeout
                         .as_millis()
                         .try_into()
                         .unwrap_or(i32::MAX)
-                        .min(1000000);
-                }
+                        .min(1000000)
+                };
 
                 let mut events = [EpollEvent::empty()];
                 let n_events = epoll_wait(epollfd.as_raw_fd(), &mut events, timeout_ms as isize)

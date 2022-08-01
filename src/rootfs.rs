@@ -228,7 +228,7 @@ fn unmount_recursively(prefix: &str, inclusive: bool) -> Result<()> {
     let mut vec = Vec::new();
     for line in std::io::BufReader::new(file).lines() {
         let line = line.context("Failed to read /proc/self/mounts")?;
-        let mut it = line.split(" ");
+        let mut it = line.split(' ');
         it.next().context("Invalid format of /proc/self/mounts")?;
         let target_path = it.next().context("Invalid format of /proc/self/mounts")?;
         if target_path.starts_with(&prefix_slash) || (inclusive && target_path == prefix) {
@@ -271,21 +271,15 @@ fn resolve_abs(
                 let cwd_acc_len = acc.len();
                 acc.push(b'/');
                 acc.extend_from_slice(part.as_bytes());
-                match std::fs::read_link(OsStr::from_bytes(&acc)) {
-                    Ok(link_target) => {
-                        acc.truncate(cwd_acc_len);
-                        acc = resolve_abs(&link_target, root, acc, link_level + 1)?
-                            .into_os_string()
-                            .into_vec();
-                    }
-                    Err(e) => {
-                        if e.kind() == ErrorKind::InvalidInput {
-                            // Not a symlink
-                        } else {
-                            // Perhaps ENOENT, but if it's critical, it's going to be handled later
-                            // anyway, when the path is used
-                        }
-                    }
+
+                // If readlink fails, it's either because we get EINVAL, which means it's not a
+                // symlink and the error is safe to ignore, or something worse, e.g. ENOENT, but if
+                // it's critical, it's going to be handled later anyway, when the path is used
+                if let Ok(link_target) = std::fs::read_link(OsStr::from_bytes(&acc)) {
+                    acc.truncate(cwd_acc_len);
+                    acc = resolve_abs(&link_target, root, acc, link_level + 1)?
+                        .into_os_string()
+                        .into_vec();
                 }
             }
         }

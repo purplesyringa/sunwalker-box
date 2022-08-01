@@ -64,18 +64,6 @@ pub fn bind_mount<S: AsRef<Path>, T: AsRef<Path>>(source: S, target: T) -> Resul
     bind_mount_opt(source, target, 0)
 }
 
-pub fn move_mount_opt<S: AsRef<Path>, T: AsRef<Path>>(
-    source: S,
-    target: T,
-    flags: c_ulong,
-) -> Result<()> {
-    mount(source, target, "none", flags | MS_MOVE, None)
-}
-
-pub fn move_mount<S: AsRef<Path>, T: AsRef<Path>>(source: S, target: T) -> Result<()> {
-    move_mount_opt(source, target, 0)
-}
-
 pub fn umount_opt<P: AsRef<Path>>(path: P, flags: c_int) -> Result<()> {
     let res = unsafe {
         libc::umount2(
