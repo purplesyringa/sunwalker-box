@@ -1,0 +1,2 @@
+edition = "2021"
+format_strings = true

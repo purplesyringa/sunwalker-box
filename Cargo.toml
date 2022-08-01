@@ -1,0 +1,34 @@
+[package]
+name = "sunwalker_box"
+version = "0.1.0"
+edition = "2021"
+authors = ["Ivanq <imachug@gmail.com>"]
+license = "GPL-3.0-or-later"
+description = "Sandbox for sunwalker judge system"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+anyhow = "1.0"
+clap = { version = "3.1.6", features = ["derive"] }
+futures = "0.3.21"
+futures-util = "0.3.21"
+json = "0.12.4"
+nix = "0.23.1"
+libc = "0.2.120"
+multiprocessing = { path = "multiprocessing" }
+openat = "0.1.21"
+path-clean = "0.1.0"
+tokio = { version = "1", features = ["full"] }
+rand = "0.8.5"
+rtnetlink = "0.11.0"
+
+# serde = { version = "1.0", features = ["derive", "rc"] }
+# itertools = "0.10.3"
+# tokio-stream = "0.1.9"
+# async-stream = "0.3.3"
+# tokio-seqpacket = "0.5.5"
+
+[profile.release]
+strip = true
+lto = true
