@@ -197,7 +197,7 @@ async fn start(cli_command: CLIStartCommand) -> Result<()> {
     let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
 
     let (mut ours, theirs) =
-        multiprocessing::tokio::duplex::<Command, std::result::Result<Option<String>, String>>()
+        multiprocessing::duplex::<Command, std::result::Result<Option<String>, String>>()
             .context("Failed to create channel")?;
 
     let child = reaper
@@ -218,7 +218,7 @@ async fn start(cli_command: CLIStartCommand) -> Result<()> {
         let line = line.expect("Failed to read from stdin");
         let (command, arg) = line.split_once(' ').unwrap_or((&line, ""));
         let command = command.to_lowercase();
-        match handle_command(&mut ours, &command, arg).await {
+        match handle_command(&mut ours, &command, arg) {
             Ok(None) => {
                 println!("ok");
             }
@@ -236,11 +236,8 @@ async fn start(cli_command: CLIStartCommand) -> Result<()> {
     Ok(())
 }
 
-async fn handle_command(
-    channel: &mut multiprocessing::tokio::Duplex<
-        Command,
-        std::result::Result<Option<String>, String>,
-    >,
+fn handle_command(
+    channel: &mut multiprocessing::Duplex<Command, std::result::Result<Option<String>, String>>,
     command: &str,
     arg: &str,
 ) -> Result<Option<String>> {
@@ -488,10 +485,9 @@ async fn handle_command(
 
     channel
         .send(&sent_command)
-        .await
         .context("Failed to send command")?;
 
-    match channel.recv().await.context("Failed to recv reply")? {
+    match channel.recv().context("Failed to recv reply")? {
         None => bail!("No reply from child"),
         Some(Ok(value)) => Ok(value),
         Some(Err(e)) => bail!("{e}"),
@@ -499,12 +495,11 @@ async fn handle_command(
 }
 
 #[multiprocessing::entrypoint]
-#[tokio::main(flavor = "current_thread")]
-async fn reaper(
+fn reaper(
     ppidfd: OwnedFd,
     cli_command: CLIStartCommand,
     cgroup: cgroups::Cgroup,
-    channel: multiprocessing::tokio::Duplex<std::result::Result<Option<String>, String>, Command>,
+    channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) -> ! {
     if nix::unistd::getpid().as_raw() != 1 {
         panic!("Reaper must have PID 1");
@@ -576,14 +571,10 @@ async fn reaper(
 }
 
 #[multiprocessing::entrypoint]
-#[tokio::main(flavor = "current_thread")]
-async fn manager(
+fn manager(
     cli_command: CLIStartCommand,
     cgroup: cgroups::Cgroup,
-    mut channel: multiprocessing::tokio::Duplex<
-        std::result::Result<Option<String>, String>,
-        Command,
-    >,
+    mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
     // Setup rootfs. This has to happen inside the pidns, as we mount procfs here.
     let quotas = rootfs::DiskQuotas {
@@ -595,7 +586,6 @@ async fn manager(
 
     while let Some(command) = channel
         .recv()
-        .await
         .expect("Failed to receive message from channel")
     {
         channel
@@ -603,7 +593,6 @@ async fn manager(
                 Ok(value) => Ok(value),
                 Err(e) => Err(format!("{e:?}")),
             })
-            .await
             .expect("Failed to send reply to channel")
     }
 }
