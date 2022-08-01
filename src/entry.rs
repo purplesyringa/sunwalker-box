@@ -641,10 +641,12 @@ fn execute_command(
             let stdin = std::fs::File::open(stdin).context("Failed to open stdin file")?;
             let stdout = std::fs::File::options()
                 .write(true)
+                .create(true)
                 .open(stdout)
                 .context("Failed to open stdout file")?;
             let stderr = std::fs::File::options()
                 .write(true)
+                .create(true)
                 .open(stderr)
                 .context("Failed to open stderr file")?;
 
