@@ -4,7 +4,8 @@ use clap::{Args, Parser, Subcommand};
 use multiprocessing::Object;
 use nix::{
     libc,
-    libc::{SYS_pidfd_open, PR_SET_PDEATHSIG, SIGKILL},
+    libc::{c_int, SYS_pidfd_open, PR_SET_PDEATHSIG, SIGTERM},
+    sys::signal,
 };
 use std::error::Error;
 use std::ffi::CString;
@@ -496,6 +497,13 @@ fn handle_command(
     }
 }
 
+extern "C" fn pid1_signal_handler(signo: c_int) {
+    // std::process::exit is not async-safe
+    unsafe {
+        libc::_exit(128 + signo);
+    }
+}
+
 #[multiprocessing::entrypoint]
 fn reaper(
     ppidfd: OwnedFd,
@@ -507,8 +515,31 @@ fn reaper(
         panic!("Reaper must have PID 1");
     }
 
+    // PID 1 can't be killed, not even by suicide. Unfortunately, that's exactly what panic! does,
+    // so every time panic! is called, it attempts to call abort(2), silently fails and gets stuck
+    // in a SIGSEGV loop. That's not what we what, so we set handlers manually.
+    for sig in [
+        signal::Signal::SIGSEGV,
+        signal::Signal::SIGTERM,
+        signal::Signal::SIGABRT,
+    ] {
+        if let Err(e) = unsafe {
+            signal::sigaction(
+                sig,
+                &signal::SigAction::new(
+                    signal::SigHandler::Handler(pid1_signal_handler),
+                    signal::SaFlags::empty(),
+                    signal::SigSet::empty(),
+                ),
+            )
+        } {
+            eprintln!("Failed to configure sigaction: {e}");
+            std::process::exit(1);
+        }
+    }
+
     // We want to terminate when parent dies
-    if unsafe { libc::prctl(PR_SET_PDEATHSIG, SIGKILL) } == -1 {
+    if unsafe { libc::prctl(PR_SET_PDEATHSIG, SIGTERM) } == -1 {
         panic!(
             "Failed to prctl(PR_SET_PDEATHSIG): {}",
             std::io::Error::last_os_error()
