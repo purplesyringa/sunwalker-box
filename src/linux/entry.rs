@@ -1,4 +1,7 @@
-use crate::{entry, linux::{cgroups, mountns, procs, rootfs, sandbox, system, userns}};
+use crate::{
+    entry,
+    linux::{cgroups, mountns, procs, rootfs, sandbox, system, userns},
+};
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::{
@@ -50,9 +53,8 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
 
     // Move self to the right core so that spawning processes on the right core is fast. This also
     // has to be done before unsharing userns, as we'd then lose our root privileges, and moving
-    // process from cgroup A to cgroup B requires write privileges in cgroup LCA(A, B) (according to
-    // Linux source code; I don't think this is documented), and if we don't do it now, we won't be
-    // able to do it later.
+    // process from cgroup A to cgroup B requires write privileges in cgroup LCA(A, B), and if we
+    // don't do it now, we won't be able to do it later.
     cgroup
         .add_self_as_manager()
         .expect("Failed to add self to manager cgroup");
@@ -508,12 +510,16 @@ fn reaper(
         }
     }
 
+    // We don't want to terminate immediately if someone sends Ctrl-C via the controlling terminal,
+    // but instead wait for the parent's termination and quit after that.
+    nix::unistd::setsid().expect("Failed to setsid");
+
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.
     let box_cgroup = cgroup
         .create_box_cgroup()
         .expect("Failed to create box cgroup");
-    let mut child = manager
+    let child = manager
         .spawn(
             cli_command,
             box_cgroup
@@ -522,9 +528,7 @@ fn reaper(
             channel,
         )
         .expect("Failed to start child");
-    std::thread::spawn(move || {
-        child.join().expect("Child failed");
-    });
+    // We purposefully don't join manager here, as it may die unexpectedly
 
     'main: loop {
         let mut sigset = signal::SigSet::empty();
@@ -540,6 +544,10 @@ fn reaper(
                 loop {
                     match wait::waitpid(None, Some(wait::WaitPidFlag::WNOHANG)) {
                         Ok(res) => {
+                            if res.pid() == Some(nix::unistd::Pid::from_raw(child.id())) {
+                                // Manager died
+                                break;
+                            }
                             if res == wait::WaitStatus::StillAlive {
                                 break;
                             }
