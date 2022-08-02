@@ -1,10 +1,10 @@
 use crate::ids;
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::libc::pid_t;
 use rand::Rng;
 use std::ffi::OsStr;
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::time::Duration;
 
@@ -101,15 +101,6 @@ impl Cgroup {
             .write(b"+cpu +memory +pids\n")
             .context("Failed to enable cgroup controllers")?;
 
-        chown_cgroup(
-            &self
-                .core_cgroup_fd
-                .sub_dir(format!("proc-{id}"))
-                .with_context(|| format!("Failed to open proc-{id}"))?,
-            Some(ids::INTERNAL_ROOT_UID),
-            Some(ids::INTERNAL_ROOT_GID),
-        )?;
-
         Ok(BoxCgroup {
             core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
             id,
@@ -149,12 +140,7 @@ impl BoxCgroup {
     }
 
     fn kill_user_processes(&self) -> Result<()> {
-        self.core_cgroup_fd
-            .write_file(format!("proc-{}/cgroup.kill", self.id), 0o700)
-            .context("Failed to open cgroup.kill for writing")?
-            .write(b"1\n")
-            .context("Failed to kill cgroup")?;
-        Ok(())
+        kill_cgroup(&self.core_cgroup_fd, &format!("proc-{}", self.id))
     }
 
     pub fn destroy(self) -> Result<()> {
@@ -182,12 +168,7 @@ impl UserCgroup {
     }
 
     pub fn kill_processes(&self) -> Result<()> {
-        self.proc_cgroup_fd
-            .write_file(format!("box-{}/cgroup.kill", self.box_id), 0o700)
-            .context("Failed to open cgroup.kill for writing")?
-            .write(b"1\n")
-            .context("Failed to kill cgroup")?;
-        Ok(())
+        kill_cgroup(&self.proc_cgroup_fd, &format!("box-{}", self.box_id))
     }
 
     pub fn set_memory_limit(&self, limit: usize) -> Result<()> {
@@ -370,15 +351,30 @@ fn chown_cgroup(dir: &openat::Dir, uid: Option<u32>, gid: Option<u32>) -> Result
     let uid = uid.map(nix::unistd::Uid::from_raw);
     let gid = gid.map(nix::unistd::Gid::from_raw);
     nix::unistd::fchown(dir.as_raw_fd(), uid, gid).context("Failed to chown <cgroup>")?;
-    for name in ["cgroup.procs", "cgroup.kill", "cpu.stat", "memory.max"] {
-        nix::unistd::fchownat(
+    for name in [
+        "cgroup.procs",
+        "cgroup.kill",
+        "cgroup.freeze",
+        "cpu.stat",
+        "memory.events",
+        "memory.max",
+        "memory.oom.group",
+        "memory.peak",
+        "memory.stat",
+        "memory.swap.max",
+    ] {
+        if let Err(e) = nix::unistd::fchownat(
             Some(dir.as_raw_fd()),
             name,
             uid,
             gid,
             nix::unistd::FchownatFlags::NoFollowSymlink,
-        )
-        .with_context(|| format!("Failed to chown <cgroup>/{name}"))?;
+        ) {
+            // We don't use some of the files on older kernels if they are unavailable
+            if e != nix::errno::Errno::ENOENT {
+                return Err(e).with_context(|| format!("Failed to chown <cgroup>/{name}"));
+            }
+        }
     }
     Ok(())
 }
@@ -422,6 +418,49 @@ fn remove_cgroup(parent: &openat::Dir, dir_name: &OsStr) -> Result<()> {
         } else {
             return Err(e).with_context(|| format!("Failed to rmdir {dir_name:?}"))?;
         }
+    }
+
+    Ok(())
+}
+
+fn kill_cgroup(parent: &openat::Dir, dir_name: &str) -> Result<()> {
+    // cgroup.kill is unavailable on older kernels
+    match parent.write_file(format!("{dir_name}/cgroup.kill"), 0o700) {
+        Ok(mut file) => {
+            file.write(b"1\n").context("Failed to kill cgroup")?;
+            return Ok(());
+        }
+        Err(e) => {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                return Err(e)
+                    .with_context(|| format!("Failed to open {dir_name}/cgroup.kill for writing"));
+            }
+        }
+    }
+
+    parent
+        .write_file(format!("{dir_name}/cgroup.freeze"), 0o700)
+        .context("Failed to open cgroup.freeze for writing")?
+        .write(b"1\n")
+        .context("Failed to freeze cgroup")?;
+
+    for line in BufReader::new(
+        parent
+            .open_file(format!("{dir_name}/cgroup.procs"))
+            .context("Failed to open cgroup.procs for reading")?,
+    )
+    .lines()
+    {
+        let line = line.context("Failed to enumerate cgroup processes")?;
+        let pid: pid_t = line.parse().context("Invalid cgroup.procs format")?;
+        if pid == 0 {
+            bail!("Found process from another pid namespace in cgroup.procs");
+        }
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(pid),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .context("Failed to kill process")?;
     }
 
     Ok(())
