@@ -3,7 +3,6 @@ use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::libc::pid_t;
 use rand::Rng;
-use std::ffi::OsStr;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::os::unix::io::{AsRawFd, FromRawFd};
 use std::time::Duration;
@@ -131,14 +130,8 @@ impl BoxCgroup {
         })
     }
 
-    fn kill_user_processes(&self) -> Result<()> {
-        kill_cgroup(&self.core_cgroup_fd, &format!("proc-{}", self.id))
-    }
-
     pub fn destroy(self) -> Result<()> {
-        self.kill_user_processes()?;
-        remove_cgroup(&self.core_cgroup_fd, format!("proc-{}", self.id).as_ref())?;
-        Ok(())
+        remove_cgroup(&self.core_cgroup_fd, format!("proc-{}", self.id).as_ref())
     }
 
     pub fn try_clone(&self) -> Result<Self> {
@@ -157,10 +150,6 @@ impl UserCgroup {
             .write(format!("{pid}\n").as_ref())
             .context("Failed to move process")?;
         Ok(())
-    }
-
-    pub fn kill_processes(&self) -> Result<()> {
-        kill_cgroup(&self.proc_cgroup_fd, &format!("box-{}", self.box_id))
     }
 
     pub fn set_memory_limit(&self, limit: usize) -> Result<()> {
@@ -308,7 +297,6 @@ impl UserCgroup {
 
     fn _destroy(&mut self) -> Result<()> {
         self.dropped = true;
-        self.kill_processes()?;
         remove_cgroup(
             &self.proc_cgroup_fd,
             format!("box-{}", self.box_id).as_ref(),
@@ -344,9 +332,9 @@ fn chown_cgroup(dir: &openat::Dir, uid: Option<u32>, gid: Option<u32>) -> Result
     let gid = gid.map(nix::unistd::Gid::from_raw);
     nix::unistd::fchown(dir.as_raw_fd(), uid, gid).context("Failed to chown <cgroup>")?;
     for name in [
-        "cgroup.procs",
-        "cgroup.kill",
         "cgroup.freeze",
+        "cgroup.kill",
+        "cgroup.procs",
         "cpu.stat",
         "memory.events",
         "memory.max",
@@ -373,7 +361,9 @@ fn chown_cgroup(dir: &openat::Dir, uid: Option<u32>, gid: Option<u32>) -> Result
 
 // This function is subject to race conditions because one cgroup can be removed by several
 // processes simultaneously. Therefore, ENOENT is not considered an error.
-fn remove_cgroup(parent: &openat::Dir, dir_name: &OsStr) -> Result<()> {
+fn remove_cgroup(parent: &openat::Dir, dir_name: &str) -> Result<()> {
+    kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
+
     let dir = match parent.sub_dir(dir_name) {
         Ok(dir) => dir,
         Err(e) => {
@@ -388,7 +378,10 @@ fn remove_cgroup(parent: &openat::Dir, dir_name: &OsStr) -> Result<()> {
         // list_self() is broken
         let entry = entry.context("Failed to list directory")?;
         if let Some(openat::SimpleType::Dir) = entry.simple_type() {
-            remove_cgroup(&dir, entry.file_name())?;
+            remove_cgroup(
+                &dir,
+                entry.file_name().to_str().context("Invalid cgroup name")?,
+            )?;
         }
     }
 
