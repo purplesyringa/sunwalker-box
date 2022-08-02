@@ -120,14 +120,6 @@ impl BoxCgroup {
         self.core_cgroup_fd
             .create_dir(&box_dir, 0o700)
             .with_context(|| format!("Failed to mkdir {box_dir}"))?;
-        chown_cgroup(
-            &self
-                .core_cgroup_fd
-                .sub_dir(&box_dir)
-                .with_context(|| format!("Failed to open {box_dir}"))?,
-            Some(ids::INTERNAL_ROOT_UID),
-            Some(ids::INTERNAL_ROOT_GID),
-        )?;
 
         Ok(UserCgroup {
             proc_cgroup_fd: self
