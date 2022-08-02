@@ -31,7 +31,7 @@ impl Cgroup {
         // Enabling controllers globally is necessary on some systems, e.g. WSL
         std::fs::write(
             "/sys/fs/cgroup/cgroup.subtree_control",
-            "+cpu +memory +pids",
+            "+cpu +cpuset +memory +pids",
         )
         .context("Failed to enable cgroup controllers")?;
 
