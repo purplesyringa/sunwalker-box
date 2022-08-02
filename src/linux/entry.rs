@@ -121,8 +121,8 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
     }
 
     // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
-    // communication doesn't work well, so we use pidfd. As a side note, pidfd_open sets O_CLOEXEC
-    // automatically.
+    // communication doesn't work well, so we use pidfd. servo-ipc doesn't support passing arbitrary
+    // fds, but we can just reset CLOEXEC.
     let pidfd = unsafe { libc::syscall(SYS_pidfd_open, nix::unistd::getpid(), 0) } as RawFd;
     if pidfd == -1 {
         panic!(
@@ -131,13 +131,19 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
         );
     }
     let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
+    // pidfd_open automatically sets CLOEXEC
+    nix::fcntl::fcntl(
+        pidfd.as_raw_fd(),
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    )
+    .context("Failed to reset CLOEXEC on pidfd")?;
 
     let (mut ours, theirs) =
         multiprocessing::duplex::<Command, std::result::Result<Option<String>, String>>()
             .context("Failed to create channel")?;
 
     let child = reaper
-        .spawn(pidfd, cli_command, cgroup, theirs)
+        .spawn(pidfd.as_raw_fd(), cli_command, cgroup, theirs)
         .context("Failed to start child")?;
     thread_tx
         .send(child)
@@ -426,7 +432,7 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
 
 #[multiprocessing::entrypoint]
 fn reaper(
-    ppidfd: OwnedFd,
+    ppidfd: RawFd,
     cli_command: entry::CLIStartCommand,
     cgroup: cgroups::Cgroup,
     channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
@@ -474,10 +480,7 @@ fn reaper(
     // the parent is dead by now. pidfd_send_signal does not work across PID namespaces (not in this
     // case, anyway), so we have to resort to polling.
     if nix::poll::poll(
-        &mut [nix::poll::PollFd::new(
-            ppidfd.as_raw_fd(),
-            nix::poll::PollFlags::POLLIN,
-        )],
+        &mut [nix::poll::PollFd::new(ppidfd, nix::poll::PollFlags::POLLIN)],
         0,
     )
     .expect("Failed to poll parent pidfd")
@@ -485,6 +488,7 @@ fn reaper(
     {
         std::process::exit(0);
     }
+    nix::unistd::close(ppidfd).expect("Failed to close parent pidfd");
 
     if !cli_command.ignore_non_cloexec {
         // O_CLOEXEC is great and all, but better safe than sorry. We make sure all streams except
