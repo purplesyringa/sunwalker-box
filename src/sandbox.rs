@@ -199,6 +199,22 @@ pub fn reset_persistent_namespaces() -> Result<()> {
             .with_context(|| format!("Failed to rm {:?}", entry.path()))?;
     }
 
+    // Network namespaces are devised to isolate every network device the server has access to from
+    // the programs, so we only really need to care about information stored by the kernel
+    // internally. This includes statistics, which we nullify by bringing lo down, port occupation
+    // statuses, and perhaps something else. Luckily, it seems like we don't have to do anything at
+    // all.
+    //
+    // Many address families can only be used if a capable interface is available, and the only
+    // interface we provide, lo, is down. Management protocols, such as AF_KEY, AF_NETLINK,
+    // AF_PACKET, and AF_VSOCK, demand capabilities. Other protocols, such as DECnet and Bluetooth,
+    // only work in the root network namespace.
+    //
+    // UNIX domain sockets are either pathname-based and therefore subject to automatic cleanup due
+    // to filesystem reset, or unnamed, which means they don't have to be cleaned up, or abstract,
+    // which are closed automatically when the last reference dies (and it does die because we kill
+    // processes).
+
     Ok(())
 }
 
