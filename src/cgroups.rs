@@ -23,6 +23,13 @@ pub struct UserCgroup {
 
 impl Cgroup {
     pub fn new(core: u64) -> Result<Self> {
+        // Enabling controllers globally is necessary on some systems, e.g. WSL
+        std::fs::write(
+            "/sys/fs/cgroup/cgroup.subtree_control",
+            "+cpu +memory +pids",
+        )
+        .context("Failed to enable cgroup controllers")?;
+
         // Create a cgroup for the core; it must be an immediate child of the root cgroup
         let dir = format!("/sys/fs/cgroup/sunwalker-box-core-{core}");
         std::fs::create_dir_all(&dir).with_context(|| format!("Failed to mkdir {dir}"))?;
