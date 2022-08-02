@@ -4,8 +4,8 @@ use clap::{Args, Parser, Subcommand};
 use multiprocessing::Object;
 use nix::{
     libc,
-    libc::{c_int, SYS_pidfd_open, PR_SET_PDEATHSIG, SIGTERM},
-    sys::signal,
+    libc::{c_int, SYS_pidfd_open, PR_SET_PDEATHSIG, SIGUSR1},
+    sys::{signal, wait},
 };
 use std::error::Error;
 use std::ffi::CString;
@@ -515,14 +515,19 @@ fn reaper(
         panic!("Reaper must have PID 1");
     }
 
+    // We want to receive SIGUSR1 and SIGCHLD, but not handle them immediately
+    let mut mask = signal::SigSet::empty();
+    mask.add(signal::Signal::SIGUSR1);
+    mask.add(signal::Signal::SIGCHLD);
+    if let Err(e) = mask.thread_block() {
+        eprintln!("Failed to configure signal mask: {e}");
+        std::process::exit(1);
+    }
+
     // PID 1 can't be killed, not even by suicide. Unfortunately, that's exactly what panic! does,
     // so every time panic! is called, it attempts to call abort(2), silently fails and gets stuck
     // in a SIGSEGV loop. That's not what we what, so we set handlers manually.
-    for sig in [
-        signal::Signal::SIGSEGV,
-        signal::Signal::SIGTERM,
-        signal::Signal::SIGABRT,
-    ] {
+    for sig in [signal::Signal::SIGSEGV, signal::Signal::SIGABRT] {
         if let Err(e) = unsafe {
             signal::sigaction(
                 sig,
@@ -539,7 +544,7 @@ fn reaper(
     }
 
     // We want to terminate when parent dies
-    if unsafe { libc::prctl(PR_SET_PDEATHSIG, SIGTERM) } == -1 {
+    if unsafe { libc::prctl(PR_SET_PDEATHSIG, SIGUSR1) } == -1 {
         panic!(
             "Failed to prctl(PR_SET_PDEATHSIG): {}",
             std::io::Error::last_os_error()
@@ -594,16 +599,43 @@ fn reaper(
         child.join().expect("Child failed");
     });
 
-    loop {
-        match nix::sys::wait::wait() {
-            Ok(_) => {}
-            Err(nix::errno::Errno::ECHILD) => {
-                // Don't send the result to the parent
-                std::process::exit(0)
+    'main: loop {
+        let mut sigset = signal::SigSet::empty();
+        sigset.add(signal::Signal::SIGUSR1);
+        sigset.add(signal::Signal::SIGCHLD);
+        match sigset.wait().expect("Failed to wait for signal") {
+            signal::Signal::SIGUSR1 => {
+                // Parent died
+                break 'main;
             }
-            Err(e) => panic!("Failed to wait for child: {e}"),
+            signal::Signal::SIGCHLD => {
+                // Child (or several) died
+                loop {
+                    match wait::waitpid(None, Some(wait::WaitPidFlag::WNOHANG)) {
+                        Ok(res) => {
+                            if res == wait::WaitStatus::StillAlive {
+                                break;
+                            }
+                        }
+                        Err(e) => {
+                            if e == nix::errno::Errno::ECHILD {
+                                // Manager terminated
+                                break 'main;
+                            } else {
+                                panic!("Failed to waitpid: {e:?}");
+                            }
+                        }
+                    }
+                }
+            }
+            _ => {
+                panic!("Unexpected signal");
+            }
         }
     }
+
+    // Don't send the result to the parent
+    std::process::exit(0)
 }
 
 #[multiprocessing::entrypoint]
@@ -895,23 +927,18 @@ fn execute_command(
             let mut exit_code: i32 = -1;
 
             if exitted {
-                let wait_status = nix::sys::wait::waitpid(nix::unistd::Pid::from_raw(pid), None)
+                let wait_status = wait::waitpid(nix::unistd::Pid::from_raw(pid), None)
                     .context("Failed to waitpid for process")?;
 
-                if let nix::sys::wait::WaitStatus::Signaled(
-                    _,
-                    nix::sys::signal::Signal::SIGPROF,
-                    _,
-                ) = wait_status
-                {
+                if let wait::WaitStatus::Signaled(_, signal::Signal::SIGPROF, _) = wait_status {
                     limit_verdict = "CPUTimeLimitExceeded";
                 }
                 if limit_verdict == "OK" {
                     match wait_status {
-                        nix::sys::wait::WaitStatus::Exited(_, exit_code_) => {
+                        wait::WaitStatus::Exited(_, exit_code_) => {
                             exit_code = exit_code_;
                         }
-                        nix::sys::wait::WaitStatus::Signaled(_, signal, _) => {
+                        wait::WaitStatus::Signaled(_, signal, _) => {
                             limit_verdict = "Signaled";
                             exit_code = signal as i32;
                         }
