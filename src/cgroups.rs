@@ -423,7 +423,9 @@ fn kill_cgroup(parent: &openat::Dir, dir_name: &str) -> Result<()> {
             return Ok(());
         }
         Err(e) => {
-            if e.kind() != std::io::ErrorKind::NotFound {
+            if e.kind() != std::io::ErrorKind::NotFound
+                && e.kind() != std::io::ErrorKind::PermissionDenied
+            {
                 return Err(e)
                     .with_context(|| format!("Failed to open {dir_name}/cgroup.kill for writing"));
             }
