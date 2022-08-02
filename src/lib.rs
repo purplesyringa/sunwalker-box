@@ -8,12 +8,17 @@
     unwrap_infallible
 )]
 
-mod cgroups;
 pub mod entry;
-mod ids;
-mod mountns;
-mod procs;
-mod rootfs;
-mod sandbox;
-mod system;
-mod userns;
+
+#[cfg(target_os = "linux")]
+mod linux {
+    mod cgroups;
+    pub mod entry;
+    mod ids;
+    mod mountns;
+    mod procs;
+    mod rootfs;
+    mod sandbox;
+    mod system;
+    mod userns;
+}

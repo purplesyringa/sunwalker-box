@@ -1,4 +1,4 @@
-use crate::ids;
+use crate::linux::ids;
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::libc::pid_t;

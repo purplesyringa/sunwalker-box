@@ -1,4 +1,4 @@
-use crate::ids::*;
+use crate::linux::ids::*;
 use anyhow::{Context, Result};
 use nix::{libc, libc::CLONE_NEWUSER};
 
