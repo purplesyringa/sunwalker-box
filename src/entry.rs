@@ -208,14 +208,7 @@ fn start(cli_command: CLIStartCommand) -> Result<()> {
             .context("Failed to create channel")?;
 
     let child = reaper
-        .spawn(
-            pidfd,
-            cli_command,
-            cgroup
-                .try_clone()
-                .context("Failed to clone cgroup reference")?,
-            theirs,
-        )
+        .spawn(pidfd, cli_command, cgroup, theirs)
         .context("Failed to start child")?;
     thread_tx
         .send(child)
@@ -237,8 +230,6 @@ fn start(cli_command: CLIStartCommand) -> Result<()> {
             }
         }
     }
-
-    cgroup.destroy().context("Failed to destroy cgroup")?;
 
     Ok(())
 }
@@ -592,8 +583,17 @@ fn reaper(
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.
+    let box_cgroup = cgroup
+        .create_box_cgroup()
+        .expect("Failed to create box cgroup");
     let mut child = manager
-        .spawn(cli_command, cgroup, channel)
+        .spawn(
+            cli_command,
+            box_cgroup
+                .try_clone()
+                .expect("Failed to clone box cgroup reference"),
+            channel,
+        )
         .expect("Failed to start child");
     std::thread::spawn(move || {
         child.join().expect("Child failed");
@@ -634,6 +634,11 @@ fn reaper(
         }
     }
 
+    // If parent is dead by now, we don't have anyone to report the error to
+    if let Err(e) = box_cgroup.destroy() {
+        eprintln!("Failed to destroy box cgroup: {e:?}");
+    }
+
     // Don't send the result to the parent
     std::process::exit(0)
 }
@@ -641,7 +646,7 @@ fn reaper(
 #[multiprocessing::entrypoint]
 fn manager(
     cli_command: CLIStartCommand,
-    cgroup: cgroups::Cgroup,
+    box_cgroup: cgroups::BoxCgroup,
     mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
     // Setup rootfs. This has to happen inside the pidns, as we mount procfs here.
@@ -657,7 +662,7 @@ fn manager(
         .expect("Failed to receive message from channel")
     {
         channel
-            .send(&match execute_command(command, &quotas, &cgroup) {
+            .send(&match execute_command(command, &quotas, &box_cgroup) {
                 Ok(value) => Ok(value),
                 Err(e) => Err(format!("{e:?}")),
             })
@@ -668,7 +673,7 @@ fn manager(
 fn execute_command(
     command: Command,
     quotas: &rootfs::DiskQuotas,
-    cgroup: &cgroups::Cgroup,
+    box_cgroup: &cgroups::BoxCgroup,
 ) -> Result<Option<String>> {
     match command {
         Command::Reset => {
@@ -724,7 +729,7 @@ fn execute_command(
             let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
 
             // Apply cgroup limits
-            let user_cgroup = cgroup
+            let user_cgroup = box_cgroup
                 .create_user_cgroup()
                 .context("Failed to create user cgroup")?;
             if let Some(memory_limit) = memory_limit {

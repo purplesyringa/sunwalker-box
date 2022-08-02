@@ -11,6 +11,11 @@ use std::time::Duration;
 #[derive(Object)]
 pub struct Cgroup {
     core_cgroup_fd: openat::Dir,
+}
+
+#[derive(Object)]
+pub struct BoxCgroup {
+    core_cgroup_fd: openat::Dir,
     id: String,
 }
 
@@ -66,27 +71,7 @@ impl Cgroup {
             Some(ids::EXTERNAL_ROOT_GID),
         )?;
 
-        // Create a cgroup for this particular process
-        let mut rng = rand::thread_rng();
-        let id: String = (0..10)
-            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
-            .collect();
-        std::fs::create_dir_all(format!("{dir}/proc-{id}"))
-            .with_context(|| format!("Failed to mkdir {dir}/proc-{id}"))?;
-        std::fs::write(
-            format!("{dir}/proc-{id}/cgroup.subtree_control"),
-            "+cpu +memory +pids",
-        )
-        .context("Failed to enable cgroup controllers")?;
-        chown_cgroup(
-            &core_cgroup_fd
-                .sub_dir(format!("proc-{id}"))
-                .with_context(|| format!("Failed to open {dir}/proc-{id}"))?,
-            Some(ids::EXTERNAL_ROOT_UID),
-            Some(ids::EXTERNAL_ROOT_GID),
-        )?;
-
-        Ok(Cgroup { core_cgroup_fd, id })
+        Ok(Self { core_cgroup_fd })
     }
 
     pub fn add_self_as_manager(&self) -> Result<()> {
@@ -98,6 +83,41 @@ impl Cgroup {
         Ok(())
     }
 
+    pub fn create_box_cgroup(&self) -> Result<BoxCgroup> {
+        let mut rng = rand::thread_rng();
+        let id: String = (0..10)
+            .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
+            .collect();
+
+        self.core_cgroup_fd
+            .create_dir(format!("proc-{id}"), 0o700)
+            .with_context(|| format!("Failed to mkdir proc-{id}"))?;
+
+        self.core_cgroup_fd
+            .write_file(format!("proc-{id}/cgroup.subtree_control"), 0o700)
+            .with_context(|| {
+                format!("Failed to open proc-{id}/cgroup.subtree_control for writing")
+            })?
+            .write(b"+cpu +memory +pids\n")
+            .context("Failed to enable cgroup controllers")?;
+
+        chown_cgroup(
+            &self
+                .core_cgroup_fd
+                .sub_dir(format!("proc-{id}"))
+                .with_context(|| format!("Failed to open proc-{id}"))?,
+            Some(ids::INTERNAL_ROOT_UID),
+            Some(ids::INTERNAL_ROOT_GID),
+        )?;
+
+        Ok(BoxCgroup {
+            core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
+            id,
+        })
+    }
+}
+
+impl BoxCgroup {
     pub fn create_user_cgroup(&self) -> Result<UserCgroup> {
         // As several boxes may share a core, we can't use a fixed cgroup name
         let mut rng = rand::thread_rng();
@@ -144,17 +164,8 @@ impl Cgroup {
     }
 
     pub fn try_clone(&self) -> Result<Self> {
-        Ok(Cgroup {
-            // Built-in try_clone erroneously does not set CLOEXEC
-            core_cgroup_fd: unsafe {
-                openat::Dir::from_raw_fd(
-                    nix::fcntl::fcntl(
-                        self.core_cgroup_fd.as_raw_fd(),
-                        nix::fcntl::FcntlArg::F_DUPFD_CLOEXEC(0),
-                    )
-                    .context("Failed to clone file descriptor")?,
-                )
-            },
+        Ok(BoxCgroup {
+            core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
             id: self.id.clone(),
         })
     }
@@ -372,10 +383,19 @@ fn chown_cgroup(dir: &openat::Dir, uid: Option<u32>, gid: Option<u32>) -> Result
     Ok(())
 }
 
+// This function is subject to race conditions because one cgroup can be removed by several
+// processes simultaneously. Therefore, ENOENT is not considered an error.
 fn remove_cgroup(parent: &openat::Dir, dir_name: &OsStr) -> Result<()> {
-    let dir = parent
-        .sub_dir(dir_name)
-        .with_context(|| format!("Failed to open {dir_name:?}"))?;
+    let dir = match parent.sub_dir(dir_name) {
+        Ok(dir) => dir,
+        Err(e) => {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                return Ok(());
+            }
+            return Err(e).with_context(|| format!("Failed to open {dir_name:?}"));
+        }
+    };
+
     for entry in dir.list_dir(".").context("Failed to list directory")? {
         // list_self() is broken
         let entry = entry.context("Failed to list directory")?;
@@ -393,7 +413,9 @@ fn remove_cgroup(parent: &openat::Dir, dir_name: &OsStr) -> Result<()> {
     ) {
         // cgroup operations are asynchronous, so deleting a cgroup right after killing children may
         // yield EBUSY
-        if e == nix::errno::Errno::EBUSY && times < 5 {
+        if e == nix::errno::Errno::ENOENT {
+            break;
+        } else if e == nix::errno::Errno::EBUSY && times < 5 {
             std::thread::sleep(backoff);
             backoff *= 2;
             times += 1;
@@ -410,4 +432,13 @@ pub struct CpuStats {
     pub user: Duration,
     pub system: Duration,
     pub total: Duration,
+}
+
+fn try_clone_dirat(fd: &openat::Dir) -> std::io::Result<openat::Dir> {
+    // Built-in try_clone erroneously does not set CLOEXEC
+    let fd2 = nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_DUPFD_CLOEXEC(0))?;
+    if fd2 == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(unsafe { openat::Dir::from_raw_fd(fd2) })
 }
