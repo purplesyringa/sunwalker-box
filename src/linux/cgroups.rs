@@ -13,13 +13,12 @@ pub struct Cgroup {
 }
 
 #[derive(Object)]
-pub struct BoxCgroup {
+pub struct ProcCgroup {
     core_cgroup_fd: openat::Dir,
     id: String,
 }
 
-#[derive(Object)]
-pub struct UserCgroup {
+pub struct BoxCgroup {
     proc_cgroup_fd: openat::Dir,
     box_id: String,
     dropped: bool,
@@ -82,7 +81,7 @@ impl Cgroup {
         Ok(())
     }
 
-    pub fn create_box_cgroup(&self) -> Result<BoxCgroup> {
+    pub fn create_proc_cgroup(&self) -> Result<ProcCgroup> {
         let mut rng = rand::thread_rng();
         let id: String = (0..10)
             .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
@@ -100,15 +99,15 @@ impl Cgroup {
             .write(b"+cpu +memory +pids\n")
             .context("Failed to enable cgroup controllers")?;
 
-        Ok(BoxCgroup {
+        Ok(ProcCgroup {
             core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
             id,
         })
     }
 }
 
-impl BoxCgroup {
-    pub fn create_user_cgroup(&self) -> Result<UserCgroup> {
+impl ProcCgroup {
+    pub fn create_box_cgroup(&self) -> Result<BoxCgroup> {
         // As several boxes may share a core, we can't use a fixed cgroup name
         let mut rng = rand::thread_rng();
         let box_id: String = (0..10)
@@ -120,7 +119,7 @@ impl BoxCgroup {
             .create_dir(&box_dir, 0o700)
             .with_context(|| format!("Failed to mkdir {box_dir}"))?;
 
-        Ok(UserCgroup {
+        Ok(BoxCgroup {
             proc_cgroup_fd: self
                 .core_cgroup_fd
                 .sub_dir(format!("proc-{}", self.id))
@@ -135,14 +134,14 @@ impl BoxCgroup {
     }
 
     pub fn try_clone(&self) -> Result<Self> {
-        Ok(BoxCgroup {
+        Ok(ProcCgroup {
             core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
             id: self.id.clone(),
         })
     }
 }
 
-impl UserCgroup {
+impl BoxCgroup {
     pub fn add_process(&self, pid: pid_t) -> Result<()> {
         self.proc_cgroup_fd
             .write_file(format!("box-{}/cgroup.procs", self.box_id), 0o700)
@@ -310,7 +309,7 @@ impl UserCgroup {
     }
 }
 
-impl Drop for UserCgroup {
+impl Drop for BoxCgroup {
     fn drop(&mut self) {
         if !self.dropped {
             if let Err(e) = self._destroy() {

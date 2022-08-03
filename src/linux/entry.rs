@@ -520,13 +520,13 @@ fn reaper(
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.
-    let box_cgroup = cgroup
-        .create_box_cgroup()
+    let proc_cgroup = cgroup
+        .create_proc_cgroup()
         .expect("Failed to create box cgroup");
     let child = manager
         .spawn(
             cli_command,
-            box_cgroup
+            proc_cgroup
                 .try_clone()
                 .expect("Failed to clone box cgroup reference"),
             channel,
@@ -574,7 +574,7 @@ fn reaper(
     }
 
     // If parent is dead by now, we don't have anyone to report the error to
-    if let Err(e) = box_cgroup.destroy() {
+    if let Err(e) = proc_cgroup.destroy() {
         eprintln!("Failed to destroy box cgroup: {e:?}");
     }
 
@@ -585,7 +585,7 @@ fn reaper(
 #[multiprocessing::entrypoint]
 fn manager(
     cli_command: entry::CLIStartCommand,
-    box_cgroup: cgroups::BoxCgroup,
+    proc_cgroup: cgroups::ProcCgroup,
     mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
     // Setup rootfs. This has to happen inside the pidns, as we mount procfs here.
@@ -601,7 +601,7 @@ fn manager(
         .expect("Failed to receive message from channel")
     {
         channel
-            .send(&match execute_command(command, &quotas, &box_cgroup) {
+            .send(&match execute_command(command, &quotas, &proc_cgroup) {
                 Ok(value) => Ok(value),
                 Err(e) => Err(format!("{e:?}")),
             })
@@ -612,7 +612,7 @@ fn manager(
 fn execute_command(
     command: Command,
     quotas: &rootfs::DiskQuotas,
-    box_cgroup: &cgroups::BoxCgroup,
+    proc_cgroup: &cgroups::ProcCgroup,
 ) -> Result<Option<String>> {
     match command {
         Command::Reset => {
@@ -668,20 +668,20 @@ fn execute_command(
             let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
 
             // Apply cgroup limits
-            let user_cgroup = box_cgroup
-                .create_user_cgroup()
+            let box_cgroup = proc_cgroup
+                .create_box_cgroup()
                 .context("Failed to create user cgroup")?;
             if let Some(memory_limit) = memory_limit {
-                user_cgroup
+                box_cgroup
                     .set_memory_limit(memory_limit)
                     .context("Failed to apply memory limit")?;
             }
             if let Some(processes_limit) = processes_limit {
-                user_cgroup
+                box_cgroup
                     .set_processes_limit(processes_limit)
                     .context("Failed to apply processes limit")?;
             }
-            user_cgroup
+            box_cgroup
                 .add_process(pid)
                 .context("Failed to move the child to user cgroup")?;
 
@@ -722,7 +722,7 @@ fn execute_command(
             )
             .context("Failed to configure epoll")?;
 
-            let has_peak = user_cgroup.get_memory_peak()?.is_some();
+            let has_peak = box_cgroup.get_memory_peak()?.is_some();
 
             struct Metrics {
                 real_time: Duration,
@@ -740,12 +740,12 @@ fn execute_command(
             let mut exitted = false;
 
             loop {
-                let cpu_stats = user_cgroup.get_cpu_stats()?;
+                let cpu_stats = box_cgroup.get_cpu_stats()?;
                 metrics.cpu_time = cpu_stats.total;
                 metrics.real_time = start_time.elapsed();
                 metrics.idleness_time = metrics.real_time.saturating_sub(metrics.cpu_time);
                 if !has_peak {
-                    metrics.memory = metrics.memory.max(user_cgroup.get_memory_total()?);
+                    metrics.memory = metrics.memory.max(box_cgroup.get_memory_total()?);
                 }
 
                 if exitted {
@@ -847,7 +847,7 @@ fn execute_command(
 
             if has_peak {
                 metrics.memory = metrics.memory.max(
-                    user_cgroup
+                    box_cgroup
                         .get_memory_peak()?
                         .context("memory.peak is unexpectedly unavailable")?,
                 );
@@ -860,7 +860,7 @@ fn execute_command(
                 limit_verdict = "RealTimeLimitExceeded";
             } else if idleness_time_limit.is_some_and(|&limit| metrics.idleness_time > limit) {
                 limit_verdict = "IdlenessTimeLimitExceeded";
-            } else if user_cgroup.was_oom_killed()?
+            } else if box_cgroup.was_oom_killed()?
                 || memory_limit.is_some_and(|&limit| metrics.memory > limit)
             {
                 limit_verdict = "MemoryLimitExceeded";
@@ -895,7 +895,7 @@ fn execute_command(
                 assert!(limit_verdict != "OK");
             }
 
-            user_cgroup
+            box_cgroup
                 .destroy()
                 .context("Failed to destroy user cgroup")?;
 
