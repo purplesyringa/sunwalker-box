@@ -1,9 +1,9 @@
 pub use ctor::ctor;
 
-use crate::{FnOnce, Receiver};
+use crate::{Deserializer, FnOnce, Receiver};
 use lazy_static::lazy_static;
 use nix::fcntl;
-use std::os::unix::io::{FromRawFd, RawFd};
+use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
 use std::sync::RwLock;
 
 lazy_static! {
@@ -44,16 +44,26 @@ pub fn main() {
 
             enable_cloexec(fd).expect("Failed to set O_CLOEXEC for the file descriptor");
 
-            let mut entry_rx =
-                unsafe { Receiver::<Box<dyn FnOnce<(RawFd,), Output = i32>>>::from_raw_fd(fd) };
+            let mut entry_rx = unsafe { Receiver::<(Vec<u8>, Vec<RawFd>)>::from_raw_fd(fd) };
 
-            let entry = entry_rx
+            let (entry_data, entry_fds) = entry_rx
                 .recv()
                 .expect("Failed to read entry for multiprocessing")
                 .expect("No entry passed");
 
             std::mem::forget(entry_rx);
 
+            for fd in &entry_fds {
+                enable_cloexec(*fd).expect("Failed to set O_CLOEXEC for the file descriptor");
+            }
+
+            let entry_fds = entry_fds
+                .into_iter()
+                .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
+                .collect();
+
+            let entry: Box<dyn FnOnce<(RawFd,), Output = i32>> =
+                Deserializer::from(entry_data, entry_fds).deserialize();
             std::process::exit(entry(fd));
         }
     }

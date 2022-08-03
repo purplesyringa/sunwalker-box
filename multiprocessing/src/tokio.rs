@@ -1,7 +1,4 @@
-use crate::{
-    imp, ipc::MAX_PACKET_SIZE, subprocess, Object, Deserializer, FnOnce,
-    Serializer,
-};
+use crate::{imp, ipc::MAX_PACKET_SIZE, subprocess, Deserializer, FnOnce, Object, Serializer};
 use nix::libc::pid_t;
 use std::io::{Error, ErrorKind, IoSlice, IoSliceMut, Result};
 use std::marker::PhantomData;
@@ -37,8 +34,7 @@ pub fn channel<T: Object>() -> Result<(Sender<T>, Receiver<T>)> {
     ))
 }
 
-pub fn duplex<A: Object, B: Object>(
-) -> Result<(Duplex<A, B>, Duplex<B, A>)> {
+pub fn duplex<A: Object, B: Object>() -> Result<(Duplex<A, B>, Duplex<B, A>)> {
     let (tx, rx) = UnixSeqpacket::pair()?;
     Ok((
         Duplex::from_unix_seqpacket(tx),
@@ -298,12 +294,14 @@ pub async unsafe fn spawn<T: Object>(
     entry: Box<dyn FnOnce<(RawFd,), Output = i32>>,
     flags: nix::libc::c_int,
 ) -> Result<Child<T>> {
-    let (mut local, child) = duplex::<Box<dyn FnOnce<(RawFd,), Output = i32>>, T>()?;
+    let mut s = Serializer::new();
+    s.serialize(&entry);
 
-    let child_fd = child.as_raw_fd();
+    let fds = s.drain_fds();
 
-    let pid = subprocess::_spawn_child(child_fd, flags)?;
+    let (mut local, child) = duplex::<(Vec<u8>, Vec<RawFd>), T>()?;
+    let pid = subprocess::_spawn_child(child.as_raw_fd(), flags, &fds)?;
+    local.send(&(s.into_vec(), fds)).await?;
 
-    local.send(&entry).await?;
     Ok(Child::new(pid, local.into_receiver()))
 }

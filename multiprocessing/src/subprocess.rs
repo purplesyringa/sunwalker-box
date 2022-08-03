@@ -1,4 +1,4 @@
-use crate::{duplex, imp, FnOnce, Object, Receiver};
+use crate::{duplex, imp, FnOnce, Object, Receiver, Serializer};
 use nix::{
     libc::{c_char, c_int, c_void, pid_t},
     sys::signal,
@@ -51,7 +51,11 @@ impl<T: Object> Child<T> {
     }
 }
 
-pub(crate) unsafe fn _spawn_child(child_fd: RawFd, flags: c_int) -> Result<nix::unistd::Pid> {
+pub(crate) unsafe fn _spawn_child(
+    child_fd: RawFd,
+    flags: c_int,
+    inherited_fds: &[RawFd],
+) -> Result<nix::unistd::Pid> {
     let child_fd_str = CString::new(child_fd.to_string()).unwrap();
 
     match nix::libc::syscall(
@@ -82,6 +86,9 @@ pub(crate) unsafe fn _spawn_child(child_fd: RawFd, flags: c_int) -> Result<nix::
                 }
 
                 imp::disable_cloexec(child_fd)?;
+                for fd in inherited_fds {
+                    imp::disable_cloexec(*fd)?;
+                }
 
                 // nix::unistd::execv uses allocations
                 nix::libc::execv(
@@ -109,12 +116,14 @@ pub unsafe fn spawn<T: Object>(
     entry: Box<dyn FnOnce<(RawFd,), Output = i32>>,
     flags: c_int,
 ) -> Result<Child<T>> {
-    let (mut local, child) = duplex::<Box<dyn FnOnce<(RawFd,), Output = i32>>, T>()?;
+    let mut s = Serializer::new();
+    s.serialize(&entry);
 
-    let child_fd = child.as_raw_fd();
+    let fds = s.drain_fds();
 
-    let pid = _spawn_child(child_fd, flags)?;
+    let (mut local, child) = duplex::<(Vec<u8>, Vec<RawFd>), T>()?;
+    let pid = _spawn_child(child.as_raw_fd(), flags, &fds)?;
+    local.send(&(s.into_vec(), fds))?;
 
-    local.send(&entry)?;
     Ok(Child::new(pid, local.into_receiver()))
 }
