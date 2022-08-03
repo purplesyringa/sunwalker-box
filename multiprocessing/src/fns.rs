@@ -1,8 +1,6 @@
 use crate::Object;
 use paste::paste;
-use std::future::Future;
 use std::ops::Deref;
-use std::pin::Pin;
 
 pub trait Entrypoint<Args>: Object {
     type Output;
@@ -95,9 +93,3 @@ macro_rules! decl_fn {
 }
 
 decl_fn!(x 19 18 17 16 15 14 13 12 11 10 9 8 7 6 5 4 3 2 1 0);
-
-pub trait Await<T> {}
-
-impl<T> Await<T> for Pin<Box<dyn Future<Output = T>>> {}
-
-impl<T> Await<T> for T {}

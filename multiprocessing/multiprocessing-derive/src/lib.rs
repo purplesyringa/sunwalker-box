@@ -113,105 +113,76 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
         }
     }
 
-    let bound;
-    if args.len() == 0 {
-        bound = quote! { #ident };
+    let bound = if args.len() == 0 {
+        quote! { #ident }
     } else {
         let head_ty = &fn_types[0];
         let tail_ty = &fn_types[1..];
         let head_arg = &arg_names[0];
         let tail_binding = &binding[1..];
-        bound = quote! {
+        quote! {
             Bind::<#head_ty, (#(#tail_ty,)*)>::bind(Box::new(#ident), #head_arg) #(#tail_binding)*
-        };
-    }
+        }
+    };
 
-    let entrypoint;
-
-    if let Some(tokio_attr) = tokio_attr {
-        entrypoint = quote! {
-            #[derive(::multiprocessing::Object)]
-            struct #entry_ident #generic_params {
-                func: ::multiprocessing::Delayed<::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = #return_type>>>>>>,
-                #(#generic_phantom,)*
-            }
-
-            impl #generic_params #entry_ident #generics {
-                fn new(func: ::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = #return_type>>>>>) -> Self {
-                    Self {
-                        func: ::multiprocessing::Delayed::new(func),
-                        #(#generic_phantom_build,)*
-                    }
-                }
-            }
-
-            impl #generic_params ::multiprocessing::Entrypoint<(::std::os::unix::io::RawFd,)> for #entry_ident #generics {
-                type Output = i32;
-                #tokio_attr
-                #[allow(unreachable_code)] // If func returns !
-                async fn call(self, args: (::std::os::unix::io::RawFd,)) -> Self::Output {
-                    let output_tx_fd = args.0;
-                    use ::std::os::unix::io::FromRawFd;
-                    let mut output_tx = unsafe {
-                        ::multiprocessing::tokio::Sender::<#return_type>::from_raw_fd(output_tx_fd)
-                    };
-                    output_tx.send(&self.func.deserialize()().await)
-                        .await
-                        .expect("Failed to send subprocess output");
-                    0
-                }
-            }
-
-            impl #generic_params ::multiprocessing::Entrypoint<(#(#fn_types,)*)> for #type_ident {
-                type Output = ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = #return_type>>>;
-                fn call(self, args: (#(#fn_types,)*)) -> Self::Output {
-                    Box::pin(#type_ident::call(#(#args_from_tuple,)*))
-                }
-            }
-        };
+    let return_type_wrapped;
+    let async_;
+    let pin;
+    let dot_await;
+    let ns_tokio;
+    if tokio_attr.is_some() {
+        return_type_wrapped = quote! { ::std::pin::Pin<::std::boxed::Box<dyn ::std::future::Future<Output = #return_type>>> };
+        async_ = quote! { async };
+        pin = quote! { Box::pin };
+        dot_await = quote! { .await };
+        ns_tokio = quote! { ::tokio };
     } else {
-        entrypoint = quote! {
-            #[derive(::multiprocessing::Object)]
-            struct #entry_ident #generic_params {
-                func: ::multiprocessing::Delayed<::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = #return_type>>>,
-                #(#generic_phantom,)*
-            }
-
-            impl #generic_params #entry_ident #generics {
-                fn new(func: ::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = #return_type>>) -> Self {
-                    Self {
-                        func: ::multiprocessing::Delayed::new(func),
-                        #(#generic_phantom_build,)*
-                    }
-                }
-            }
-
-            impl #generic_params ::multiprocessing::Entrypoint<(::std::os::unix::io::RawFd,)> for #entry_ident #generics {
-                type Output = i32;
-                #[allow(unreachable_code)] // If func returns !
-                fn call(self, args: (::std::os::unix::io::RawFd,)) -> Self::Output {
-                    let output_tx_fd = args.0;
-                    use ::std::os::unix::io::FromRawFd;
-                    let mut output_tx = unsafe {
-                        ::multiprocessing::Sender::<#return_type>::from_raw_fd(output_tx_fd)
-                    };
-                    output_tx.send(&self.func.deserialize()())
-                        .expect("Failed to send subprocess output");
-                    0
-                }
-            }
-
-            impl #generic_params ::multiprocessing::Entrypoint<(#(#fn_types,)*)> for #type_ident {
-                type Output = #return_type;
-                fn call(self, args: (#(#fn_types,)*)) -> Self::Output {
-                    #type_ident::call(#(#args_from_tuple,)*)
-                }
-            }
-        };
+        return_type_wrapped = return_type.clone();
+        async_ = quote! {};
+        pin = quote! {};
+        dot_await = quote! {};
+        ns_tokio = quote! {};
     }
 
     let expanded = quote! {
-        #entrypoint
+        #[derive(::multiprocessing::Object)]
+        struct #entry_ident #generic_params {
+            func: ::multiprocessing::Delayed<::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = #return_type_wrapped>>>,
+            #(#generic_phantom,)*
+        }
+
+        impl #generic_params #entry_ident #generics {
+            fn new(func: ::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = #return_type_wrapped>>) -> Self {
+                Self {
+                    func: ::multiprocessing::Delayed::new(func),
+                    #(#generic_phantom_build,)*
+                }
+            }
+        }
+
+        impl #generic_params ::multiprocessing::Entrypoint<(::std::os::unix::io::RawFd,)> for #entry_ident #generics {
+            type Output = i32;
+            #tokio_attr
+            #[allow(unreachable_code)] // If func returns !
+            #async_ fn call(self, args: (::std::os::unix::io::RawFd,)) -> Self::Output {
+                let output_tx_fd = args.0;
+                use ::std::os::unix::io::FromRawFd;
+                let mut output_tx = unsafe {
+                    ::multiprocessing #ns_tokio ::Sender::<#return_type>::from_raw_fd(output_tx_fd)
+                };
+                output_tx.send(&self.func.deserialize()() #dot_await)
+                    #dot_await
+                    .expect("Failed to send subprocess output");
+                0
+            }
+        }
+
+        impl #generic_params ::multiprocessing::Entrypoint<(#(#fn_types,)*)> for #type_ident {
+            type Output = #return_type_wrapped;
+            fn call(self, args: (#(#fn_types,)*)) -> Self::Output {
+                #pin(#type_ident::call(#(#args_from_tuple,)*))
+            }
+        }
 
         #[allow(non_camel_case_types)]
         #[derive(::multiprocessing::Object)]
@@ -223,12 +194,12 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
             pub unsafe fn spawn_with_flags #generic_params(&self, flags: ::multiprocessing::libc::c_int, #(#fn_args,)*) -> ::std::io::Result<::multiprocessing::Child<#return_type>> {
                 use ::multiprocessing::Bind;
-                ::multiprocessing::spawn(Box::new(::multiprocessing::EntrypointWrapper::<#entry_ident #generics>(#entry_ident::new(Box::new(#bound)))), flags)
+                ::multiprocessing::spawn(Box::new(::multiprocessing::EntrypointWrapper(#entry_ident::new(Box::new(#bound)))), flags)
             }
 
             pub async unsafe fn spawn_with_flags_tokio #generic_params(&self, flags: ::multiprocessing::libc::c_int, #(#fn_args,)*) -> ::std::io::Result<::multiprocessing::tokio::Child<#return_type>> {
                 use ::multiprocessing::Bind;
-                ::multiprocessing::tokio::spawn(Box::new(::multiprocessing::EntrypointWrapper::<#entry_ident #generics>(#entry_ident::new(Box::new(#bound)))), flags).await
+                ::multiprocessing::tokio::spawn(Box::new(::multiprocessing::EntrypointWrapper(#entry_ident::new(Box::new(#bound)))), flags).await
             }
 
             pub fn spawn #generic_params(&self, #(#fn_args,)*) -> ::std::io::Result<::multiprocessing::Child<#return_type>> {
