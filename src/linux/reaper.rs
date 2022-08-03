@@ -20,7 +20,7 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
 pub fn reaper(
     ppidfd: RawFd,
     cli_command: entry::CLIStartCommand,
-    cgroup: RawFd,
+    cgroup: cgroups::Cgroup,
     channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, manager::Command>,
 ) -> ! {
     if nix::unistd::getpid().as_raw() != 1 {
@@ -76,8 +76,6 @@ pub fn reaper(
     }
     nix::unistd::close(ppidfd).expect("Failed to close parent pidfd");
 
-    let cgroup = unsafe { cgroups::Cgroup::import(cgroup) }.expect("Failed to import cgroup");
-
     if !cli_command.ignore_non_cloexec {
         // O_CLOEXEC is great and all, but better safe than sorry. We make sure all streams except
         // the standard ones are closed on exec.
@@ -114,7 +112,9 @@ pub fn reaper(
     let child = manager::manager
         .spawn(
             cli_command,
-            proc_cgroup.export().expect("Failed to export proc cgroup"),
+            proc_cgroup
+                .try_clone()
+                .expect("Failed to clone box cgroup reference"),
             channel,
         )
         .expect("Failed to start child");

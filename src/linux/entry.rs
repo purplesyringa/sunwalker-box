@@ -124,12 +124,7 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
             .context("Failed to create channel")?;
 
     let child = reaper::reaper
-        .spawn(
-            pidfd.as_raw_fd(),
-            cli_command,
-            cgroup.export().context("Failed to export cgroup")?,
-            theirs,
-        )
+        .spawn(pidfd.as_raw_fd(), cli_command, cgroup, theirs)
         .context("Failed to start child")?;
     thread_tx
         .send(child)

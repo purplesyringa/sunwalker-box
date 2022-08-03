@@ -32,12 +32,9 @@ pub enum Command {
 #[multiprocessing::entrypoint]
 pub fn manager(
     cli_command: entry::CLIStartCommand,
-    proc_cgroup: (RawFd, String),
+    proc_cgroup: cgroups::ProcCgroup,
     mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
-    let proc_cgroup =
-        unsafe { cgroups::ProcCgroup::import(proc_cgroup) }.expect("Failed to import proc cgroup");
-
     // Setup rootfs. This has to happen inside the pidns, as we mount procfs here.
     let quotas = rootfs::DiskQuotas {
         space: cli_command.quota_space,
