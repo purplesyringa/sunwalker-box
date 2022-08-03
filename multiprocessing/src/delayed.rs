@@ -1,4 +1,4 @@
-use crate::{Deserialize, DeserializeBoxed, Deserializer, Object, Serialize, Serializer};
+use crate::{Deserializer, Object, Serializer};
 use std::os::unix::io::OwnedFd;
 
 pub enum Delayed<T: Object> {
@@ -19,7 +19,7 @@ impl<T: Object> Delayed<T> {
     }
 }
 
-impl<T: Object> Serialize for Delayed<T> {
+impl<T: Object> Object for Delayed<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         match self {
             Self::Serialized(_, _) => panic!("Cannot serialize a serialized Delayed value"),
@@ -36,8 +36,6 @@ impl<T: Object> Serialize for Delayed<T> {
             }
         }
     }
-}
-impl<T: Object> Deserialize for Delayed<T> {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let fds = d
             .deserialize::<Vec<usize>>()
@@ -46,9 +44,7 @@ impl<T: Object> Deserialize for Delayed<T> {
             .collect();
         Delayed::Serialized(d.deserialize(), fds)
     }
-}
-impl<'a, T: 'a + Object> DeserializeBoxed<'a> for Delayed<T> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }

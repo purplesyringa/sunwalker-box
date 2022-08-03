@@ -1,4 +1,4 @@
-use crate::{imp, Deserialize, Deserializer, Object, Serialize, Serializer};
+use crate::{imp, Deserializer, Object, Serializer};
 use nix::libc::{AF_UNIX, SOCK_CLOEXEC, SOCK_SEQPACKET};
 use std::io::{Error, ErrorKind, IoSlice, IoSliceMut, Result};
 use std::marker::PhantomData;
@@ -10,24 +10,24 @@ use std::os::unix::{
 pub(crate) const MAX_PACKET_SIZE: usize = 16 * 1024;
 
 #[derive(Object)]
-pub struct Sender<T: Serialize> {
+pub struct Sender<T: Object> {
     fd: UnixStream,
     marker: PhantomData<fn(T) -> T>,
 }
 
 #[derive(Object)]
-pub struct Receiver<T: Deserialize> {
+pub struct Receiver<T: Object> {
     fd: UnixStream,
     marker: PhantomData<fn(T) -> T>,
 }
 
 #[derive(Object)]
-pub struct Duplex<S: Serialize, R: Deserialize> {
+pub struct Duplex<S: Object, R: Object> {
     fd: UnixStream,
     marker: PhantomData<fn(S, R) -> (S, R)>,
 }
 
-pub fn channel<T: Serialize + Deserialize>() -> Result<(Sender<T>, Receiver<T>)> {
+pub fn channel<T: Object>() -> Result<(Sender<T>, Receiver<T>)> {
     // UnixStream creates a SOCK_STREAM by default, while we need SOCK_SEQPACKET
     unsafe {
         let mut fds = [0, 0];
@@ -39,7 +39,7 @@ pub fn channel<T: Serialize + Deserialize>() -> Result<(Sender<T>, Receiver<T>)>
     }
 }
 
-pub fn duplex<A: Serialize + Deserialize, B: Serialize + Deserialize>(
+pub fn duplex<A: Object, B: Object>(
 ) -> Result<(Duplex<A, B>, Duplex<B, A>)> {
     // UnixStream creates a SOCK_STREAM by default, while we need SOCK_SEQPACKET
     unsafe {
@@ -52,7 +52,7 @@ pub fn duplex<A: Serialize + Deserialize, B: Serialize + Deserialize>(
     }
 }
 
-fn send_on_fd<T: Serialize>(fd: &mut UnixStream, value: &T) -> Result<()> {
+fn send_on_fd<T: Object>(fd: &mut UnixStream, value: &T) -> Result<()> {
     let mut s = Serializer::new();
     s.serialize(value);
 
@@ -94,7 +94,7 @@ fn send_on_fd<T: Serialize>(fd: &mut UnixStream, value: &T) -> Result<()> {
     Ok(())
 }
 
-fn recv_on_fd<T: Deserialize>(fd: &mut UnixStream) -> Result<Option<T>> {
+fn recv_on_fd<T: Object>(fd: &mut UnixStream) -> Result<Option<T>> {
     // Read the data and the passed file descriptors
     let mut serialized: Vec<u8> = Vec::new();
     let mut buffer_pos: usize = 0;
@@ -159,7 +159,7 @@ fn recv_on_fd<T: Deserialize>(fd: &mut UnixStream) -> Result<Option<T>> {
     Ok(Some(d.deserialize()))
 }
 
-impl<T: Serialize> Sender<T> {
+impl<T: Object> Sender<T> {
     pub fn from_unix_stream(fd: UnixStream) -> Self {
         Sender {
             fd,
@@ -172,20 +172,20 @@ impl<T: Serialize> Sender<T> {
     }
 }
 
-impl<T: Serialize> AsRawFd for Sender<T> {
+impl<T: Object> AsRawFd for Sender<T> {
     fn as_raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
     }
 }
 
-impl<T: Serialize> FromRawFd for Sender<T> {
+impl<T: Object> FromRawFd for Sender<T> {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         imp::disable_nonblock(fd).expect("Failed to reset O_NONBLOCK");
         Self::from_unix_stream(UnixStream::from_raw_fd(fd))
     }
 }
 
-impl<T: Deserialize> Receiver<T> {
+impl<T: Object> Receiver<T> {
     pub fn from_unix_stream(fd: UnixStream) -> Self {
         Receiver {
             fd,
@@ -198,20 +198,20 @@ impl<T: Deserialize> Receiver<T> {
     }
 }
 
-impl<T: Deserialize> AsRawFd for Receiver<T> {
+impl<T: Object> AsRawFd for Receiver<T> {
     fn as_raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
     }
 }
 
-impl<T: Deserialize> FromRawFd for Receiver<T> {
+impl<T: Object> FromRawFd for Receiver<T> {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         imp::disable_nonblock(fd).expect("Failed to reset O_NONBLOCK");
         Self::from_unix_stream(UnixStream::from_raw_fd(fd))
     }
 }
 
-impl<S: Serialize, R: Deserialize> Duplex<S, R> {
+impl<S: Object, R: Object> Duplex<S, R> {
     pub fn from_unix_stream(fd: UnixStream) -> Self {
         Duplex {
             fd,
@@ -232,13 +232,13 @@ impl<S: Serialize, R: Deserialize> Duplex<S, R> {
     }
 }
 
-impl<S: Serialize, R: Deserialize> AsRawFd for Duplex<S, R> {
+impl<S: Object, R: Object> AsRawFd for Duplex<S, R> {
     fn as_raw_fd(&self) -> RawFd {
         self.fd.as_raw_fd()
     }
 }
 
-impl<S: Serialize, R: Deserialize> FromRawFd for Duplex<S, R> {
+impl<S: Object, R: Object> FromRawFd for Duplex<S, R> {
     unsafe fn from_raw_fd(fd: RawFd) -> Self {
         imp::disable_nonblock(fd).expect("Failed to reset O_NONBLOCK");
         Self::from_unix_stream(UnixStream::from_raw_fd(fd))

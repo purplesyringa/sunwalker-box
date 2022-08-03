@@ -25,7 +25,7 @@ impl Serializer {
         self.data.extend_from_slice(data);
     }
 
-    pub fn serialize<T: Serialize + ?Sized>(&mut self, data: &T) {
+    pub fn serialize<T: Object + ?Sized>(&mut self, data: &T) {
         data.serialize_self(self);
     }
 
@@ -88,7 +88,7 @@ impl Deserializer {
         self.pos += data.len();
     }
 
-    pub fn deserialize<T: Deserialize>(&mut self) -> T {
+    pub fn deserialize<T: Object>(&mut self) -> T {
         T::deserialize_self(self)
     }
 
@@ -113,18 +113,8 @@ impl Deserializer {
     }
 }
 
-pub trait Serialize {
+pub trait Object {
     fn serialize_self(&self, s: &mut Serializer);
+    fn deserialize_self(d: &mut Deserializer) -> Self where Self: Sized;
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where Self: 'a;
 }
-pub trait Deserialize {
-    fn deserialize_self(d: &mut Deserializer) -> Self;
-}
-pub trait DeserializeBoxed<'a> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a>;
-}
-
-pub trait Object: Serialize + Deserialize + Send + Sync {}
-impl<T: Serialize + Deserialize + Send + Sync> Object for T {}
-
-pub trait TraitObject: Serialize + for<'a> DeserializeBoxed<'a> + Send + Sync {}
-impl<T: Serialize + Deserialize + for<'a> DeserializeBoxed<'a> + Send + Sync> TraitObject for T {}

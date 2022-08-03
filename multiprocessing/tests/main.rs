@@ -1,4 +1,4 @@
-use multiprocessing::{channel, duplex, Bind, Duplex, Object, Receiver, Sender, TraitObject};
+use multiprocessing::{channel, duplex, Bind, Duplex, Object, Receiver, Sender};
 
 #[derive(Debug, PartialEq, Object)]
 struct SimplePair {
@@ -39,7 +39,7 @@ fn inc_with_boxed(item: Box<i32>) -> Box<i32> {
     Box::new(*item + 1)
 }
 
-trait Trait: TraitObject {
+trait Trait: Object {
     fn say(&self) -> String;
 }
 

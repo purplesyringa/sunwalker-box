@@ -296,36 +296,6 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
     let generic_params = &input.generics.params;
     let generics_impl = quote! { <#generic_params> };
 
-    let generics_impl_serde = {
-        let params: Vec<_> = input
-            .generics
-            .params
-            .iter()
-            .map(|param| match param {
-                syn::GenericParam::Type(ref ty) => {
-                    let ident = ty.ident.to_token_stream();
-                    if ty.colon_token.is_some() {
-                        let old_bounds = &ty.bounds;
-                        quote! { #ident: 'serde + #old_bounds }
-                    } else {
-                        quote! { #ident: 'serde }
-                    }
-                }
-                syn::GenericParam::Lifetime(ref lt) => {
-                    let ident = lt.lifetime.to_token_stream();
-                    if lt.colon_token.is_some() {
-                        let old_bounds = &lt.bounds;
-                        quote! { #ident: 'serde + #old_bounds }
-                    } else {
-                        quote! { #ident: 'serde }
-                    }
-                }
-                syn::GenericParam::Const(ref con) => con.ident.to_token_stream(),
-            })
-            .collect();
-        quote! { <'serde, #(#params,)*> }
-    };
-
     let generics_where = input.generics.where_clause;
 
     let expanded = match input.data {
@@ -344,21 +314,17 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
                     }
                 });
                 quote! {
-                    impl #generics_impl ::multiprocessing::Serialize for #ident #generics #generics_where {
+                    impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
                         fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
                             #(#serialize_fields)*
                         }
-                    }
-                    impl #generics_impl ::multiprocessing::Deserialize for #ident #generics #generics_where {
                         fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
                             Self {
                                 #(#deserialize_fields)*
                             }
                         }
-                    }
-                    impl #generics_impl_serde ::multiprocessing::DeserializeBoxed<'serde> for #ident #generics #generics_where {
-                        fn deserialize_on_heap(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::DeserializeBoxed<'serde> + 'serde> {
-                            use ::multiprocessing::Deserialize;
+                        fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
+                            use ::multiprocessing::Object;
                             ::std::boxed::Box::new(Self::deserialize_self(d))
                         }
                     }
@@ -377,21 +343,17 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
                     }
                 });
                 quote! {
-                    impl #generics_impl ::multiprocessing::Serialize for #ident #generics #generics_where {
+                    impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
                         fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
                             #(#serialize_fields)*
                         }
-                    }
-                    impl #generics_impl ::multiprocessing::Deserialize for #ident #generics #generics_where {
                         fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
                             Self(
                                 #(#deserialize_fields)*
                             )
                         }
-                    }
-                    impl #generics_impl_serde ::multiprocessing::DeserializeBoxed<'serde> for #ident #generics #generics_where {
-                        fn deserialize_on_heap(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::DeserializeBoxed<'serde> + 'serde> {
-                            use ::multiprocessing::Deserialize;
+                        fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
+                            use ::multiprocessing::Object;
                             ::std::boxed::Box::new(Self::deserialize_self(d))
                         }
                     }
@@ -399,18 +361,14 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
             }
             syn::Fields::Unit => {
                 quote! {
-                    impl #generics_impl ::multiprocessing::Serialize for #ident #generics #generics_where {
+                    impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
                         fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
                         }
-                    }
-                    impl #generics_impl ::multiprocessing::Deserialize for #ident #generics #generics_where {
                         fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
                             Self
                         }
-                    }
-                    impl #generics_impl_serde ::multiprocessing::DeserializeBoxed<'serde> for #ident #generics #generics_where {
-                        fn deserialize_on_heap(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::DeserializeBoxed<'serde> + 'serde> {
-                            use ::multiprocessing::Deserialize;
+                        fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
+                            use ::multiprocessing::Object;
                             ::std::boxed::Box::new(Self::deserialize_self(d))
                         }
                     }
@@ -487,24 +445,20 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
                 }
             });
             quote! {
-                impl #generics_impl ::multiprocessing::Serialize for #ident #generics #generics_where {
+                impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
                     fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
                         match self {
                             #(#serialize_variants,)*
                         }
                     }
-                }
-                impl #generics_impl ::multiprocessing::Deserialize for #ident #generics #generics_where {
                     fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
                         match d.deserialize::<usize>() {
                             #(#deserialize_variants,)*
                             _ => panic!("Unexpected enum variant"),
                         }
                     }
-                }
-                impl #generics_impl_serde ::multiprocessing::DeserializeBoxed<'serde> for #ident #generics #generics_where {
-                    fn deserialize_on_heap(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::DeserializeBoxed<'serde> + 'serde> {
-                        use ::multiprocessing::Deserialize;
+                    fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
+                        use ::multiprocessing::Object;
                         ::std::boxed::Box::new(Self::deserialize_self(d))
                     }
                 }

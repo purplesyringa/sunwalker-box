@@ -1,4 +1,4 @@
-use crate::{Deserialize, DeserializeBoxed, Deserializer, Serialize, Serializer};
+use crate::{Deserializer, Object, Serializer};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::{BuildHasher, Hash};
 use std::os::raw::c_void;
@@ -7,79 +7,61 @@ use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::Arc;
 
-impl Serialize for bool {
+impl Object for bool {
     fn serialize_self(&self, s: &mut Serializer) {
         s.serialize(&(*self as u8));
     }
-}
-impl Deserialize for bool {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         d.deserialize::<u8>() != 0
     }
-}
-impl<'a> DeserializeBoxed<'a> for bool {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for char {
+impl Object for char {
     fn serialize_self(&self, s: &mut Serializer) {
         s.serialize(&(*self as u32))
     }
-}
-impl Deserialize for char {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         char::from_u32(d.deserialize::<u32>()).unwrap()
     }
-}
-impl<'a> DeserializeBoxed<'a> for char {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl<T> Serialize for std::marker::PhantomData<T> {
+impl<T> Object for std::marker::PhantomData<T> {
     fn serialize_self(&self, _s: &mut Serializer) {}
-}
-impl<T> Deserialize for std::marker::PhantomData<T> {
     fn deserialize_self(_d: &mut Deserializer) -> Self {
         Self {}
     }
-}
-impl<'a, T: 'a> DeserializeBoxed<'a> for std::marker::PhantomData<T> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for String {
+impl Object for String {
     fn serialize_self(&self, s: &mut Serializer) {
         // XXX: unnecessary heap usage
         s.serialize(&Vec::from(self.as_bytes()))
     }
-}
-impl Deserialize for String {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         // XXX: unnecessary heap usage
         std::str::from_utf8(&d.deserialize::<Vec<u8>>())
             .expect("Failed to deserialize string")
             .to_string()
     }
-}
-impl<'a> DeserializeBoxed<'a> for String {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for std::ffi::CString {
+impl Object for std::ffi::CString {
     fn serialize_self(&self, s: &mut Serializer) {
         // XXX: unnecessary heap usage
         s.serialize(&Vec::from(self.as_bytes()))
     }
-}
-impl Deserialize for std::ffi::CString {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         // XXX: unnecessary heap usage
         Self::new(
@@ -88,80 +70,62 @@ impl Deserialize for std::ffi::CString {
         )
         .expect("Failed to deserialize CString (null byte in the middle)")
     }
-}
-impl<'a> DeserializeBoxed<'a> for std::ffi::CString {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for std::ffi::OsString {
+impl Object for std::ffi::OsString {
     fn serialize_self(&self, s: &mut Serializer) {
         // XXX: unnecessary heap usage
         s.serialize(&self.clone().into_vec())
     }
-}
-impl Deserialize for std::ffi::OsString {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         Self::from_vec(d.deserialize())
     }
-}
-impl<'a> DeserializeBoxed<'a> for std::ffi::OsString {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for () {
+impl Object for () {
     fn serialize_self(&self, _s: &mut Serializer) {}
-}
-impl Deserialize for () {
     fn deserialize_self(_d: &mut Deserializer) -> Self {
         ()
     }
-}
-impl<'a> DeserializeBoxed<'a> for () {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for ! {
+impl Object for ! {
     fn serialize_self(&self, _s: &mut Serializer) {
         unreachable!()
     }
-}
-impl Deserialize for ! {
     fn deserialize_self(_d: &mut Deserializer) -> Self {
         unreachable!()
     }
-}
-impl<'a> DeserializeBoxed<'a> for ! {
-    fn deserialize_on_heap(&self, _d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, _d: &mut Deserializer) -> Box<dyn Object + 'a> {
         unreachable!()
     }
 }
 
-impl<T: Serialize, U: Serialize> Serialize for (T, U) {
+impl<T: Object, U: Object> Object for (T, U) {
     fn serialize_self(&self, s: &mut Serializer) {
         s.serialize(&self.0);
         s.serialize(&self.1);
     }
-}
-impl<T: Deserialize, U: Deserialize> Deserialize for (T, U) {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let a = d.deserialize();
         let b = d.deserialize();
         (a, b)
     }
-}
-impl<'a, T: 'a + Deserialize, U: 'a + Deserialize> DeserializeBoxed<'a> for (T, U) {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a, U: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl<T: Serialize> Serialize for Option<T> {
+impl<T: Object> Object for Option<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         match self {
             None => s.serialize(&false),
@@ -171,8 +135,6 @@ impl<T: Serialize> Serialize for Option<T> {
             }
         }
     }
-}
-impl<T: Deserialize> Deserialize for Option<T> {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         if d.deserialize::<bool>() {
             Some(d.deserialize())
@@ -180,9 +142,7 @@ impl<T: Deserialize> Deserialize for Option<T> {
             None
         }
     }
-}
-impl<'a, T: 'a + Deserialize> DeserializeBoxed<'a> for Option<T> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -202,14 +162,12 @@ fn get_base_vtable_ptr() -> *const () {
     extract_vtable_ptr(&std::ptr::metadata(&BaseType as &dyn BaseTrait))
 }
 
-impl<T: ?Sized> Serialize for std::ptr::DynMetadata<T> {
+impl<T: ?Sized> Object for std::ptr::DynMetadata<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         s.serialize(
             &(extract_vtable_ptr(&self) as usize).wrapping_sub(get_base_vtable_ptr() as usize),
         );
     }
-}
-impl<T: ?Sized> Deserialize for std::ptr::DynMetadata<T> {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let vtable_ptr = d
             .deserialize::<usize>()
@@ -221,26 +179,19 @@ impl<T: ?Sized> Deserialize for std::ptr::DynMetadata<T> {
             metadata.assume_init()
         }
     }
-}
-impl<'a, T: 'a + ?Sized> DeserializeBoxed<'a> for std::ptr::DynMetadata<T> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl<T: Serialize + std::ptr::Pointee + ?Sized> Serialize for Box<T>
+impl<T: Object + std::ptr::Pointee + ?Sized> Object for Box<T>
 where
-    T::Metadata: Serialize,
+    T::Metadata: Object,
 {
     fn serialize_self(&self, s: &mut Serializer) {
         s.serialize(&std::ptr::metadata(self.as_ref()));
         self.as_ref().serialize_self(s);
     }
-}
-impl<'a, T: DeserializeBoxed<'a> + std::ptr::Pointee + ?Sized> Deserialize for Box<T>
-where
-    T::Metadata: Deserialize,
-{
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let metadata = d.deserialize::<T::Metadata>();
         let data_ptr = unsafe {
@@ -252,17 +203,12 @@ where
         let fat_ptr = std::ptr::from_raw_parts_mut(data_ptr.to_raw_parts().0, metadata);
         unsafe { Box::from_raw(fat_ptr) }
     }
-}
-impl<'a, T: 'a + DeserializeBoxed<'a> + std::ptr::Pointee + ?Sized> DeserializeBoxed<'a> for Box<T>
-where
-    T::Metadata: Deserialize,
-{
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl<'a, T: 'a + Serialize> Serialize for Rc<T> {
+impl<T: 'static + Object> Object for Rc<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         match s.learn_cyclic(Rc::as_ptr(self) as *const c_void) {
             None => {
@@ -274,8 +220,6 @@ impl<'a, T: 'a + Serialize> Serialize for Rc<T> {
             }
         }
     }
-}
-impl<'a, T: 'static + 'a + Deserialize> Deserialize for Rc<T> {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let id = d.deserialize::<usize>();
         match std::num::NonZeroUsize::new(id) {
@@ -287,14 +231,12 @@ impl<'a, T: 'static + 'a + Deserialize> Deserialize for Rc<T> {
             Some(id) => d.get_cyclic::<Rc<T>>(id).clone(),
         }
     }
-}
-impl<'a, T: 'static + 'a + Deserialize> DeserializeBoxed<'a> for Rc<T> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl<'a, T: 'a + Serialize> Serialize for Arc<T> {
+impl<T: 'static + Object> Object for Arc<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         match s.learn_cyclic(Arc::as_ptr(self) as *const c_void) {
             None => {
@@ -306,8 +248,6 @@ impl<'a, T: 'a + Serialize> Serialize for Arc<T> {
             }
         }
     }
-}
-impl<'a, T: 'static + 'a + Deserialize> Deserialize for Arc<T> {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let id = d.deserialize::<usize>();
         match std::num::NonZeroUsize::new(id) {
@@ -319,49 +259,39 @@ impl<'a, T: 'static + 'a + Deserialize> Deserialize for Arc<T> {
             Some(id) => d.get_cyclic::<Arc<T>>(id).clone(),
         }
     }
-}
-impl<'a, T: 'static + 'a + Deserialize> DeserializeBoxed<'a> for Arc<T> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for std::path::PathBuf {
+impl Object for std::path::PathBuf {
     fn serialize_self(&self, s: &mut Serializer) {
         // XXX: unnecessary heap usage
         s.serialize(&self.as_os_str().to_owned());
     }
-}
-impl Deserialize for std::path::PathBuf {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         d.deserialize::<std::ffi::OsString>().into()
     }
-}
-impl<'a> DeserializeBoxed<'a> for std::path::PathBuf {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
 macro_rules! impl_serialize_for_primitive {
     ($t:ty) => {
-        impl Serialize for $t {
+        impl Object for $t {
             fn serialize_self(&self, s: &mut Serializer) {
                 s.write(&self.to_ne_bytes());
             }
-        }
-        impl Deserialize for $t {
             fn deserialize_self(d: &mut Deserializer) -> Self {
                 let mut buf = [0u8; std::mem::size_of::<Self>()];
                 d.read(&mut buf);
                 Self::from_ne_bytes(buf)
             }
-        }
-        impl<'a> DeserializeBoxed<'a> for $t {
-            fn deserialize_on_heap(
+            fn deserialize_on_heap<'a>(
                 &self,
                 d: &mut Deserializer,
-            ) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+            ) -> Box<dyn Object + 'a> {
                 Box::new(Self::deserialize_self(d))
             }
         }
@@ -385,23 +315,19 @@ impl_serialize_for_primitive!(f64);
 
 macro_rules! impl_serialize_for_nonzero {
     ($n:ident, $t:ty) => {
-        impl Serialize for std::num::$n {
+        impl Object for std::num::$n {
             fn serialize_self(&self, s: &mut Serializer) {
                 s.write(&self.get().to_ne_bytes());
             }
-        }
-        impl Deserialize for std::num::$n {
             fn deserialize_self(d: &mut Deserializer) -> Self {
                 let mut buf = [0u8; std::mem::size_of::<Self>()];
                 d.read(&mut buf);
                 Self::new(<$t>::from_ne_bytes(buf)).unwrap()
             }
-        }
-        impl<'a> DeserializeBoxed<'a> for std::num::$n {
-            fn deserialize_on_heap(
+            fn deserialize_on_heap<'a>(
                 &self,
                 d: &mut Deserializer,
-            ) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+            ) -> Box<dyn Object + 'a> {
                 Box::new(Self::deserialize_self(d))
             }
         }
@@ -421,20 +347,16 @@ impl_serialize_for_nonzero!(NonZeroU64, u64);
 impl_serialize_for_nonzero!(NonZeroU128, u128);
 impl_serialize_for_nonzero!(NonZeroUsize, usize);
 
-impl<T: Serialize, const N: usize> Serialize for [T; N] {
+impl<T: Object, const N: usize> Object for [T; N] {
     fn serialize_self(&self, s: &mut Serializer) {
         for item in self {
             s.serialize(item);
         }
     }
-}
-impl<T: Deserialize, const N: usize> Deserialize for [T; N] {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         [0; N].map(|_| d.deserialize())
     }
-}
-impl<'a, T: 'a + Deserialize, const N: usize> DeserializeBoxed<'a> for [T; N] {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -447,7 +369,7 @@ macro_rules! impl_serialize_for_sequence {
         $with_capacity:expr,
         $push:expr
     ) => {
-        impl<T: Serialize $(+ $tbound1 $(+ $tbound2)*)* $(, $typaram: $bound1 $(+ $bound2)*,)*> Serialize
+        impl<T: Object $(+ $tbound1 $(+ $tbound2)*)* $(, $typaram: $bound1 $(+ $bound2)*,)*> Object
             for $ty<T $(, $typaram)*>
         {
             fn serialize_self(&self, s: &mut Serializer) {
@@ -456,10 +378,6 @@ macro_rules! impl_serialize_for_sequence {
                     s.serialize(item);
                 }
             }
-        }
-        impl<T: Deserialize $(+ $tbound1 $(+ $tbound2)*)* $(, $typaram: $bound1 $(+ $bound2)*,)*> Deserialize
-            for $ty<T $(, $typaram)*>
-        {
             fn deserialize_self(d: &mut Deserializer) -> Self {
                 let $size: usize = d.deserialize();
                 let mut $seq = $with_capacity;
@@ -468,11 +386,7 @@ macro_rules! impl_serialize_for_sequence {
                 }
                 $seq
             }
-        }
-        impl<'serde, T: 'serde + Deserialize $(+ $tbound1 $(+ $tbound2)*)* $(, $typaram: 'serde + $bound1 $(+ $bound2)*,)*> DeserializeBoxed<'serde>
-            for $ty<T $(, $typaram)*>
-        {
-            fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'serde> + 'serde> {
+            fn deserialize_on_heap<'serde>(&self, d: &mut Deserializer) -> Box<dyn Object + 'serde> where T: 'serde $(, $typaram: 'serde)* {
                 Box::new(Self::deserialize_self(d))
             }
         }
@@ -490,10 +404,10 @@ macro_rules! impl_serialize_for_map {
         $with_capacity:expr
     ) => {
         impl<
-            K: Serialize $(+ $kbound1 $(+ $kbound2)*)*,
-            V: Serialize
+            K: Object $(+ $kbound1 $(+ $kbound2)*)*,
+            V: Object
             $(, $typaram: $bound1 $(+ $bound2)*,)*
-        > Serialize
+        > Object
             for $ty<K, V $(, $typaram)*>
         {
             fn serialize_self(&self, s: &mut Serializer) {
@@ -503,14 +417,6 @@ macro_rules! impl_serialize_for_map {
                     s.serialize(value);
                 }
             }
-        }
-        impl<
-            K: Deserialize $(+ $kbound1 $(+ $kbound2)*)*,
-            V: Deserialize
-            $(, $typaram: $bound1 $(+ $bound2)*,)*
-        > Deserialize
-            for $ty<K, V $(, $typaram)*>
-        {
             fn deserialize_self(d: &mut Deserializer) -> Self {
                 let $size: usize = d.deserialize();
                 let mut map = $with_capacity;
@@ -519,16 +425,7 @@ macro_rules! impl_serialize_for_map {
                 }
                 map
             }
-        }
-        impl<
-            'serde,
-            K: 'serde + Deserialize $(+ $kbound1 $(+ $kbound2)*)*,
-            V: 'serde + Deserialize
-            $(, $typaram: 'serde + $bound1 $(+ $bound2)*,)*
-        > DeserializeBoxed<'serde>
-            for $ty<K, V $(, $typaram)*>
-        {
-            fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'serde> + 'serde> {
+            fn deserialize_on_heap<'serde>(&self, d: &mut Deserializer) -> Box<dyn Object + 'serde> where K: 'serde, V: 'serde $(, $typaram: 'serde)* {
                 Box::new(Self::deserialize_self(d))
             }
         }
@@ -574,7 +471,7 @@ impl_serialize_for_sequence!(
 impl_serialize_for_map!(BTreeMap<K: Ord, V>, size, BTreeMap::new());
 impl_serialize_for_map!(HashMap<K: Eq + Hash, V, S: BuildHasher + Default>, size, HashMap::with_capacity_and_hasher(size, S::default()));
 
-impl<T: Serialize, E: Serialize> Serialize for Result<T, E> {
+impl<T: Object, E: Object> Object for Result<T, E> {
     fn serialize_self(&self, s: &mut Serializer) {
         match self {
             Ok(ref ok) => {
@@ -587,8 +484,6 @@ impl<T: Serialize, E: Serialize> Serialize for Result<T, E> {
             }
         }
     }
-}
-impl<T: Deserialize, E: Deserialize> Deserialize for Result<T, E> {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         if d.deserialize::<bool>() {
             Ok(d.deserialize())
@@ -596,109 +491,85 @@ impl<T: Deserialize, E: Deserialize> Deserialize for Result<T, E> {
             Err(d.deserialize())
         }
     }
-}
-impl<'a, T: 'a + Deserialize, E: 'a + Deserialize> DeserializeBoxed<'a> for Result<T, E> {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a, E: 'a {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for OwnedFd {
+impl Object for OwnedFd {
     fn serialize_self(&self, s: &mut Serializer) {
         let fd = s.add_fd(self.as_raw_fd());
         s.serialize(&fd)
     }
-}
-impl Deserialize for OwnedFd {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let fd = d.deserialize();
         d.drain_fd(fd)
     }
-}
-impl<'a> DeserializeBoxed<'a> for OwnedFd {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for std::fs::File {
+impl Object for std::fs::File {
     fn serialize_self(&self, s: &mut Serializer) {
         let fd = s.add_fd(self.as_raw_fd());
         s.serialize(&fd)
     }
-}
-impl Deserialize for std::fs::File {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let fd: OwnedFd = d.deserialize();
         Self::from(fd)
     }
-}
-impl<'a> DeserializeBoxed<'a> for std::fs::File {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for std::os::unix::net::UnixStream {
+impl Object for std::os::unix::net::UnixStream {
     fn serialize_self(&self, s: &mut Serializer) {
         let fd = s.add_fd(self.as_raw_fd());
         s.serialize(&fd)
     }
-}
-impl Deserialize for std::os::unix::net::UnixStream {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let fd = d.deserialize();
         <Self as From<std::os::unix::io::OwnedFd>>::from(d.drain_fd(fd))
     }
-}
-impl<'a> DeserializeBoxed<'a> for std::os::unix::net::UnixStream {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for openat::Dir {
+impl Object for openat::Dir {
     fn serialize_self(&self, s: &mut Serializer) {
         let fd = s.add_fd(self.as_raw_fd());
         s.serialize(&fd)
     }
-}
-impl Deserialize for openat::Dir {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let fd = d.deserialize();
         unsafe { <Self as FromRawFd>::from_raw_fd(d.drain_fd(fd).into_raw_fd()) }
     }
-}
-impl<'a> DeserializeBoxed<'a> for openat::Dir {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for tokio::net::UnixStream {
+impl Object for tokio::net::UnixStream {
     fn serialize_self(&self, s: &mut Serializer) {
         let fd = s.add_fd(self.as_raw_fd());
         s.serialize(&fd)
     }
-}
-impl Deserialize for tokio::net::UnixStream {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         Self::from_std(d.deserialize()).expect("Failed to deserialize tokio::net::UnixStream")
     }
-}
-impl<'a> DeserializeBoxed<'a> for tokio::net::UnixStream {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for tokio_seqpacket::UnixSeqpacket {
+impl Object for tokio_seqpacket::UnixSeqpacket {
     fn serialize_self(&self, s: &mut Serializer) {
         let fd = s.add_fd(self.as_raw_fd());
         s.serialize(&fd)
     }
-}
-impl Deserialize for tokio_seqpacket::UnixSeqpacket {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let fd = d.deserialize();
         unsafe {
@@ -706,28 +577,22 @@ impl Deserialize for tokio_seqpacket::UnixSeqpacket {
                 .expect("Failed to deserialize tokio_seqpacket::UnixSeqpacket")
         }
     }
-}
-impl<'a> DeserializeBoxed<'a> for tokio_seqpacket::UnixSeqpacket {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
-impl Serialize for std::time::Duration {
+impl Object for std::time::Duration {
     fn serialize_self(&self, s: &mut Serializer) {
         s.serialize(&self.as_secs());
         s.serialize(&self.subsec_nanos());
     }
-}
-impl Deserialize for std::time::Duration {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         let secs: u64 = d.deserialize();
         let nanos: u32 = d.deserialize();
         Self::new(secs, nanos)
     }
-}
-impl<'a> DeserializeBoxed<'a> for std::time::Duration {
-    fn deserialize_on_heap(&self, d: &mut Deserializer) -> Box<dyn DeserializeBoxed<'a> + 'a> {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }

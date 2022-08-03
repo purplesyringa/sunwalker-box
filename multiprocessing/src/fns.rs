@@ -1,4 +1,4 @@
-use crate::{Object, TraitObject};
+use crate::Object;
 use paste::paste;
 use std::future::Future;
 use std::ops::Deref;
@@ -26,13 +26,13 @@ impl<Args, T: Entrypoint<Args>> std::ops::FnOnce<Args> for EntrypointWrapper<T> 
     }
 }
 
-pub trait FnOnce<Args>: std::ops::FnOnce<Args> + TraitObject {}
-pub trait Fn<Args>: std::ops::Fn<Args> + TraitObject {}
-pub trait FnMut<Args>: std::ops::FnMut<Args> + TraitObject {}
+pub trait FnOnce<Args>: std::ops::FnOnce<Args> + Object {}
+pub trait Fn<Args>: std::ops::Fn<Args> + Object {}
+pub trait FnMut<Args>: std::ops::FnMut<Args> + Object {}
 
-impl<Args, T: std::ops::FnOnce<Args> + TraitObject> FnOnce<Args> for T {}
-impl<Args, T: std::ops::Fn<Args> + TraitObject> Fn<Args> for T {}
-impl<Args, T: std::ops::FnMut<Args> + TraitObject> FnMut<Args> for T {}
+impl<Args, T: std::ops::FnOnce<Args> + Object> FnOnce<Args> for T {}
+impl<Args, T: std::ops::Fn<Args> + Object> Fn<Args> for T {}
+impl<Args, T: std::ops::FnMut<Args> + Object> FnMut<Args> for T {}
 
 pub trait Bind<Head: Object, Tail> {
     fn bind(self, head: Head) -> Bound<Self, Head>
