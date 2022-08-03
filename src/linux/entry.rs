@@ -143,7 +143,12 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
             .context("Failed to create channel")?;
 
     let child = reaper
-        .spawn(pidfd.as_raw_fd(), cli_command, cgroup, theirs)
+        .spawn(
+            pidfd.as_raw_fd(),
+            cli_command,
+            cgroup.export().context("Failed to export cgroup")?,
+            theirs,
+        )
         .context("Failed to start child")?;
     thread_tx
         .send(child)
@@ -434,7 +439,7 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
 fn reaper(
     ppidfd: RawFd,
     cli_command: entry::CLIStartCommand,
-    cgroup: cgroups::Cgroup,
+    cgroup: RawFd,
     channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) -> ! {
     if nix::unistd::getpid().as_raw() != 1 {
@@ -490,6 +495,8 @@ fn reaper(
     }
     nix::unistd::close(ppidfd).expect("Failed to close parent pidfd");
 
+    let cgroup = unsafe { cgroups::Cgroup::import(cgroup) }.expect("Failed to import cgroup");
+
     if !cli_command.ignore_non_cloexec {
         // O_CLOEXEC is great and all, but better safe than sorry. We make sure all streams except
         // the standard ones are closed on exec.
@@ -526,9 +533,7 @@ fn reaper(
     let child = manager
         .spawn(
             cli_command,
-            proc_cgroup
-                .try_clone()
-                .expect("Failed to clone box cgroup reference"),
+            proc_cgroup.export().expect("Failed to export proc cgroup"),
             channel,
         )
         .expect("Failed to start child");
@@ -585,9 +590,12 @@ fn reaper(
 #[multiprocessing::entrypoint]
 fn manager(
     cli_command: entry::CLIStartCommand,
-    proc_cgroup: cgroups::ProcCgroup,
+    proc_cgroup: (RawFd, String),
     mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
+    let proc_cgroup =
+        unsafe { cgroups::ProcCgroup::import(proc_cgroup) }.expect("Failed to import proc cgroup");
+
     // Setup rootfs. This has to happen inside the pidns, as we mount procfs here.
     let quotas = rootfs::DiskQuotas {
         space: cli_command.quota_space,

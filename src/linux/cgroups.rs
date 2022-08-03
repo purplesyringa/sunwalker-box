@@ -1,18 +1,15 @@
 use crate::linux::ids;
 use anyhow::{bail, Context, Result};
-use multiprocessing::Object;
 use nix::libc::pid_t;
 use rand::Rng;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, RawFd};
 use std::time::Duration;
 
-#[derive(Object)]
 pub struct Cgroup {
     core_cgroup_fd: openat::Dir,
 }
 
-#[derive(Object)]
 pub struct ProcCgroup {
     core_cgroup_fd: openat::Dir,
     id: String,
@@ -104,6 +101,26 @@ impl Cgroup {
             id,
         })
     }
+
+    pub fn export(&self) -> Result<RawFd> {
+        nix::fcntl::fcntl(
+            self.core_cgroup_fd.as_raw_fd(),
+            nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+        )
+        .context("Failed to reset CLOEXEC")?;
+        Ok(self.core_cgroup_fd.as_raw_fd())
+    }
+
+    pub unsafe fn import(core_cgroup_fd: RawFd) -> Result<Self> {
+        nix::fcntl::fcntl(
+            core_cgroup_fd.as_raw_fd(),
+            nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
+        )
+        .context("Failed to set CLOEXEC")?;
+        Ok(Self {
+            core_cgroup_fd: openat::Dir::from_raw_fd(core_cgroup_fd),
+        })
+    }
 }
 
 impl ProcCgroup {
@@ -133,10 +150,25 @@ impl ProcCgroup {
         remove_cgroup(&self.core_cgroup_fd, format!("proc-{}", self.id).as_ref())
     }
 
-    pub fn try_clone(&self) -> Result<Self> {
-        Ok(ProcCgroup {
-            core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
-            id: self.id.clone(),
+    pub fn export(&self) -> Result<(RawFd, String)> {
+        nix::fcntl::fcntl(
+            self.core_cgroup_fd.as_raw_fd(),
+            nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+        )
+        .context("Failed to reset CLOEXEC")?;
+        Ok((self.core_cgroup_fd.as_raw_fd(), self.id.clone()))
+    }
+
+    pub unsafe fn import(data: (RawFd, String)) -> Result<Self> {
+        let (core_cgroup_fd, id) = data;
+        nix::fcntl::fcntl(
+            core_cgroup_fd.as_raw_fd(),
+            nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
+        )
+        .context("Failed to set CLOEXEC")?;
+        Ok(Self {
+            core_cgroup_fd: openat::Dir::from_raw_fd(core_cgroup_fd),
+            id,
         })
     }
 }
