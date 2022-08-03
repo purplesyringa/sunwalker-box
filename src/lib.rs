@@ -15,8 +15,10 @@ mod linux {
     mod cgroups;
     pub mod entry;
     mod ids;
+    mod manager;
     mod mountns;
     mod procs;
+    mod reaper;
     mod rootfs;
     mod sandbox;
     mod system;
