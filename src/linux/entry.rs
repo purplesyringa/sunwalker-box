@@ -1,15 +1,12 @@
 use crate::{
     entry,
-    linux::{cgroups, mountns, procs, reaper, rootfs, sandbox, system, userns, manager},
+    linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system, userns},
 };
 use anyhow::{bail, Context, Result};
-use nix::{
-    libc,
-    libc::SYS_pidfd_open,
-};
+use nix::{libc, libc::SYS_pidfd_open};
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
 use std::sync::mpsc;
 use std::time::Duration;
 
@@ -102,8 +99,8 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
     }
 
     // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
-    // communication doesn't work well, so we use pidfd. servo-ipc doesn't support passing arbitrary
-    // fds, but we can just reset CLOEXEC.
+    // communication doesn't work well, so we use pidfd. As a side note, pidfd_open sets O_CLOEXEC
+    // automatically.
     let pidfd = unsafe { libc::syscall(SYS_pidfd_open, nix::unistd::getpid(), 0) } as RawFd;
     if pidfd == -1 {
         panic!(
@@ -112,19 +109,13 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
         );
     }
     let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
-    // pidfd_open automatically sets CLOEXEC
-    nix::fcntl::fcntl(
-        pidfd.as_raw_fd(),
-        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
-    )
-    .context("Failed to reset CLOEXEC on pidfd")?;
 
     let (mut ours, theirs) =
         multiprocessing::duplex::<manager::Command, std::result::Result<Option<String>, String>>()
             .context("Failed to create channel")?;
 
     let child = reaper::reaper
-        .spawn(pidfd.as_raw_fd(), cli_command, cgroup, theirs)
+        .spawn(pidfd, cli_command, cgroup, theirs)
         .context("Failed to start child")?;
     thread_tx
         .send(child)
@@ -151,7 +142,10 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
 }
 
 fn handle_command(
-    channel: &mut multiprocessing::Duplex<manager::Command, std::result::Result<Option<String>, String>>,
+    channel: &mut multiprocessing::Duplex<
+        manager::Command,
+        std::result::Result<Option<String>, String>,
+    >,
     command: &str,
     arg: &str,
 ) -> Result<Option<String>> {

@@ -7,7 +7,7 @@ use nix::{
     libc::{c_int, PR_SET_PDEATHSIG, SIGUSR1},
     sys::{signal, wait},
 };
-use std::os::unix::io::RawFd;
+use std::os::unix::io::{AsRawFd, OwnedFd, RawFd};
 
 extern "C" fn pid1_signal_handler(signo: c_int) {
     // std::process::exit is not async-safe
@@ -18,7 +18,7 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
 
 #[multiprocessing::entrypoint]
 pub fn reaper(
-    ppidfd: RawFd,
+    ppidfd: OwnedFd,
     cli_command: entry::CLIStartCommand,
     cgroup: cgroups::Cgroup,
     channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, manager::Command>,
@@ -66,7 +66,10 @@ pub fn reaper(
     // the parent is dead by now. pidfd_send_signal does not work across PID namespaces (not in this
     // case, anyway), so we have to resort to polling.
     if nix::poll::poll(
-        &mut [nix::poll::PollFd::new(ppidfd, nix::poll::PollFlags::POLLIN)],
+        &mut [nix::poll::PollFd::new(
+            ppidfd.as_raw_fd(),
+            nix::poll::PollFlags::POLLIN,
+        )],
         0,
     )
     .expect("Failed to poll parent pidfd")
@@ -74,7 +77,6 @@ pub fn reaper(
     {
         std::process::exit(0);
     }
-    nix::unistd::close(ppidfd).expect("Failed to close parent pidfd");
 
     if !cli_command.ignore_non_cloexec {
         // O_CLOEXEC is great and all, but better safe than sorry. We make sure all streams except
