@@ -79,6 +79,7 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
     let ident = input.sig.ident;
     input.sig.ident = format_ident!("call");
 
+    let vis = input.vis;
     input.vis = syn::Visibility::Public(syn::VisPublic {
         pub_token: <syn::Token![pub] as std::default::Default>::default(),
     });
@@ -214,7 +215,7 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
 
         #[allow(non_camel_case_types)]
         #[derive(::multiprocessing::Object)]
-        struct #type_ident;
+        #vis struct #type_ident;
 
         impl #type_ident {
             #[link_name = #link_name]
@@ -240,7 +241,7 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
         }
 
         #[allow(non_upper_case_globals)]
-        const #ident: ::multiprocessing::EntrypointWrapper<#type_ident> = ::multiprocessing::EntrypointWrapper(#type_ident);
+        #vis const #ident: ::multiprocessing::EntrypointWrapper<#type_ident> = ::multiprocessing::EntrypointWrapper(#type_ident);
     };
 
     TokenStream::from(expanded)
