@@ -1,4 +1,4 @@
-use crate::{Deserializer, Object, Serializer};
+use crate::{Deserializer, Object, Serializer, TransmissibleObject};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::{BuildHasher, Hash};
 use std::os::raw::c_void;
@@ -18,6 +18,7 @@ impl Object for bool {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for bool {}
 
 impl Object for char {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -30,6 +31,7 @@ impl Object for char {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for char {}
 
 impl<T> Object for std::marker::PhantomData<T> {
     fn serialize_self(&self, _s: &mut Serializer) {}
@@ -43,6 +45,7 @@ impl<T> Object for std::marker::PhantomData<T> {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T> TransmissibleObject for std::marker::PhantomData<T> {}
 
 impl Object for String {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -59,6 +62,7 @@ impl Object for String {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for String {}
 
 impl Object for std::ffi::CString {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -77,6 +81,7 @@ impl Object for std::ffi::CString {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for std::ffi::CString {}
 
 impl Object for std::ffi::OsString {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -90,6 +95,7 @@ impl Object for std::ffi::OsString {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for std::ffi::OsString {}
 
 impl Object for () {
     fn serialize_self(&self, _s: &mut Serializer) {}
@@ -100,6 +106,7 @@ impl Object for () {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for () {}
 
 impl Object for ! {
     fn serialize_self(&self, _s: &mut Serializer) {
@@ -112,6 +119,7 @@ impl Object for ! {
         unreachable!()
     }
 }
+impl TransmissibleObject for ! {}
 
 impl<T: Object, U: Object> Object for (T, U) {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -131,6 +139,7 @@ impl<T: Object, U: Object> Object for (T, U) {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T: TransmissibleObject, U: TransmissibleObject> TransmissibleObject for (T, U) {}
 
 impl<T: Object> Object for Option<T> {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -156,6 +165,7 @@ impl<T: Object> Object for Option<T> {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T: TransmissibleObject> TransmissibleObject for Option<T> {}
 
 trait BaseTrait {}
 
@@ -196,6 +206,7 @@ impl<T: ?Sized> Object for std::ptr::DynMetadata<T> {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T: ?Sized> TransmissibleObject for std::ptr::DynMetadata<T> {}
 
 impl<T: Object + std::ptr::Pointee + ?Sized> Object for Box<T>
 where
@@ -222,6 +233,10 @@ where
     {
         Box::new(Self::deserialize_self(d))
     }
+}
+impl<T: TransmissibleObject + std::ptr::Pointee + ?Sized> TransmissibleObject for Box<T> where
+    T::Metadata: Object
+{
 }
 
 impl<T: 'static + Object> Object for Rc<T> {
@@ -254,6 +269,7 @@ impl<T: 'static + Object> Object for Rc<T> {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T: 'static + TransmissibleObject> TransmissibleObject for Rc<T> {}
 
 impl<T: 'static + Object> Object for Arc<T> {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -285,6 +301,7 @@ impl<T: 'static + Object> Object for Arc<T> {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T: 'static + TransmissibleObject> TransmissibleObject for Arc<T> {}
 
 impl Object for std::path::PathBuf {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -298,6 +315,7 @@ impl Object for std::path::PathBuf {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for std::path::PathBuf {}
 
 macro_rules! impl_serialize_for_primitive {
     ($t:ty) => {
@@ -314,6 +332,7 @@ macro_rules! impl_serialize_for_primitive {
                 Box::new(Self::deserialize_self(d))
             }
         }
+        impl TransmissibleObject for $t {}
     };
 }
 
@@ -347,6 +366,7 @@ macro_rules! impl_serialize_for_nonzero {
                 Box::new(Self::deserialize_self(d))
             }
         }
+        impl TransmissibleObject for std::num::$n {}
     };
 }
 
@@ -379,6 +399,7 @@ impl<T: Object, const N: usize> Object for [T; N] {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T: TransmissibleObject, const N: usize> TransmissibleObject for [T; N] {}
 
 macro_rules! impl_serialize_for_sequence {
     (
@@ -409,6 +430,8 @@ macro_rules! impl_serialize_for_sequence {
                 Box::new(Self::deserialize_self(d))
             }
         }
+        impl<T: TransmissibleObject $(+ $tbound1 $(+ $tbound2)*)* $(, $typaram: $bound1 $(+ $bound2)*,)*> TransmissibleObject
+            for $ty<T $(, $typaram)*> {}
     }
 }
 
@@ -448,6 +471,13 @@ macro_rules! impl_serialize_for_map {
                 Box::new(Self::deserialize_self(d))
             }
         }
+        impl<
+            K: TransmissibleObject $(+ $kbound1 $(+ $kbound2)*)*,
+            V: TransmissibleObject
+            $(, $typaram: $bound1 $(+ $bound2)*,)*
+        > TransmissibleObject
+            for $ty<K, V $(, $typaram)*>
+        {}
     }
 }
 
@@ -518,6 +548,7 @@ impl<T: Object, E: Object> Object for Result<T, E> {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl<T: TransmissibleObject, E: TransmissibleObject> TransmissibleObject for Result<T, E> {}
 
 impl Object for OwnedFd {
     fn serialize_self(&self, s: &mut Serializer) {
@@ -619,3 +650,4 @@ impl Object for std::time::Duration {
         Box::new(Self::deserialize_self(d))
     }
 }
+impl TransmissibleObject for std::time::Duration {}

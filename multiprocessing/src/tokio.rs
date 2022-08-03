@@ -1,4 +1,6 @@
-use crate::{imp, ipc::MAX_PACKET_SIZE, subprocess, Deserializer, FnOnce, Object, Serializer};
+use crate::{
+    imp, ipc::MAX_PACKET_SIZE, subprocess, Deserializer, FnOnceObject, Object, Serializer,
+};
 use nix::libc::pid_t;
 use std::io::{Error, ErrorKind, IoSlice, IoSliceMut, Result};
 use std::marker::PhantomData;
@@ -291,7 +293,7 @@ impl<T: Object> Child<T> {
 }
 
 pub async unsafe fn spawn<T: Object>(
-    entry: Box<dyn FnOnce<(RawFd,), Output = i32>>,
+    entry: Box<dyn FnOnceObject<(RawFd,), Output = i32>>,
     flags: nix::libc::c_int,
 ) -> Result<Child<T>> {
     let mut s = Serializer::new();

@@ -21,7 +21,7 @@ pub mod serde;
 pub use crate::serde::*;
 
 pub mod ipc;
-pub use ipc::{channel, duplex, Duplex, Receiver, Sender};
+pub use ipc::{channel, duplex, Duplex, Receiver, Sender, TransmissibleObject};
 
 pub mod tokio;
 

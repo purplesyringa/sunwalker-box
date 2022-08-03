@@ -1,4 +1,6 @@
-use multiprocessing::{channel, duplex, Bind, Duplex, Object, Receiver, Sender};
+use multiprocessing::{
+    channel, duplex, Bind, Duplex, Object, Receiver, Sender, TransmissibleObject,
+};
 
 #[derive(Debug, PartialEq, Object)]
 struct SimplePair {
@@ -22,7 +24,10 @@ fn add_with_arguments(x: i32, y: i32) -> i32 {
 }
 
 #[multiprocessing::entrypoint]
-fn add_with_template<T: std::ops::Add<Output = T> + Object + 'static>(x: T, y: T) -> T {
+fn add_with_template<T: std::ops::Add<Output = T> + TransmissibleObject + 'static>(
+    x: T,
+    y: T,
+) -> T {
     x + y
 }
 
@@ -67,17 +72,19 @@ fn with_passed_trait(arg: Box<dyn Trait>) -> String {
 }
 
 #[multiprocessing::entrypoint]
-fn with_passed_fn(func: Box<dyn multiprocessing::FnOnce<(i32, i32), Output = i32>>) -> i32 {
+fn with_passed_fn(func: Box<dyn multiprocessing::FnOnceObject<(i32, i32), Output = i32>>) -> i32 {
     func(5, 7)
 }
 
 #[multiprocessing::entrypoint]
-fn with_passed_bound_fn(func: Box<dyn multiprocessing::FnOnce<(i32,), Output = i32>>) -> i32 {
+fn with_passed_bound_fn(func: Box<dyn multiprocessing::FnOnceObject<(i32,), Output = i32>>) -> i32 {
     func(7)
 }
 
 #[multiprocessing::entrypoint]
-fn with_passed_double_bound_fn(func: Box<dyn multiprocessing::FnOnce<(), Output = i32>>) -> i32 {
+fn with_passed_double_bound_fn(
+    func: Box<dyn multiprocessing::FnOnceObject<(), Output = i32>>,
+) -> i32 {
     func()
 }
 

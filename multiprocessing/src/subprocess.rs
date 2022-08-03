@@ -1,4 +1,4 @@
-use crate::{duplex, imp, FnOnce, Object, Receiver, Serializer};
+use crate::{duplex, imp, FnOnceObject, Receiver, Serializer, TransmissibleObject};
 use nix::{
     libc::{c_char, c_int, c_void, pid_t},
     sys::signal,
@@ -7,12 +7,12 @@ use std::ffi::CString;
 use std::io::Result;
 use std::os::unix::io::{AsRawFd, RawFd};
 
-pub struct Child<T: Object> {
+pub struct Child<T: TransmissibleObject> {
     proc_pid: nix::unistd::Pid,
     output_rx: Receiver<T>,
 }
 
-impl<T: Object> Child<T> {
+impl<T: TransmissibleObject> Child<T> {
     pub fn new(proc_pid: nix::unistd::Pid, output_rx: Receiver<T>) -> Child<T> {
         Child {
             proc_pid,
@@ -112,8 +112,8 @@ pub(crate) unsafe fn _spawn_child(
     }
 }
 
-pub unsafe fn spawn<T: Object>(
-    entry: Box<dyn FnOnce<(RawFd,), Output = i32>>,
+pub unsafe fn spawn<T: TransmissibleObject>(
+    entry: Box<dyn FnOnceObject<(RawFd,), Output = i32>>,
     flags: c_int,
 ) -> Result<Child<T>> {
     let mut s = Serializer::new();

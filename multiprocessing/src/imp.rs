@@ -1,6 +1,6 @@
 pub use ctor::ctor;
 
-use crate::{Deserializer, FnOnce, Receiver};
+use crate::{Deserializer, FnOnceObject, Receiver};
 use lazy_static::lazy_static;
 use nix::fcntl;
 use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
@@ -30,6 +30,20 @@ impl<T, E: std::fmt::Debug> Report for Result<T, E> {
             }
         }
     }
+}
+
+// We use this little trick to implement the 'trivial_bounds' feature in stable Rust. Instead of
+// 'where T: Bounds', we use 'where for<'a> Identity<'a, T>: Bounds'. This seems to confuse the
+// hell out of rustc and makes it believe the where clause is not trivial. Credits go to
+// @danielhenrymantilla at GitHub, see:
+// - https://github.com/getditto/safer_ffi/blob/65a8a2d8ccfd5ef5b5f58a495bc8cea9da07c6fc/src/_lib.rs#L519-L534
+// - https://github.com/getditto/safer_ffi/blob/64b921bdcabe441b957742332773248af6677a89/src/proc_macro/utils/trait_impl_shenanigans.rs#L6-L28
+pub type Identity<'a, T> = <T as IdentityImpl<'a>>::Type;
+pub trait IdentityImpl<'a> {
+    type Type: ?Sized;
+}
+impl<T: ?Sized> IdentityImpl<'_> for T {
+    type Type = Self;
 }
 
 pub fn main() {
@@ -62,7 +76,7 @@ pub fn main() {
                 .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
                 .collect();
 
-            let entry: Box<dyn FnOnce<(RawFd,), Output = i32>> =
+            let entry: Box<dyn FnOnceObject<(RawFd,), Output = i32>> =
                 Deserializer::from(entry_data, entry_fds).deserialize();
             std::process::exit(entry(fd));
         }

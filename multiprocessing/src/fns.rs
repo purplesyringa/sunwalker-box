@@ -24,13 +24,13 @@ impl<Args, T: Entrypoint<Args>> std::ops::FnOnce<Args> for EntrypointWrapper<T> 
     }
 }
 
-pub trait FnOnce<Args>: std::ops::FnOnce<Args> + Object {}
-pub trait Fn<Args>: std::ops::Fn<Args> + Object {}
-pub trait FnMut<Args>: std::ops::FnMut<Args> + Object {}
+pub trait FnOnceObject<Args>: std::ops::FnOnce<Args> + Object {}
+pub trait FnObject<Args>: std::ops::Fn<Args> + Object {}
+pub trait FnMutObject<Args>: std::ops::FnMut<Args> + Object {}
 
-impl<Args, T: std::ops::FnOnce<Args> + Object> FnOnce<Args> for T {}
-impl<Args, T: std::ops::Fn<Args> + Object> Fn<Args> for T {}
-impl<Args, T: std::ops::FnMut<Args> + Object> FnMut<Args> for T {}
+impl<Args, T: std::ops::FnOnce<Args> + Object> FnOnceObject<Args> for T {}
+impl<Args, T: std::ops::Fn<Args> + Object> FnObject<Args> for T {}
+impl<Args, T: std::ops::FnMut<Args> + Object> FnMutObject<Args> for T {}
 
 pub trait Bind<Head: Object, Tail> {
     fn bind(self, head: Head) -> Bound<Self, Head>

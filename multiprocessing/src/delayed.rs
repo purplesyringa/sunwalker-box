@@ -1,4 +1,4 @@
-use crate::{Deserializer, Object, Serializer};
+use crate::{Deserializer, Object, Serializer, TransmissibleObject};
 use std::os::unix::io::OwnedFd;
 
 pub enum Delayed<T: Object> {
@@ -51,3 +51,5 @@ impl<T: Object> Object for Delayed<T> {
         Box::new(Self::deserialize_self(d))
     }
 }
+
+impl<T: TransmissibleObject> TransmissibleObject for Delayed<T> {}

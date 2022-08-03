@@ -147,12 +147,12 @@ pub fn entrypoint(_meta: TokenStream, input: TokenStream) -> TokenStream {
     let expanded = quote! {
         #[derive(::multiprocessing::Object)]
         struct #entry_ident #generic_params {
-            func: ::multiprocessing::Delayed<::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = #return_type_wrapped>>>,
+            func: ::multiprocessing::Delayed<::std::boxed::Box<dyn ::multiprocessing::FnOnceObject<(), Output = #return_type_wrapped>>>,
             #(#generic_phantom,)*
         }
 
         impl #generic_params #entry_ident #generics {
-            fn new(func: ::std::boxed::Box<dyn ::multiprocessing::FnOnce<(), Output = #return_type_wrapped>>) -> Self {
+            fn new(func: ::std::boxed::Box<dyn ::multiprocessing::FnOnceObject<(), Output = #return_type_wrapped>>) -> Self {
                 Self {
                     func: ::multiprocessing::Delayed::new(func),
                     #(#generic_phantom_build,)*
@@ -270,82 +270,90 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
     let generics_where = input.generics.where_clause;
 
     let expanded = match input.data {
-        syn::Data::Struct(struct_) => match struct_.fields {
-            syn::Fields::Named(fields) => {
-                let serialize_fields = fields.named.iter().map(|field| {
-                    let ident = &field.ident;
-                    quote! {
-                        s.serialize(&self.#ident);
+        syn::Data::Struct(struct_) => {
+            let mut generics_where_transmissible: Vec<_> = match generics_where {
+                Some(ref where_) => where_
+                    .predicates
+                    .iter()
+                    .map(|x| x.clone().into_token_stream())
+                    .collect(),
+                None => Vec::new(),
+            };
+            for field in &struct_.fields {
+                let ty = &field.ty;
+                generics_where_transmissible
+                    .push(quote! { for<'__mp_trivial> ::multiprocessing::imp::Identity<'__mp_trivial, #ty>: ::multiprocessing::TransmissibleObject });
+            }
+            let generics_where_transmissible = if generics_where_transmissible.is_empty() {
+                quote! {}
+            } else {
+                quote! { where #(#generics_where_transmissible,)* }
+            };
+
+            let serialize_fields = match struct_.fields {
+                syn::Fields::Named(ref fields) => fields
+                    .named
+                    .iter()
+                    .map(|field| {
+                        let ident = &field.ident;
+                        quote! {
+                            s.serialize(&self.#ident);
+                        }
+                    })
+                    .collect(),
+                syn::Fields::Unnamed(ref fields) => fields
+                    .unnamed
+                    .iter()
+                    .enumerate()
+                    .map(|(i, _)| {
+                        let i = syn::Index::from(i);
+                        quote! {
+                            s.serialize(&self.#i);
+                        }
+                    })
+                    .collect(),
+                syn::Fields::Unit => Vec::new(),
+            };
+
+            let deserialize_fields = match struct_.fields {
+                syn::Fields::Named(ref fields) => {
+                    let deserialize_fields = fields.named.iter().map(|field| {
+                        let ident = &field.ident;
+                        quote! {
+                            #ident: d.deserialize(),
+                        }
+                    });
+                    quote! { Self { #(#deserialize_fields)* } }
+                }
+                syn::Fields::Unnamed(ref fields) => {
+                    let deserialize_fields = fields.unnamed.iter().map(|_| {
+                        quote! {
+                            d.deserialize(),
+                        }
+                    });
+                    quote! { Self (#(#deserialize_fields)*) }
+                }
+                syn::Fields::Unit => {
+                    quote! { Self }
+                }
+            };
+
+            quote! {
+                impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
+                    fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
+                        #(#serialize_fields)*
                     }
-                });
-                let deserialize_fields = fields.named.iter().map(|field| {
-                    let ident = &field.ident;
-                    quote! {
-                        #ident: d.deserialize(),
+                    fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
+                        #deserialize_fields
                     }
-                });
-                quote! {
-                    impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
-                        fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
-                            #(#serialize_fields)*
-                        }
-                        fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
-                            Self {
-                                #(#deserialize_fields)*
-                            }
-                        }
-                        fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
-                            use ::multiprocessing::Object;
-                            ::std::boxed::Box::new(Self::deserialize_self(d))
-                        }
+                    fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
+                        use ::multiprocessing::Object;
+                        ::std::boxed::Box::new(Self::deserialize_self(d))
                     }
                 }
+                impl #generics_impl ::multiprocessing::TransmissibleObject for #ident #generics #generics_where_transmissible {}
             }
-            syn::Fields::Unnamed(fields) => {
-                let serialize_fields = fields.unnamed.iter().enumerate().map(|(i, _)| {
-                    let i = syn::Index::from(i);
-                    quote! {
-                        s.serialize(&self.#i);
-                    }
-                });
-                let deserialize_fields = fields.unnamed.iter().map(|_| {
-                    quote! {
-                        d.deserialize(),
-                    }
-                });
-                quote! {
-                    impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
-                        fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
-                            #(#serialize_fields)*
-                        }
-                        fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
-                            Self(
-                                #(#deserialize_fields)*
-                            )
-                        }
-                        fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
-                            use ::multiprocessing::Object;
-                            ::std::boxed::Box::new(Self::deserialize_self(d))
-                        }
-                    }
-                }
-            }
-            syn::Fields::Unit => {
-                quote! {
-                    impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
-                        fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
-                        }
-                        fn deserialize_self(d: &mut ::multiprocessing::Deserializer) -> Self {
-                            Self
-                        }
-                        fn deserialize_on_heap<'serde>(&self, d: &mut ::multiprocessing::Deserializer) -> ::std::boxed::Box<dyn ::multiprocessing::Object + 'serde> where Self: 'serde {
-                            use ::multiprocessing::Object;
-                            ::std::boxed::Box::new(Self::deserialize_self(d))
-                        }
-                    }
-                }
-            }
-        },
+        }
         syn::Data::Enum(enum_) => {
             let serialize_variants = enum_.variants.iter().enumerate().map(|(i, variant)| {
                 let ident = &variant.ident;
@@ -415,6 +423,26 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
                     }
                 }
             });
+            let mut generics_where_transmissible: Vec<_> = match generics_where {
+                Some(ref where_) => where_
+                    .predicates
+                    .iter()
+                    .map(|x| x.clone().into_token_stream())
+                    .collect(),
+                None => Vec::new(),
+            };
+            for variant in &enum_.variants {
+                for field in &variant.fields {
+                    let ty = &field.ty;
+                    generics_where_transmissible
+                        .push(quote! { for<'__mp_trivial> ::multiprocessing::imp::Identity<'__mp_trivial, #ty>: ::multiprocessing::TransmissibleObject });
+                }
+            }
+            let generics_where_transmissible = if generics_where_transmissible.is_empty() {
+                quote! {}
+            } else {
+                quote! { where #(#generics_where_transmissible,)* }
+            };
             quote! {
                 impl #generics_impl ::multiprocessing::Object for #ident #generics #generics_where {
                     fn serialize_self(&self, s: &mut ::multiprocessing::Serializer) {
@@ -433,6 +461,7 @@ pub fn derive_object(input: TokenStream) -> TokenStream {
                         ::std::boxed::Box::new(Self::deserialize_self(d))
                     }
                 }
+                impl #generics_impl ::multiprocessing::TransmissibleObject for #ident #generics #generics_where_transmissible {}
             }
         }
         syn::Data::Union(_) => unimplemented!(),

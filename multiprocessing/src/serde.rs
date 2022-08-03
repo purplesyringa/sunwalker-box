@@ -10,8 +10,6 @@ pub struct Serializer {
     cyclic_ids: HashMap<*const c_void, NonZeroUsize>,
 }
 
-unsafe impl Send for Serializer {}
-
 impl Serializer {
     pub fn new() -> Self {
         Serializer {
