@@ -115,6 +115,10 @@ impl Deserializer {
 
 pub trait Object {
     fn serialize_self(&self, s: &mut Serializer);
-    fn deserialize_self(d: &mut Deserializer) -> Self where Self: Sized;
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where Self: 'a;
+    fn deserialize_self(d: &mut Deserializer) -> Self
+    where
+        Self: Sized;
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        Self: 'a;
 }

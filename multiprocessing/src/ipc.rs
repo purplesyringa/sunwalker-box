@@ -39,8 +39,7 @@ pub fn channel<T: Object>() -> Result<(Sender<T>, Receiver<T>)> {
     }
 }
 
-pub fn duplex<A: Object, B: Object>(
-) -> Result<(Duplex<A, B>, Duplex<B, A>)> {
+pub fn duplex<A: Object, B: Object>() -> Result<(Duplex<A, B>, Duplex<B, A>)> {
     // UnixStream creates a SOCK_STREAM by default, while we need SOCK_SEQPACKET
     unsafe {
         let mut fds = [0, 0];

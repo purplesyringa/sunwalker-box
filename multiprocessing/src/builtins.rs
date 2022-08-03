@@ -36,7 +36,10 @@ impl<T> Object for std::marker::PhantomData<T> {
     fn deserialize_self(_d: &mut Deserializer) -> Self {
         Self {}
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -120,7 +123,11 @@ impl<T: Object, U: Object> Object for (T, U) {
         let b = d.deserialize();
         (a, b)
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a, U: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+        U: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -142,7 +149,10 @@ impl<T: Object> Object for Option<T> {
             None
         }
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -179,7 +189,10 @@ impl<T: ?Sized> Object for std::ptr::DynMetadata<T> {
             metadata.assume_init()
         }
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -203,7 +216,10 @@ where
         let fat_ptr = std::ptr::from_raw_parts_mut(data_ptr.to_raw_parts().0, metadata);
         unsafe { Box::from_raw(fat_ptr) }
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -231,7 +247,10 @@ impl<T: 'static + Object> Object for Rc<T> {
             Some(id) => d.get_cyclic::<Rc<T>>(id).clone(),
         }
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -259,7 +278,10 @@ impl<T: 'static + Object> Object for Arc<T> {
             Some(id) => d.get_cyclic::<Arc<T>>(id).clone(),
         }
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -288,10 +310,7 @@ macro_rules! impl_serialize_for_primitive {
                 d.read(&mut buf);
                 Self::from_ne_bytes(buf)
             }
-            fn deserialize_on_heap<'a>(
-                &self,
-                d: &mut Deserializer,
-            ) -> Box<dyn Object + 'a> {
+            fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
                 Box::new(Self::deserialize_self(d))
             }
         }
@@ -324,10 +343,7 @@ macro_rules! impl_serialize_for_nonzero {
                 d.read(&mut buf);
                 Self::new(<$t>::from_ne_bytes(buf)).unwrap()
             }
-            fn deserialize_on_heap<'a>(
-                &self,
-                d: &mut Deserializer,
-            ) -> Box<dyn Object + 'a> {
+            fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
                 Box::new(Self::deserialize_self(d))
             }
         }
@@ -356,7 +372,10 @@ impl<T: Object, const N: usize> Object for [T; N] {
     fn deserialize_self(d: &mut Deserializer) -> Self {
         [0; N].map(|_| d.deserialize())
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
@@ -491,7 +510,11 @@ impl<T: Object, E: Object> Object for Result<T, E> {
             Err(d.deserialize())
         }
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a, E: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+        E: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }

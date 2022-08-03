@@ -44,7 +44,10 @@ impl<T: Object> Object for Delayed<T> {
             .collect();
         Delayed::Serialized(d.deserialize(), fds)
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> where T: 'a {
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    where
+        T: 'a,
+    {
         Box::new(Self::deserialize_self(d))
     }
 }
