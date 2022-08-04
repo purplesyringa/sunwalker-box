@@ -1,13 +1,8 @@
-#![feature(io_safety)]
-#![feature(auto_traits)]
-#![feature(negative_impls)]
-#![feature(specialization)]
 #![feature(unix_socket_ancillary_data)]
 #![feature(unboxed_closures)]
 #![feature(fn_traits)]
 #![feature(ptr_metadata)]
 #![feature(never_type)]
-#![feature(generic_associated_types)]
 #![feature(try_blocks)]
 #![feature(unwrap_infallible)]
 
