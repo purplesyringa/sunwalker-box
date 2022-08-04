@@ -30,15 +30,8 @@ pub struct Duplex<S: TransmissibleObject, R: TransmissibleObject> {
 }
 
 pub fn channel<T: TransmissibleObject>() -> Result<(Sender<T>, Receiver<T>)> {
-    // UnixStream creates a SOCK_STREAM by default, while we need SOCK_SEQPACKET
-    unsafe {
-        let mut fds = [0, 0];
-        if nix::libc::socketpair(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0, fds.as_mut_ptr()) == -1
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        Ok((Sender::from_raw_fd(fds[0]), Receiver::from_raw_fd(fds[1])))
-    }
+    let (tx, rx) = duplex::<T, T>()?;
+    Ok((tx.into_sender(), rx.into_receiver()))
 }
 
 pub fn duplex<A: TransmissibleObject, B: TransmissibleObject>(
@@ -227,6 +220,10 @@ impl<S: TransmissibleObject, R: TransmissibleObject> Duplex<S, R> {
 
     pub fn recv(&mut self) -> Result<Option<R>> {
         recv_on_fd(&mut self.fd)
+    }
+
+    pub fn into_sender(self) -> Sender<S> {
+        Sender::from_unix_stream(self.fd)
     }
 
     pub fn into_receiver(self) -> Receiver<R> {
