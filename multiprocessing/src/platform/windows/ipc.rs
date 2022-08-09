@@ -82,8 +82,8 @@ fn send_on_handle<T: TransmissibleObject>(file: &mut File, value: &T) -> Result<
 
     let serialized = s.into_vec();
 
-    file.write(&serialized.len().to_ne_bytes())?;
-    file.write(&serialized)?;
+    file.write_all(&serialized.len().to_ne_bytes())?;
+    file.write_all(&serialized)?;
     Ok(())
 }
 

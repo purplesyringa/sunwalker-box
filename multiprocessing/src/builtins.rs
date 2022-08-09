@@ -122,9 +122,7 @@ impl TransmissibleObject for std::ffi::OsString {}
 
 impl Object for () {
     fn serialize_self(&self, _s: &mut Serializer) {}
-    fn deserialize_self(_d: &mut Deserializer) -> Self {
-        ()
-    }
+    fn deserialize_self(_d: &mut Deserializer) -> Self {}
     fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
@@ -208,7 +206,7 @@ fn get_base_vtable_ptr() -> *const () {
 impl<T: ?Sized> Object for std::ptr::DynMetadata<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         s.serialize(
-            &(extract_vtable_ptr(&self) as usize).wrapping_sub(get_base_vtable_ptr() as usize),
+            &(extract_vtable_ptr(self) as usize).wrapping_sub(get_base_vtable_ptr() as usize),
         );
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
@@ -266,7 +264,7 @@ impl<T: 'static + Object> Object for Rc<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         match s.learn_cyclic(Rc::as_ptr(self) as *const c_void) {
             None => {
-                s.serialize(&(0 as usize));
+                s.serialize(&0usize);
                 s.serialize(&**self);
             }
             Some(id) => {
@@ -298,7 +296,7 @@ impl<T: 'static + Object> Object for Arc<T> {
     fn serialize_self(&self, s: &mut Serializer) {
         match s.learn_cyclic(Arc::as_ptr(self) as *const c_void) {
             None => {
-                s.serialize(&(0 as usize));
+                s.serialize(&0usize);
                 s.serialize(&**self);
             }
             Some(id) => {

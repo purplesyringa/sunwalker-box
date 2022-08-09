@@ -119,7 +119,7 @@ fn recv_on_fd<T: TransmissibleObject>(fd: &mut UnixStream) -> Result<Option<T>> 
             } else {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("Unexpected kind of cmsg on stream"),
+                    "Unexpected kind of cmsg on stream",
                 ));
             }
         }
@@ -130,7 +130,7 @@ fn recv_on_fd<T: TransmissibleObject>(fd: &mut UnixStream) -> Result<Option<T>> 
             } else {
                 return Err(Error::new(
                     ErrorKind::Other,
-                    format!("Unterminated data on stream"),
+                    "Unterminated data on stream",
                 ));
             }
         }
@@ -138,7 +138,7 @@ fn recv_on_fd<T: TransmissibleObject>(fd: &mut UnixStream) -> Result<Option<T>> 
         if n_read == 0 {
             return Err(Error::new(
                 ErrorKind::Other,
-                format!("Unexpected empty message on stream"),
+                "Unexpected empty message on stream",
             ));
         }
 

@@ -77,7 +77,7 @@ pub(crate) unsafe fn _spawn_child(
     _flags: Flags,
     inherited_handles: &[RawHandle],
 ) -> Result<OwnedHandle> {
-    let mut inherited_handles: Vec<RawHandle> = inherited_handles.iter().cloned().collect();
+    let mut inherited_handles = inherited_handles.to_vec();
     inherited_handles.push(child_tx);
     inherited_handles.push(child_rx);
 

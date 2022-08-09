@@ -77,7 +77,7 @@ impl Deserializer {
     pub fn from(data: Vec<u8>, handles: Vec<OwnedHandle>) -> Self {
         Deserializer {
             data,
-            handles: handles.into_iter().map(|handle| Some(handle)).collect(),
+            handles: handles.into_iter().map(Some).collect(),
             pos: 0,
             cyclics: Vec::new(),
         }
