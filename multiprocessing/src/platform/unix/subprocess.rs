@@ -7,6 +7,8 @@ use std::ffi::CString;
 use std::io::Result;
 use std::os::unix::io::{AsRawFd, RawFd};
 
+pub type Flags = c_int;
+
 pub struct Child<T: TransmissibleObject> {
     proc_pid: nix::unistd::Pid,
     output_rx: Receiver<T>,
@@ -53,7 +55,7 @@ impl<T: TransmissibleObject> Child<T> {
 
 pub(crate) unsafe fn _spawn_child(
     child_fd: RawFd,
-    flags: c_int,
+    flags: Flags,
     inherited_fds: &[RawFd],
 ) -> Result<nix::unistd::Pid> {
     let child_fd_str = CString::new(child_fd.to_string()).unwrap();
@@ -114,12 +116,12 @@ pub(crate) unsafe fn _spawn_child(
 
 pub unsafe fn spawn<T: TransmissibleObject>(
     entry: Box<dyn FnOnceObject<(RawFd,), Output = i32>>,
-    flags: c_int,
+    flags: Flags,
 ) -> Result<Child<T>> {
     let mut s = Serializer::new();
     s.serialize(&entry);
 
-    let fds = s.drain_fds();
+    let fds = s.drain_handles();
 
     let (mut local, child) = duplex::<(Vec<u8>, Vec<RawFd>), T>()?;
     let pid = _spawn_child(child.as_raw_fd(), flags, &fds)?;

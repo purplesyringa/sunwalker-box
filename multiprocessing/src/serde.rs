@@ -1,12 +1,12 @@
+use crate::handles::{OwnedHandle, RawHandle};
 use std::any::Any;
 use std::collections::{hash_map, HashMap};
 use std::num::NonZeroUsize;
 use std::os::raw::c_void;
-use std::os::unix::io::{OwnedFd, RawFd};
 
 pub struct Serializer {
     data: Vec<u8>,
-    fds: Option<Vec<RawFd>>,
+    handles: Option<Vec<RawHandle>>,
     cyclic_ids: HashMap<*const c_void, NonZeroUsize>,
 }
 
@@ -14,7 +14,7 @@ impl Serializer {
     pub fn new() -> Self {
         Serializer {
             data: Vec::new(),
-            fds: Option::from(Vec::new()),
+            handles: Option::from(Vec::new()),
             cyclic_ids: HashMap::new(),
         }
     }
@@ -27,17 +27,19 @@ impl Serializer {
         data.serialize_self(self);
     }
 
-    pub fn add_fd(&mut self, fd: RawFd) -> usize {
-        let fds = self
-            .fds
+    pub fn add_handle(&mut self, handle: RawHandle) -> usize {
+        let handles = self
+            .handles
             .as_mut()
-            .expect("add_fd cannot be called after drain_fds");
-        fds.push(fd);
-        fds.len() - 1
+            .expect("add_handle cannot be called after drain_handles");
+        handles.push(handle);
+        handles.len() - 1
     }
 
-    pub fn drain_fds(&mut self) -> Vec<RawFd> {
-        self.fds.take().expect("drain_fds can only be called once")
+    pub fn drain_handles(&mut self) -> Vec<RawHandle> {
+        self.handles
+            .take()
+            .expect("drain_handles can only be called once")
     }
 
     pub fn learn_cyclic(&mut self, ptr: *const c_void) -> Option<NonZeroUsize> {
@@ -66,16 +68,16 @@ impl IntoIterator for Serializer {
 
 pub struct Deserializer {
     data: Vec<u8>,
-    fds: Vec<Option<OwnedFd>>,
+    handles: Vec<Option<OwnedHandle>>,
     pos: usize,
     cyclics: Vec<Box<dyn Any>>,
 }
 
 impl Deserializer {
-    pub fn from(data: Vec<u8>, fds: Vec<OwnedFd>) -> Self {
+    pub fn from(data: Vec<u8>, handles: Vec<OwnedHandle>) -> Self {
         Deserializer {
             data,
-            fds: fds.into_iter().map(|fd| Some(fd)).collect(),
+            handles: handles.into_iter().map(|handle| Some(handle)).collect(),
             pos: 0,
             cyclics: Vec::new(),
         }
@@ -90,10 +92,10 @@ impl Deserializer {
         T::deserialize_self(self)
     }
 
-    pub fn drain_fd(&mut self, idx: usize) -> OwnedFd {
-        self.fds[idx]
+    pub fn drain_handle(&mut self, idx: usize) -> OwnedHandle {
+        self.handles[idx]
             .take()
-            .expect("drain_fd can only be called once for a particular index")
+            .expect("drain_handle can only be called once for a particular index")
     }
 
     pub fn position(&self) -> usize {

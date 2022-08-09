@@ -51,7 +51,7 @@ fn send_on_fd<T: TransmissibleObject>(fd: &mut UnixStream, value: &T) -> Result<
     let mut s = Serializer::new();
     s.serialize(value);
 
-    let fds = s.drain_fds();
+    let fds = s.drain_handles();
     let serialized = s.into_vec();
 
     let mut ancillary_buffer = [0; 253];

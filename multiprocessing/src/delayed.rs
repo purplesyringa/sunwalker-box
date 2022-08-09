@@ -1,8 +1,7 @@
-use crate::{Deserializer, Object, Serializer, TransmissibleObject};
-use std::os::unix::io::OwnedFd;
+use crate::{handles::OwnedHandle, Deserializer, Object, Serializer, TransmissibleObject};
 
 pub enum Delayed<T: Object> {
-    Serialized(Vec<u8>, Vec<OwnedFd>),
+    Serialized(Vec<u8>, Vec<OwnedHandle>),
     Deserialized(T),
 }
 
@@ -13,7 +12,7 @@ impl<T: Object> Delayed<T> {
 
     pub fn deserialize(self) -> T {
         match self {
-            Self::Serialized(data, fds) => Deserializer::from(data, fds).deserialize(),
+            Self::Serialized(data, handles) => Deserializer::from(data, handles).deserialize(),
             Self::Deserialized(_) => panic!("Cannot deserialize a deserialized Delayed value"),
         }
     }
@@ -26,23 +25,23 @@ impl<T: Object> Object for Delayed<T> {
             Self::Deserialized(value) => {
                 let mut s1 = Serializer::new();
                 s1.serialize(value);
-                let fds = s1
-                    .drain_fds()
+                let handles = s1
+                    .drain_handles()
                     .into_iter()
-                    .map(|fd| s.add_fd(fd))
+                    .map(|handle| s.add_handle(handle))
                     .collect::<Vec<usize>>();
-                s.serialize(&fds);
+                s.serialize(&handles);
                 s.serialize(&s1.into_vec());
             }
         }
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
-        let fds = d
+        let handles = d
             .deserialize::<Vec<usize>>()
             .into_iter()
-            .map(|fd| d.drain_fd(fd))
+            .map(|handle| d.drain_handle(handle))
             .collect();
-        Delayed::Serialized(d.deserialize(), fds)
+        Delayed::Serialized(d.deserialize(), handles)
     }
     fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
     where

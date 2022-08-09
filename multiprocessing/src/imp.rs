@@ -1,9 +1,10 @@
 pub use ctor::ctor;
 
-use crate::{Deserializer, FnOnceObject, Receiver};
+use crate::{
+    handles::{FromRawHandle, OwnedHandle, RawHandle},
+    Deserializer, FnOnceObject, Receiver,
+};
 use lazy_static::lazy_static;
-use nix::fcntl;
-use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
 use std::sync::RwLock;
 
 lazy_static! {
@@ -50,35 +51,7 @@ pub fn main() {
     let mut args = std::env::args();
     if let Some(s) = args.next() {
         if s == "_multiprocessing_" {
-            let fd: RawFd = args
-                .next()
-                .expect("Expected one CLI argument for multiprocessing")
-                .parse()
-                .expect("Expected the CLI argument for multiprocessing to be an integer");
-
-            enable_cloexec(fd).expect("Failed to set O_CLOEXEC for the file descriptor");
-
-            let mut entry_rx = unsafe { Receiver::<(Vec<u8>, Vec<RawFd>)>::from_raw_fd(fd) };
-
-            let (entry_data, entry_fds) = entry_rx
-                .recv()
-                .expect("Failed to read entry for multiprocessing")
-                .expect("No entry passed");
-
-            std::mem::forget(entry_rx);
-
-            for fd in &entry_fds {
-                enable_cloexec(*fd).expect("Failed to set O_CLOEXEC for the file descriptor");
-            }
-
-            let entry_fds = entry_fds
-                .into_iter()
-                .map(|fd| unsafe { OwnedFd::from_raw_fd(fd) })
-                .collect();
-
-            let entry: Box<dyn FnOnceObject<(RawFd,), Output = i32>> =
-                Deserializer::from(entry_data, entry_fds).deserialize();
-            std::process::exit(entry(fd));
+            multiprocessing_main(args);
         }
     }
 
@@ -90,22 +63,151 @@ pub fn main() {
         )());
 }
 
-pub fn disable_cloexec(fd: RawFd) -> std::io::Result<()> {
-    fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFD(fcntl::FdFlag::empty()))?;
+#[cfg(unix)]
+fn multiprocessing_main(mut args: std::env::Args) -> ! {
+    let handle: RawHandle = parse_raw_handle(
+        &args
+            .next()
+            .expect("Expected one CLI argument for multiprocessing"),
+    );
+
+    enable_cloexec(handle).expect("Failed to set O_CLOEXEC for the file descriptor");
+
+    let mut entry_rx = unsafe { Receiver::<(Vec<u8>, Vec<RawHandle>)>::from_raw_handle(handle) };
+
+    let (entry_data, entry_handles) = entry_rx
+        .recv()
+        .expect("Failed to read entry for multiprocessing")
+        .expect("No entry passed");
+
+    std::mem::forget(entry_rx);
+
+    for handle in &entry_handles {
+        enable_cloexec(*handle).expect("Failed to set O_CLOEXEC for the file descriptor");
+    }
+
+    let entry_handles = entry_handles
+        .into_iter()
+        .map(|handle| unsafe { OwnedHandle::from_raw_handle(handle) })
+        .collect();
+
+    let entry: Box<dyn FnOnceObject<(RawHandle,), Output = i32>> =
+        Deserializer::from(entry_data, entry_handles).deserialize();
+    std::process::exit(entry(handle))
+}
+
+#[cfg(windows)]
+fn multiprocessing_main(mut args: std::env::Args) -> ! {
+    let handle_tx: RawHandle = parse_raw_handle(
+        &args
+            .next()
+            .expect("Expected two CLI arguments for multiprocessing"),
+    );
+    let handle_rx: RawHandle = parse_raw_handle(
+        &args
+            .next()
+            .expect("Expected two CLI arguments for multiprocessing"),
+    );
+
+    enable_cloexec(handle_tx).expect("Failed to set O_CLOEXEC for the file descriptor");
+    enable_cloexec(handle_rx).expect("Failed to set O_CLOEXEC for the file descriptor");
+
+    let mut entry_rx = unsafe { Receiver::<(Vec<u8>, Vec<RawHandle>)>::from_raw_handle(handle_rx) };
+
+    let (entry_data, entry_handles) = entry_rx
+        .recv()
+        .expect("Failed to read entry for multiprocessing")
+        .expect("No entry passed");
+
+    drop(entry_rx);
+
+    for handle in &entry_handles {
+        enable_cloexec(*handle).expect("Failed to set O_CLOEXEC for the file descriptor");
+    }
+
+    let entry_handles = entry_handles
+        .into_iter()
+        .map(|handle| unsafe { OwnedHandle::from_raw_handle(handle) })
+        .collect();
+
+    let entry: Box<dyn FnOnceObject<(RawHandle,), Output = i32>> =
+        Deserializer::from(entry_data, entry_handles).deserialize();
+    std::process::exit(entry(handle_tx))
+}
+
+#[cfg(unix)]
+fn parse_raw_handle(s: &str) -> RawHandle {
+    s.parse().expect("Failed to parse fd")
+}
+#[cfg(windows)]
+fn parse_raw_handle(s: &str) -> RawHandle {
+    use windows::Win32::Foundation;
+    Foundation::HANDLE(s.parse::<isize>().expect("Failed to parse handle"))
+}
+
+#[cfg(unix)]
+pub fn disable_cloexec(fd: RawHandle) -> std::io::Result<()> {
+    nix::fcntl::fcntl(
+        fd,
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::empty()),
+    )?;
+    Ok(())
+}
+#[cfg(unix)]
+pub fn enable_cloexec(fd: RawHandle) -> std::io::Result<()> {
+    nix::fcntl::fcntl(
+        fd,
+        nix::fcntl::FcntlArg::F_SETFD(nix::fcntl::FdFlag::FD_CLOEXEC),
+    )?;
+    Ok(())
+}
+#[cfg(unix)]
+pub fn disable_nonblock(fd: RawHandle) -> std::io::Result<()> {
+    nix::fcntl::fcntl(
+        fd,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::empty()),
+    )?;
+    Ok(())
+}
+#[cfg(unix)]
+pub fn enable_nonblock(fd: RawHandle) -> std::io::Result<()> {
+    nix::fcntl::fcntl(
+        fd,
+        nix::fcntl::FcntlArg::F_SETFL(nix::fcntl::OFlag::O_NONBLOCK),
+    )?;
     Ok(())
 }
 
-pub fn enable_cloexec(fd: RawFd) -> std::io::Result<()> {
-    fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFD(fcntl::FdFlag::FD_CLOEXEC))?;
+#[cfg(windows)]
+pub fn disable_cloexec(handle: RawHandle) -> std::io::Result<()> {
+    use windows::Win32::Foundation;
+    unsafe {
+        Foundation::SetHandleInformation(
+            handle,
+            Foundation::HANDLE_FLAG_INHERIT.0,
+            Foundation::HANDLE_FLAG_INHERIT,
+        )
+        .ok()?
+    };
     Ok(())
 }
-
-pub fn disable_nonblock(fd: RawFd) -> std::io::Result<()> {
-    fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFL(fcntl::OFlag::empty()))?;
+#[cfg(windows)]
+pub fn enable_cloexec(handle: RawHandle) -> std::io::Result<()> {
+    use windows::Win32::Foundation;
+    unsafe {
+        Foundation::SetHandleInformation(
+            handle,
+            Foundation::HANDLE_FLAG_INHERIT.0,
+            Foundation::HANDLE_FLAGS::default(),
+        )
+        .ok()?
+    };
     Ok(())
 }
-
-pub fn enable_nonblock(fd: RawFd) -> std::io::Result<()> {
-    fcntl::fcntl(fd, fcntl::FcntlArg::F_SETFL(fcntl::OFlag::O_NONBLOCK))?;
-    Ok(())
+#[cfg(windows)]
+pub fn is_cloexec(handle: RawHandle) -> std::io::Result<bool> {
+    use windows::Win32::Foundation;
+    let mut flags = 0u32;
+    unsafe { Foundation::GetHandleInformation(handle, &mut flags as *mut u32).ok()? };
+    Ok((flags & Foundation::HANDLE_FLAG_INHERIT.0) == 0)
 }

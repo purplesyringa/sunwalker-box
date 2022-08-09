@@ -1,9 +1,12 @@
-use crate::{Deserializer, Object, Serializer, TransmissibleObject};
+#[cfg(windows)]
+use crate::handles::RawHandle;
+use crate::{
+    handles::{AsRawHandle, FromRawHandle, IntoRawHandle, OwnedHandle},
+    Deserializer, Object, Serializer, TransmissibleObject,
+};
 use std::collections::{BTreeMap, BTreeSet, BinaryHeap, HashMap, HashSet, LinkedList, VecDeque};
 use std::hash::{BuildHasher, Hash};
 use std::os::raw::c_void;
-use std::os::unix::ffi::OsStringExt;
-use std::os::unix::io::{AsRawFd, FromRawFd, IntoRawFd, OwnedFd};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -83,13 +86,33 @@ impl Object for std::ffi::CString {
 }
 impl TransmissibleObject for std::ffi::CString {}
 
+#[cfg(unix)]
 impl Object for std::ffi::OsString {
     fn serialize_self(&self, s: &mut Serializer) {
+        use std::os::unix::ffi::OsStringExt;
         // XXX: unnecessary heap usage
         s.serialize(&self.clone().into_vec())
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
+        use std::os::unix::ffi::OsStringExt;
         Self::from_vec(d.deserialize())
+    }
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
+        Box::new(Self::deserialize_self(d))
+    }
+}
+#[cfg(windows)]
+impl Object for std::ffi::OsString {
+    fn serialize_self(&self, s: &mut Serializer) {
+        use std::os::windows::ffi::OsStrExt;
+        // XXX: unnecessary heap usage
+        s.serialize(&self.encode_wide().collect::<Vec<u16>>())
+    }
+    fn deserialize_self(d: &mut Deserializer) -> Self {
+        use std::os::windows::ffi::OsStringExt;
+        // XXX: unnecessary heap usage
+        let vec: Vec<u16> = d.deserialize();
+        Self::from_wide(&vec)
     }
     fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
@@ -550,14 +573,14 @@ impl<T: Object, E: Object> Object for Result<T, E> {
 }
 impl<T: TransmissibleObject, E: TransmissibleObject> TransmissibleObject for Result<T, E> {}
 
-impl Object for OwnedFd {
+impl Object for OwnedHandle {
     fn serialize_self(&self, s: &mut Serializer) {
-        let fd = s.add_fd(self.as_raw_fd());
-        s.serialize(&fd)
+        let handle = s.add_handle(self.as_raw_handle());
+        s.serialize(&handle)
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
-        let fd = d.deserialize();
-        d.drain_fd(fd)
+        let handle = d.deserialize();
+        d.drain_handle(handle)
     }
     fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
@@ -566,50 +589,69 @@ impl Object for OwnedFd {
 
 impl Object for std::fs::File {
     fn serialize_self(&self, s: &mut Serializer) {
-        let fd = s.add_fd(self.as_raw_fd());
-        s.serialize(&fd)
+        let handle = s.add_handle(self.as_raw_handle());
+        s.serialize(&handle)
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
-        let fd: OwnedFd = d.deserialize();
-        Self::from(fd)
+        d.deserialize::<OwnedHandle>().into()
     }
     fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
+impl Object for tokio::fs::File {
+    fn serialize_self(&self, s: &mut Serializer) {
+        let handle = s.add_handle(self.as_raw_handle());
+        s.serialize(&handle)
+    }
+    fn deserialize_self(d: &mut Deserializer) -> Self {
+        let handle = d.deserialize();
+        unsafe {
+            <Self as FromRawHandle>::from_raw_handle(d.drain_handle(handle).into_raw_handle())
+        }
+    }
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
+        Box::new(Self::deserialize_self(d))
+    }
+}
+
+#[cfg(unix)]
 impl Object for std::os::unix::net::UnixStream {
     fn serialize_self(&self, s: &mut Serializer) {
-        let fd = s.add_fd(self.as_raw_fd());
-        s.serialize(&fd)
+        let handle = s.add_handle(self.as_raw_handle());
+        s.serialize(&handle)
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
-        let fd = d.deserialize();
-        <Self as From<std::os::unix::io::OwnedFd>>::from(d.drain_fd(fd))
+        d.deserialize::<OwnedHandle>().into()
     }
     fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
+#[cfg(unix)]
 impl Object for openat::Dir {
     fn serialize_self(&self, s: &mut Serializer) {
-        let fd = s.add_fd(self.as_raw_fd());
-        s.serialize(&fd)
+        let handle = s.add_handle(self.as_raw_handle());
+        s.serialize(&handle)
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
-        let fd = d.deserialize();
-        unsafe { <Self as FromRawFd>::from_raw_fd(d.drain_fd(fd).into_raw_fd()) }
+        let handle = d.deserialize();
+        unsafe {
+            <Self as FromRawHandle>::from_raw_handle(d.drain_handle(handle).into_raw_handle())
+        }
     }
     fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
         Box::new(Self::deserialize_self(d))
     }
 }
 
+#[cfg(unix)]
 impl Object for tokio::net::UnixStream {
     fn serialize_self(&self, s: &mut Serializer) {
-        let fd = s.add_fd(self.as_raw_fd());
-        s.serialize(&fd)
+        let handle = s.add_handle(self.as_raw_handle());
+        s.serialize(&handle)
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
         Self::from_std(d.deserialize()).expect("Failed to deserialize tokio::net::UnixStream")
@@ -619,15 +661,16 @@ impl Object for tokio::net::UnixStream {
     }
 }
 
+#[cfg(unix)]
 impl Object for tokio_seqpacket::UnixSeqpacket {
     fn serialize_self(&self, s: &mut Serializer) {
-        let fd = s.add_fd(self.as_raw_fd());
-        s.serialize(&fd)
+        let handle = s.add_handle(self.as_raw_fd());
+        s.serialize(&handle)
     }
     fn deserialize_self(d: &mut Deserializer) -> Self {
-        let fd = d.deserialize();
+        let handle = d.deserialize();
         unsafe {
-            Self::from_raw_fd(d.drain_fd(fd).into_raw_fd())
+            Self::from_raw_fd(d.drain_handle(handle).into_raw_handle())
                 .expect("Failed to deserialize tokio_seqpacket::UnixSeqpacket")
         }
     }
@@ -651,3 +694,18 @@ impl Object for std::time::Duration {
     }
 }
 impl TransmissibleObject for std::time::Duration {}
+
+#[cfg(windows)]
+impl Object for RawHandle {
+    fn serialize_self(&self, s: &mut Serializer) {
+        s.serialize::<isize>(&self.0)
+    }
+    fn deserialize_self(d: &mut Deserializer) -> Self {
+        Self(d.deserialize::<isize>())
+    }
+    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a> {
+        Box::new(Self::deserialize_self(d))
+    }
+}
+#[cfg(windows)]
+impl TransmissibleObject for RawHandle {}

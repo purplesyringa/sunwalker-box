@@ -48,7 +48,7 @@ async fn send_on_fd<T: Object>(fd: &mut UnixSeqpacket, value: &T) -> Result<()> 
     let mut s = Serializer::new();
     s.serialize(value);
 
-    let fds = s.drain_fds();
+    let fds = s.drain_handles();
     let serialized = s.into_vec();
 
     let mut ancillary_buffer = [0; 253];
@@ -294,12 +294,12 @@ impl<T: Object> Child<T> {
 
 pub async unsafe fn spawn<T: Object>(
     entry: Box<dyn FnOnceObject<(RawFd,), Output = i32>>,
-    flags: nix::libc::c_int,
+    flags: subprocess::Flags,
 ) -> Result<Child<T>> {
     let mut s = Serializer::new();
     s.serialize(&entry);
 
-    let fds = s.drain_fds();
+    let fds = s.drain_handles();
 
     let (mut local, child) = duplex::<(Vec<u8>, Vec<RawFd>), T>()?;
     let pid = subprocess::_spawn_child(child.as_raw_fd(), flags, &fds)?;
