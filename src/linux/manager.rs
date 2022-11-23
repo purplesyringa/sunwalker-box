@@ -331,7 +331,7 @@ fn execute_command(
                         }
                         wait::WaitStatus::Signaled(_, signal, _) => {
                             limit_verdict = "Signaled";
-                            exit_code = signal as i32;
+                            exit_code = -(signal as i32);
                         }
                         _ => {
                             bail!("waitpid returned unexpected status: {wait_status:?}");
