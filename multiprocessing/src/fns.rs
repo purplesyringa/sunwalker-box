@@ -1,5 +1,6 @@
 use crate::Object;
 use paste::paste;
+use std::marker::Tuple;
 use std::ops::Deref;
 
 pub trait Entrypoint<Args>: Object {
@@ -17,20 +18,20 @@ impl<T: Object> Deref for EntrypointWrapper<T> {
     }
 }
 
-impl<Args, T: Entrypoint<Args>> std::ops::FnOnce<Args> for EntrypointWrapper<T> {
+impl<Args: Tuple, T: Entrypoint<Args>> std::ops::FnOnce<Args> for EntrypointWrapper<T> {
     type Output = T::Output;
     extern "rust-call" fn call_once(self, args: Args) -> Self::Output {
         self.0.call(args)
     }
 }
 
-pub trait FnOnceObject<Args>: std::ops::FnOnce<Args> + Object {}
-pub trait FnObject<Args>: std::ops::Fn<Args> + Object {}
-pub trait FnMutObject<Args>: std::ops::FnMut<Args> + Object {}
+pub trait FnOnceObject<Args: Tuple>: std::ops::FnOnce<Args> + Object {}
+pub trait FnObject<Args: Tuple>: std::ops::Fn<Args> + Object {}
+pub trait FnMutObject<Args: Tuple>: std::ops::FnMut<Args> + Object {}
 
-impl<Args, T: std::ops::FnOnce<Args> + Object> FnOnceObject<Args> for T {}
-impl<Args, T: std::ops::Fn<Args> + Object> FnObject<Args> for T {}
-impl<Args, T: std::ops::FnMut<Args> + Object> FnMutObject<Args> for T {}
+impl<Args: Tuple, T: std::ops::FnOnce<Args> + Object> FnOnceObject<Args> for T {}
+impl<Args: Tuple, T: std::ops::Fn<Args> + Object> FnObject<Args> for T {}
+impl<Args: Tuple, T: std::ops::FnMut<Args> + Object> FnMutObject<Args> for T {}
 
 pub trait Bind<Head: Object, Tail> {
     fn bind(self, head: Head) -> Bound<Self, Head>

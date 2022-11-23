@@ -5,6 +5,7 @@
 #![feature(never_type)]
 #![feature(try_blocks)]
 #![feature(unwrap_infallible)]
+#![feature(tuple_trait)]
 
 extern crate self as multiprocessing;
 

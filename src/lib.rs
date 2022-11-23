@@ -1,7 +1,6 @@
 #![feature(
     io_error_more,
-    io_safety,
-    is_some_with,
+    is_some_and,
     never_type,
     try_blocks,
     unix_chown,
