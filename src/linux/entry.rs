@@ -2,7 +2,7 @@ use crate::{
     entry,
     linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system, userns},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use nix::{libc, libc::SYS_pidfd_open};
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -120,6 +120,11 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
     thread_tx
         .send(child)
         .context("Failed to send child to thread")?;
+
+    ours.recv()
+        .context("Failed to recv readiness signal")?
+        .context("Manager terminated too early")?
+        .map_err(|e| anyhow!("Manager reported error during startup: {e}"))?;
 
     for line in std::io::BufReader::new(std::io::stdin()).lines() {
         let line = line.expect("Failed to read from stdin");
