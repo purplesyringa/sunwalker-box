@@ -245,7 +245,11 @@ pub fn create_dev_copy() -> Result<()> {
     for name in [
         "null", "full", "zero", "urandom", "random", "stdin", "stdout", "stderr", "fd",
     ] {
-        let source = format!("/dev/{name}");
+        let source = if name == "random" {
+            "/dev/urandom".to_string() // prevent entropy depletion
+        } else {
+            format!("/dev/{name}")
+        };
         let target = format!("/tmp/sunwalker_box/dev/{name}");
         let metadata = std::fs::symlink_metadata(&source)
             .with_context(|| format!("{source} does not exist (or oculd not be accessed)"))?;
