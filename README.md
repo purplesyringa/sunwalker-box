@@ -85,7 +85,7 @@ The command `run` starts a process inside the sandbox. It takes a JSON object wi
 
 To prevent DOS, `cpu_time_limit` and `processes_limit` must necessarily be set. Setting `real_time_limit` and/or `idleness_time_limit` is also recommended, but not strictly necessary, e.g. if you kill the box on timeout manually.
 
-The program is always run with working directory `/space`.
+The program is always executed with working directory `/space`.
 
 This command is blocking. When the program exits or a limit expires, an `ok` status is returned (even if a limit expired) with a JSON-object value with the following properties:
 
