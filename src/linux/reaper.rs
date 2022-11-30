@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, manager},
+    linux::{cgroups, manager, rootfs},
 };
 use nix::{
     libc,
@@ -106,6 +106,10 @@ pub fn reaper(
     // but instead wait for the parent's termination and quit after that.
     nix::unistd::setsid().expect("Failed to setsid");
 
+    // Mount procfs and enter the sandboxed root
+    rootfs::configure_and_enter_rootfs().expect("Failed to configure and enter rootfs");
+    std::env::set_current_dir("/space").expect("Failed to chdir to /space");
+
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.
     let proc_cgroup = cgroup
@@ -113,7 +117,6 @@ pub fn reaper(
         .expect("Failed to create box cgroup");
     let child = manager::manager
         .spawn(
-            cli_command,
             proc_cgroup
                 .try_clone()
                 .expect("Failed to clone box cgroup reference"),

@@ -10,7 +10,7 @@ pub struct DiskQuotas {
     pub max_inodes: u64,
 }
 
-pub fn enter_rootfs(root: &std::path::Path, quotas: &DiskQuotas) -> Result<()> {
+pub fn create_rootfs(root: &std::path::Path) -> Result<()> {
     // We need to mount an image, and also add some directories to the hierarchy.
     //
     // We can't use overlayfs: it doesn't work as expected when a lowerdir contains child mounts
@@ -94,9 +94,6 @@ pub fn enter_rootfs(root: &std::path::Path, quotas: &DiskQuotas) -> Result<()> {
         system::MS_RDONLY | system::MS_REC,
     )
     .context("Failed to bind-mount .../dev")?;
-    // Mount /proc
-    procs::mount_procfs("/tmp/sunwalker_box/isolated/root/proc")
-        .context("Failed to mount .../proc")?;
 
     // Synchronize further changes in the box with the processes in the current mountns
     system::change_propagation(
@@ -119,6 +116,17 @@ pub fn enter_rootfs(root: &std::path::Path, quotas: &DiskQuotas) -> Result<()> {
         system::MS_PRIVATE | system::MS_REC,
     )
     .expect("Failed to change propagation to private");
+
+    Ok(())
+}
+
+pub fn configure_and_enter_rootfs() -> Result<()> {
+    // Mount /proc. This has to happen inside the pidns.
+    procs::mount_procfs("/tmp/sunwalker_box/isolated/root/proc")
+        .context("Failed to mount .../proc")?;
+
+    // Only unmount the old root in a new namespace so that the main processes can still access it
+    mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
 
     // Instead of pivot_root'ing directly into .../isolated/root, we pivot_root into .../isolated
     // first and chroot into /root second. There are two reasons for this inefficiency:
@@ -143,9 +151,6 @@ pub fn enter_rootfs(root: &std::path::Path, quotas: &DiskQuotas) -> Result<()> {
         .context("Failed to chdir to new root at /tmp/sunwalker_box/isolated")?;
     nix::unistd::pivot_root(".", "oldroot").context("Failed to pivot_root")?;
 
-    // Only unmount the old root in a new namespace so that the main processes can still access it
-    mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
-
     // Unmount the old root
     system::umount_opt("oldroot", system::MNT_DETACH).context("Failed to unmount old root")?;
 
@@ -153,60 +158,74 @@ pub fn enter_rootfs(root: &std::path::Path, quotas: &DiskQuotas) -> Result<()> {
     std::env::set_current_dir("/root").context("Failed to chdir to /root")?;
     nix::unistd::chroot(".").context("Failed to chroot into /root")?;
 
-    reset(quotas)?;
-
     Ok(())
 }
 
 pub fn reset(quotas: &DiskQuotas) -> Result<()> {
     // Unmount /space and everything beneath
-    unmount_recursively("/space", true)?;
+    unmount_recursively("/tmp/sunwalker_box/isolated/root/space", true)?;
 
     // (Re)mount /space
     system::mount(
         "none",
-        "/space",
+        "/tmp/sunwalker_box/isolated/root/space",
         "tmpfs",
         system::MS_NOSUID,
         Some(format!("size={},nr_inodes={}", quotas.space, quotas.max_inodes).as_ref()),
     )
-    .context("Failed to mount tmpfs on /space")?;
+    .context("Failed to mount tmpfs on /tmp/sunwalker_box/isolated/root/space")?;
     std::os::unix::fs::chown(
-        "/space",
+        "/tmp/sunwalker_box/isolated/root/space",
         Some(ids::INTERNAL_USER_UID),
         Some(ids::INTERNAL_USER_GID),
     )
-    .context("Failed to chown /space")?;
+    .context("Failed to chown /tmp/sunwalker_box/isolated/root/space")?;
 
     // (Re)mount /dev/shm
-    std::fs::create_dir("/space/.shm").context("Failed to mkdir /space/.shm")?;
-    if let Err(e) = system::umount("/dev/shm") {
+    std::fs::create_dir("/tmp/sunwalker_box/isolated/root/space/.shm")
+        .context("Failed to mkdir /tmp/sunwalker_box/isolated/root/space/.shm")?;
+    if let Err(e) = system::umount("/tmp/sunwalker_box/isolated/root/dev/shm") {
         if e.kind() == ErrorKind::InvalidInput {
             // This means /dev/shm is not a mountpoint, which is fine the first time we reset the fs
         } else {
-            return Err(e).context("Failed to unmount /dev/shm");
+            return Err(e).context("Failed to unmount /tmp/sunwalker_box/isolated/root/dev/shm");
         }
     }
-    system::bind_mount("/space/.shm", "/dev/shm")
-        .context("Failed to bind-mount /space/.shm to /dev/shm")?;
+    system::bind_mount(
+        "/tmp/sunwalker_box/isolated/root/space/.shm",
+        "/tmp/sunwalker_box/isolated/root/dev/shm",
+    )
+    .context(
+        "Failed to bind-mount /tmp/sunwalker_box/isolated/root/space/.shm to \
+         /tmp/sunwalker_box/isolated/root/dev/shm",
+    )?;
 
     // (Re)mount /tmp
-    std::fs::create_dir("/space/.tmp").context("Failed to mkdir /space/.tmp")?;
-    if let Err(e) = system::umount("/tmp") {
+    std::fs::create_dir("/tmp/sunwalker_box/isolated/root/space/.tmp")
+        .context("Failed to mkdir /tmp/sunwalker_box/isolated/root/space/.tmp")?;
+    if let Err(e) = system::umount("/tmp/sunwalker_box/isolated/root/tmp") {
         if e.kind() == ErrorKind::InvalidInput {
             // This means /tmp is not a mountpoint, which is fine the first time we reset the fs
         } else {
-            return Err(e).context("Failed to unmount /tmp");
+            return Err(e).context("Failed to unmount /tmp/sunwalker_box/isolated/root/tmp");
         }
     }
-    system::bind_mount("/space/.tmp", "/tmp")
-        .context("Failed to bind-mount /space/.tmp to /tmp")?;
+    system::bind_mount(
+        "/tmp/sunwalker_box/isolated/root/space/.tmp",
+        "/tmp/sunwalker_box/isolated/root/tmp",
+    )
+    .context(
+        "Failed to bind-mount /tmp/sunwalker_box/isolated/root/space/.tmp to \
+         /tmp/sunwalker_box/isolated/root/tmp",
+    )?;
 
     // Reset pseudoterminals. On linux, devptsfs uses IDA[1], which allocates IDs sequentially,
     // returning the first unused ID each time, so simply deleting everything from /dev/pts works.
     // [1]: https://www.kernel.org/doc/htmldocs/kernel-api/idr.html
-    for entry in std::fs::read_dir("/dev/pts").context("Failed to readdir /dev/pts")? {
-        let entry = entry.context("Failed to readdir /dev/pts")?;
+    for entry in std::fs::read_dir("/tmp/sunwalker_box/isolated/root/dev/pts")
+        .context("Failed to readdir /tmp/sunwalker_box/isolated/root/dev/pts")?
+    {
+        let entry = entry.context("Failed to readdir /tmp/sunwalker_box/isolated/root/dev/pts")?;
         if let Ok(file_name) = entry.file_name().into_string() {
             if file_name.parse::<u64>().is_ok() {
                 std::fs::remove_file(entry.path())
@@ -288,9 +307,10 @@ fn resolve_abs(
 }
 
 pub fn resolve_abs_box_root<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    resolve_abs(path.as_ref(), b"/root", b"/root/space".to_vec(), 0)
-}
-
-pub fn resolve_abs_old_root<P: AsRef<Path>>(path: P) -> std::io::Result<PathBuf> {
-    resolve_abs(path.as_ref(), b"/oldroot", b"/oldroot".to_vec(), 0)
+    resolve_abs(
+        path.as_ref(),
+        b"/tmp/sunwalker_box/isolated/root",
+        b"/tmp/sunwalker_box/isolated/root/space".to_vec(),
+        0,
+    )
 }

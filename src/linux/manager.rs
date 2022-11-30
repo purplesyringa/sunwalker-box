@@ -1,7 +1,4 @@
-use crate::{
-    entry,
-    linux::{cgroups, procs, rootfs, sandbox, userns},
-};
+use crate::linux::{cgroups, userns};
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::{
@@ -31,18 +28,9 @@ pub enum Command {
 
 #[multiprocessing::entrypoint]
 pub fn manager(
-    cli_command: entry::CLIStartCommand,
     proc_cgroup: cgroups::ProcCgroup,
     mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
-    // Setup rootfs. This has to happen inside the pidns, as we mount procfs here.
-    let quotas = rootfs::DiskQuotas {
-        space: cli_command.quota_space,
-        max_inodes: cli_command.quota_inodes,
-    };
-    rootfs::enter_rootfs(cli_command.root.as_ref(), &quotas).expect("Failed to enter rootfs");
-    std::env::set_current_dir("/space").expect("Failed to chdir to /space");
-
     channel
         .send(&Ok(None))
         .expect("Failed to notify parent about readiness");
@@ -52,7 +40,7 @@ pub fn manager(
         .expect("Failed to receive message from channel")
     {
         channel
-            .send(&match execute_command(command, &quotas, &proc_cgroup) {
+            .send(&match execute_command(command, &proc_cgroup) {
                 Ok(value) => Ok(value),
                 Err(e) => Err(format!("{e:?}")),
             })
@@ -60,23 +48,11 @@ pub fn manager(
     }
 }
 
-fn execute_command(
-    command: Command,
-    quotas: &rootfs::DiskQuotas,
-    proc_cgroup: &cgroups::ProcCgroup,
-) -> Result<Option<String>> {
+fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Result<Option<String>> {
     match command {
         Command::Reset => {
-            std::env::set_current_dir("/").expect("Failed to chdir to /");
-            rootfs::reset(quotas).context("Failed to reset rootfs")?;
+            // Enter newly remounted /space
             std::env::set_current_dir("/space").expect("Failed to chdir to /space");
-
-            sandbox::reset_persistent_namespaces().context("Failed to persistent namespaces")?;
-
-            procs::reset_pidns().context("Failed to reset pidns")?;
-
-            // TODO: timens & rdtsc
-
             Ok(None)
         }
         Command::Run {

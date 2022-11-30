@@ -114,6 +114,14 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
         multiprocessing::duplex::<manager::Command, std::result::Result<Option<String>, String>>()
             .context("Failed to create channel")?;
 
+    // Setup rootfs
+    rootfs::create_rootfs(cli_command.root.as_ref()).expect("Failed to create rootfs");
+
+    let quotas = rootfs::DiskQuotas {
+        space: cli_command.quota_space,
+        max_inodes: cli_command.quota_inodes,
+    };
+
     let child = reaper::reaper
         .spawn(pidfd, cli_command, cgroup, theirs)
         .context("Failed to start child")?;
@@ -126,11 +134,13 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
         .context("Manager terminated too early")?
         .map_err(|e| anyhow!("Manager reported error during startup: {e}"))?;
 
+    rootfs::reset(&quotas).expect("Failed to reset rootfs");
+
     for line in std::io::BufReader::new(std::io::stdin()).lines() {
         let line = line.expect("Failed to read from stdin");
         let (command, arg) = line.split_once(' ').unwrap_or((&line, ""));
         let command = command.to_lowercase();
-        match handle_command(&mut ours, &command, arg) {
+        match handle_command(&mut ours, &quotas, &command, arg) {
             Ok(None) => {
                 println!("ok");
             }
@@ -151,6 +161,7 @@ fn handle_command(
         manager::Command,
         std::result::Result<Option<String>, String>,
     >,
+    quotas: &rootfs::DiskQuotas,
     command: &str,
     arg: &str,
 ) -> Result<Option<String>> {
@@ -286,13 +297,21 @@ fn handle_command(
                 .context("Invalid 'internal' argument")?;
             let ro = arg["ro"].as_bool().context("Invalid 'ro' argument")?;
             system::bind_mount_opt(
-                rootfs::resolve_abs_old_root(external)?,
+                external,
                 rootfs::resolve_abs_box_root(internal)?,
                 if ro { system::MS_RDONLY } else { 0 } | system::MS_REC,
             )?;
             return Ok(None);
         }
-        "reset" => manager::Command::Reset,
+        "reset" => {
+            sandbox::reset_persistent_namespaces().context("Failed to persistent namespaces")?;
+            rootfs::reset(quotas).context("Failed to reset rootfs")?;
+            procs::reset_pidns().context("Failed to reset pidns")?;
+
+            // TODO: timens & rdtsc
+
+            manager::Command::Reset
+        }
         "run" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
             if !arg["argv"].is_array() {
