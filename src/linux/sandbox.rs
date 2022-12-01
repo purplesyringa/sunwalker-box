@@ -228,29 +228,40 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to mount tmpfs on /tmp/sunwalker_box")?;
 
     // Make various temporary directories
-    std::fs::create_dir("/tmp/sunwalker_box/rootfs")
-        .context("Failed to mkdir /tmp/sunwalker_box/rootfs")?;
-    std::fs::create_dir("/tmp/sunwalker_box/ns")
-        .context("Failed to mkdir /tmp/sunwalker_box/ns")?;
     std::fs::create_dir("/tmp/sunwalker_box/emptydir")
         .context("Failed to mkdir /tmp/sunwalker_box/emptydir")?;
+
+    // Move old root and pivot_root
+    std::fs::create_dir("/tmp/sunwalker_box/oldroot")
+        .context("Failed to mkdir /tmp/sunwalker_box/oldroot")?;
+    std::env::set_current_dir("/tmp/sunwalker_box")
+        .context("Failed to chdir to /tmp/sunwalker_box")?;
+    nix::unistd::pivot_root(".", "oldroot").context("Failed to pivot_root")?;
+    std::env::set_current_dir("/").context("Failed to chdir to /")?;
+
+    // Get /proc working
+    std::fs::create_dir("/proc").context("Failed to mkdir /proc")?;
+    system::bind_mount("/oldroot/proc", "/proc")
+        .context("Failed to bind-mount /oldroot/proc to /proc")?;
+
+    system::change_propagation("/", system::MS_SHARED | system::MS_REC)
+        .expect("Failed to change propagation to shared");
 
     Ok(())
 }
 
 pub fn create_dev_copy() -> Result<()> {
-    std::fs::create_dir("/tmp/sunwalker_box/dev")
-        .context("Failed to mkdir /tmp/sunwalker_box/dev")?;
+    std::fs::create_dir("/dev").context("Failed to mkdir /dev")?;
 
     for name in [
         "null", "full", "zero", "urandom", "random", "stdin", "stdout", "stderr", "fd",
     ] {
         let source = if name == "random" {
-            "/dev/urandom".to_string() // prevent entropy depletion
+            "/oldroot/dev/urandom".to_string() // prevent entropy depletion
         } else {
-            format!("/dev/{name}")
+            format!("/oldroot/dev/{name}")
         };
-        let target = format!("/tmp/sunwalker_box/dev/{name}");
+        let target = format!("/dev/{name}");
         let metadata = std::fs::symlink_metadata(&source)
             .with_context(|| format!("{source} does not exist (or oculd not be accessed)"))?;
         if metadata.is_symlink() {
@@ -272,42 +283,30 @@ pub fn create_dev_copy() -> Result<()> {
     // Mount /dev/mqueue. This has to happen inside the IPC namespace, because mqueuefs is attached
     // to the namespace of the process that mounted it, and this has to happen before unsharing
     // userns because mqueuefs can only be mounted by real root.
-    std::fs::create_dir("/tmp/sunwalker_box/dev/mqueue")
-        .context("Failed to mkdir /tmp/sunwalker_box/dev/mqueue")?;
-    system::mount("mqueue", "/tmp/sunwalker_box/dev/mqueue", "mqueue", 0, None)
-        .context("Failed to mount mqueue on /tmp/sunwalker_box/dev/mqueue")?;
+    std::fs::create_dir("/dev/mqueue").context("Failed to mkdir /dev/mqueue")?;
+    system::mount("mqueue", "/dev/mqueue", "mqueue", 0, None)
+        .context("Failed to mount mqueue on /dev/mqueue")?;
     // rwxrwxrwt
-    std::fs::set_permissions(
-        "/tmp/sunwalker_box/dev/mqueue",
-        std::fs::Permissions::from_mode(0o1777),
-    )
-    .context("Failed to make /tmp/sunwalker_box/mqueue dev/world-writable")?;
+    std::fs::set_permissions("/dev/mqueue", std::fs::Permissions::from_mode(0o1777))
+        .context("Failed to make /mqueue dev/world-writable")?;
 
     // Mount /dev/{pts,ptmx}
-    std::fs::create_dir("/tmp/sunwalker_box/dev/pts")
-        .context("Failed to mkdir /tmp/sunwalker_box/dev/pts")?;
+    std::fs::create_dir("/dev/pts").context("Failed to mkdir /dev/pts")?;
     system::mount(
         "devpts",
-        "/tmp/sunwalker_box/dev/pts",
+        "/dev/pts",
         "devpts",
         system::MS_NOSUID | system::MS_NOEXEC,
         Some("mode=666,ptmxmode=666"),
     )
-    .context("Failed to mount devpts at /tmp/sunwalker_box/dev/pts")?;
+    .context("Failed to mount devpts at /dev/pts")?;
 
-    std::fs::write("/tmp/sunwalker_box/dev/ptmx", "")
-        .context("Failed to touch /tmp/sunwalker_box/dev/ptmx")?;
-    system::bind_mount(
-        "/tmp/sunwalker_box/dev/pts/ptmx",
-        "/tmp/sunwalker_box/dev/ptmx",
-    )
-    .context(
-        "Failed to bind-mount /tmp/sunwalker_box/dev/pts/ptmx to /tmp/sunwalker_box/dev/ptmx",
-    )?;
+    std::fs::write("/dev/ptmx", "").context("Failed to touch /dev/ptmx")?;
+    system::bind_mount("/dev/pts/ptmx", "/dev/ptmx")
+        .context("Failed to bind-mount /dev/pts/ptmx to /dev/ptmx")?;
 
     // This directory will be mounted onto later
-    std::fs::create_dir("/tmp/sunwalker_box/dev/shm")
-        .context("Failed to mkdir /tmp/sunwalker_box/dev/shm")?;
+    std::fs::create_dir("/dev/shm").context("Failed to mkdir /dev/shm")?;
 
     Ok(())
 }

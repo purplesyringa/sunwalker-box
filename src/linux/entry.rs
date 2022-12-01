@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system, userns},
+    linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
 };
 use anyhow::{anyhow, bail, Context, Result};
 use nix::{libc, libc::SYS_pidfd_open};
@@ -37,11 +37,10 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
         .add_self_as_manager()
         .expect("Failed to add self to manager cgroup");
 
-    // Our first priority is to unshare userns: we need to do before unsharing pidns (because /proc
-    // can only be mounted if pidns was created inside the userns), therefore we need to do it in
-    // this process.
+    let root =
+        std::fs::canonicalize(&cli_command.root).context("Failed to resolve path to root")?;
 
-    // Before unsharing userns, do whatever cannot be done inside the userns, namely, mount stuff.
+    // Do whatever cannot be done inside the userns. This mostly amounts to mounting stuff.
     // Create an isolated mountns for a dedicated /tmp/sunwalker_box directory
     mountns::unshare_mountns().expect("Failed to unshare mount namespace");
     // Ensure our working area is ours only
@@ -52,18 +51,12 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
     // Create a copy of /dev
     sandbox::create_dev_copy().expect("Failed to create /dev copy");
 
-    // Finally, unshare userns
-    userns::enter_user_namespace().expect("Failed to unshare user namespace");
-    // We need to synchronize mountns with userns, so it has to be remounted
-    mountns::unshare_mountns().expect("Failed to unshare mount namespace");
-
     // Isolate various non-important namespaces
     sandbox::unshare_persistent_namespaces().expect("Failed to unshare persistent namespaces");
 
     // We need a separate worker to monitor the child (and no, using tokio won't work because then
     // using stdio would require a dedicated thread), but threads can't be created after unsharing
-    // pidns, so we create the thread beforehand. We couldn't do this before because userns can't be
-    // unshared in multithreaded processes.
+    // pidns, so we create the thread beforehand.
     let (thread_tx, thread_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let mut child: multiprocessing::Child<!> =
@@ -115,7 +108,9 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
             .context("Failed to create channel")?;
 
     // Setup rootfs
-    rootfs::create_rootfs(cli_command.root.as_ref()).expect("Failed to create rootfs");
+    let mut root_cur = std::path::PathBuf::from("/oldroot");
+    root_cur.extend(root.strip_prefix("/"));
+    rootfs::create_rootfs(&root_cur).expect("Failed to create rootfs");
 
     let quotas = rootfs::DiskQuotas {
         space: cli_command.quota_space,
@@ -297,7 +292,7 @@ fn handle_command(
                 .context("Invalid 'internal' argument")?;
             let ro = arg["ro"].as_bool().context("Invalid 'ro' argument")?;
             system::bind_mount_opt(
-                external,
+                rootfs::resolve_abs_old_root(external)?,
                 rootfs::resolve_abs_box_root(internal)?,
                 if ro { system::MS_RDONLY } else { 0 } | system::MS_REC,
             )?;

@@ -34,7 +34,7 @@ fn configure_ns(mut rx: multiprocessing::Receiver<()>) {
 
     // Fill uid/gid maps
     std::fs::write(
-        format!("/proc/{ppid}/uid_map"),
+        format!("/root/proc/{ppid}/uid_map"),
         format!(
             "{INTERNAL_ROOT_UID} {EXTERNAL_ROOT_UID} 1\n{INTERNAL_USER_UID} {EXTERNAL_USER_UID} \
              1\n{NOBODY_UID} {NOBODY_UID} 1\n"
@@ -42,10 +42,11 @@ fn configure_ns(mut rx: multiprocessing::Receiver<()>) {
     )
     .expect("Failed to fill uid_map");
 
-    std::fs::write(format!("/proc/{ppid}/setgroups"), "deny\n").expect("Failed to fill setgroups");
+    std::fs::write(format!("/root/proc/{ppid}/setgroups"), "deny\n")
+        .expect("Failed to fill setgroups");
 
     std::fs::write(
-        format!("/proc/{ppid}/gid_map"),
+        format!("/root/proc/{ppid}/gid_map"),
         format!(
             "{INTERNAL_ROOT_GID} {EXTERNAL_ROOT_GID} 1\n{INTERNAL_USER_GID} {EXTERNAL_USER_GID} \
              1\n{NOGRP_GID} {NOGRP_GID} 1\n"

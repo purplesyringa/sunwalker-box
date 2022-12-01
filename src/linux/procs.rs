@@ -114,7 +114,7 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
         let metadata = metadata.with_context(|| format!("Failed to stat {target:?}"))?;
 
         let source = if metadata.is_dir() {
-            "/tmp/sunwalker_box/emptydir"
+            "/emptydir"
         } else {
             "/dev/null"
         };

@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, manager, rootfs},
+    linux::{cgroups, manager, rootfs, userns},
 };
 use nix::{
     libc,
@@ -107,7 +107,9 @@ pub fn reaper(
     nix::unistd::setsid().expect("Failed to setsid");
 
     // Mount procfs and enter the sandboxed root
-    rootfs::configure_and_enter_rootfs().expect("Failed to configure and enter rootfs");
+    rootfs::configure_rootfs().expect("Failed to configure rootfs");
+    userns::enter_user_namespace().expect("Failed to unshare user namespace");
+    rootfs::enter_rootfs().expect("Failed to enter rootfs");
     std::env::set_current_dir("/space").expect("Failed to chdir to /space");
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
