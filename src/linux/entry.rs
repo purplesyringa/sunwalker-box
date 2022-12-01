@@ -291,12 +291,15 @@ fn handle_command(
                 .take_string()
                 .context("Invalid 'internal' argument")?;
             let ro = arg["ro"].as_bool().context("Invalid 'ro' argument")?;
-            system::bind_mount_opt(
+            system::bind_mount(
                 rootfs::resolve_abs_old_root(external)?,
-                rootfs::resolve_abs_box_root(internal)?,
-                if ro { system::MS_RDONLY } else { 0 } | system::MS_REC,
+                rootfs::resolve_abs_box_root(&internal)?,
             )?;
-            return Ok(None);
+            if ro {
+                manager::Command::RemountReadonly { path: internal }
+            } else {
+                return Ok(None);
+            }
         }
         "reset" => {
             sandbox::reset_persistent_namespaces().context("Failed to persistent namespaces")?;

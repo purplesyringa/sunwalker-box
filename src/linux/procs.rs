@@ -119,8 +119,10 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
             "/dev/null"
         };
 
-        system::bind_mount_opt(source, target, system::MS_RDONLY)
+        system::bind_mount(source, &target)
             .with_context(|| format!("Failed to hide .../proc/{path}"))?;
+        system::bind_mount_opt("none", target, system::MS_REMOUNT | system::MS_RDONLY)
+            .with_context(|| format!("Failed to remount .../proc/{path} read-only"))?;
     }
 
     Ok(())

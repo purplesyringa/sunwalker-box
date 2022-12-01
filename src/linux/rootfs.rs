@@ -59,12 +59,10 @@ pub fn create_rootfs(root: &std::path::Path) -> Result<()> {
                     .with_context(|| format!("Failed to touch {target_path}"))?;
             }
 
-            system::bind_mount_opt(
-                &source_path,
-                &target_path,
-                system::MS_RDONLY | system::MS_REC,
-            )
-            .with_context(|| format!("Failed to bind-mount {source_path} to {target_path}"))?;
+            system::bind_mount(&source_path, &target_path)
+                .with_context(|| format!("Failed to bind-mount {source_path} to {target_path}"))?;
+            system::bind_mount_opt("none", &target_path, system::MS_REMOUNT | system::MS_RDONLY)
+                .with_context(|| format!("Failed to remount {target_path} read-only"))?;
         }
     }
 
@@ -75,8 +73,10 @@ pub fn create_rootfs(root: &std::path::Path) -> Result<()> {
     }
     // Don't mount /space and /tmp immediately, we'll mount them later
     // Mount /dev
-    system::bind_mount_opt("/dev", "/root/dev", system::MS_RDONLY | system::MS_REC)
+    system::bind_mount_opt("/dev", "/root/dev", system::MS_REC)
         .context("Failed to bind-mount /root/dev")?;
+    system::bind_mount_opt("none", "/root/dev", system::MS_REMOUNT | system::MS_RDONLY)
+        .context("Failed to remount /root/dev read-only")?;
 
     Ok(())
 }
@@ -87,7 +87,7 @@ pub fn configure_rootfs() -> Result<()> {
 
     // We want to unmount /oldroot and others, so we need to switch to a new mount namespace. But we
     // don't want mounts to get locked, so the user namespace has to stay the same.
-    mountns::unshare_mountns().expect("Failed to unshare mount namespace");
+    mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
     system::change_propagation("/oldroot", system::MS_PRIVATE)
         .context("Failed to change propagation of /oldroot")?;
     system::umount_opt("/oldroot", system::MNT_DETACH).context("Failed to unmount /oldroot")?;
@@ -121,6 +121,8 @@ pub fn enter_rootfs() -> Result<()> {
     // far as I know, pivot_root does not support non-private mounts. This means that we must use
     // chroot, and if we want to obtain the level of security pivot_root might otherwise grant, we
     // have to call pivot_root earlier, in the main process.
+
+    mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
 
     // Chroot into /root
     std::env::set_current_dir("/root").context("Failed to chdir to /root")?;

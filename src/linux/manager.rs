@@ -1,4 +1,4 @@
-use crate::linux::{cgroups, userns};
+use crate::linux::{cgroups, system, userns};
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::{
@@ -13,6 +13,9 @@ use std::time::{Duration, Instant};
 #[derive(Object)]
 pub enum Command {
     Reset,
+    RemountReadonly {
+        path: String,
+    },
     Run {
         argv: Vec<String>,
         stdin: String,
@@ -52,7 +55,14 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
     match command {
         Command::Reset => {
             // Enter newly remounted /space
-            std::env::set_current_dir("/space").expect("Failed to chdir to /space");
+            std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
+            Ok(None)
+        }
+        Command::RemountReadonly { path } => {
+            system::change_propagation(&path, system::MS_SLAVE)
+                .with_context(|| format!("Failed to change propagation of {path} to slave"))?;
+            system::bind_mount_opt("none", &path, system::MS_REMOUNT | system::MS_RDONLY)
+                .with_context(|| format!("Failed to remount {path} read-only"))?;
             Ok(None)
         }
         Command::Run {
