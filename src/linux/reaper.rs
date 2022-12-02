@@ -110,7 +110,6 @@ pub fn reaper(
     rootfs::configure_rootfs().expect("Failed to configure rootfs");
     userns::enter_user_namespace().expect("Failed to unshare user namespace");
     rootfs::enter_rootfs().expect("Failed to enter rootfs");
-    std::env::set_current_dir("/space").expect("Failed to chdir to /space");
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.

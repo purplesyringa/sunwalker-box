@@ -53,11 +53,7 @@ pub fn manager(
 
 fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Result<Option<String>> {
     match command {
-        Command::Reset => {
-            // Enter newly remounted /space
-            std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
-            Ok(None)
-        }
+        Command::Reset => Ok(None),
         Command::RemountReadonly { path } => {
             system::change_propagation(&path, system::MS_SLAVE)
                 .with_context(|| format!("Failed to change propagation of {path} to slave"))?;
@@ -378,6 +374,8 @@ fn executor_worker(
 ) {
     let result: Result<()> = try {
         userns::drop_privileges().context("Failed to drop privileges")?;
+
+        std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
 
         nix::unistd::dup2(stdin.as_raw_fd(), nix::libc::STDIN_FILENO)
             .context("dup2 for stdin failed")?;
