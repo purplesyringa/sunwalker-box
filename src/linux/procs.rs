@@ -129,10 +129,7 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
 }
 
 pub fn reset_pidns() -> Result<()> {
-    std::fs::write(
-        "/tmp/sunwalker_box/isolated/proc/sys/kernel/ns_last_pid",
-        "1\n",
-    )
-    .context("Failed to sysctl kernel.ns_last_pid=1")?;
+    std::fs::write("/proc/sys/kernel/ns_last_pid", "1\n")
+        .context("Failed to sysctl kernel.ns_last_pid=1")?;
     Ok(())
 }

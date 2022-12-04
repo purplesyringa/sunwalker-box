@@ -1,7 +1,9 @@
 use crate::{
     entry,
-    linux::{cgroups, manager, rootfs, userns},
+    linux::{cgroups, manager, procs, rootfs, userns},
 };
+use anyhow::{Context, Result};
+use multiprocessing::Object;
 use nix::{
     libc,
     libc::{c_int, PR_SET_PDEATHSIG, SIGUSR1},
@@ -16,12 +18,24 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
     }
 }
 
+#[derive(Object)]
+pub enum Command {
+    Reset,
+}
+
 #[multiprocessing::entrypoint]
 pub fn reaper(
     ppidfd: OwnedFd,
     cli_command: entry::CLIStartCommand,
     cgroup: cgroups::Cgroup,
-    channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, manager::Command>,
+    mut reaper_channel: multiprocessing::Duplex<
+        std::result::Result<Option<String>, String>,
+        Command,
+    >,
+    manager_channel: multiprocessing::Duplex<
+        std::result::Result<Option<String>, String>,
+        manager::Command,
+    >,
 ) -> ! {
     if nix::unistd::getpid().as_raw() != 1 {
         panic!("Reaper must have PID 1");
@@ -30,6 +44,7 @@ pub fn reaper(
     // We want to receive SIGUSR1 and SIGCHLD, but not handle them immediately
     let mut mask = signal::SigSet::empty();
     mask.add(signal::Signal::SIGUSR1);
+    mask.add(signal::Signal::SIGIO);
     mask.add(signal::Signal::SIGCHLD);
     if let Err(e) = mask.thread_block() {
         eprintln!("Failed to configure signal mask: {e}");
@@ -121,7 +136,7 @@ pub fn reaper(
             proc_cgroup
                 .try_clone()
                 .expect("Failed to clone box cgroup reference"),
-            channel,
+            manager_channel,
         )
         .expect("Failed to start child");
     // We purposefully don't join manager here, as it may die unexpectedly
@@ -129,11 +144,25 @@ pub fn reaper(
     'main: loop {
         let mut sigset = signal::SigSet::empty();
         sigset.add(signal::Signal::SIGUSR1);
+        sigset.add(signal::Signal::SIGIO);
         sigset.add(signal::Signal::SIGCHLD);
         match sigset.wait().expect("Failed to wait for signal") {
             signal::Signal::SIGUSR1 => {
                 // Parent died
                 break 'main;
+            }
+            signal::Signal::SIGIO => {
+                // Incoming command
+                let result = execute_command(
+                    reaper_channel
+                        .recv()
+                        .expect("Failed to read command")
+                        .expect("No command received"),
+                );
+                let result = result.map_err(|e| format!("{e:?}"));
+                reaper_channel
+                    .send(&result)
+                    .expect("Failed to report result");
             }
             signal::Signal::SIGCHLD => {
                 // Child (or several) died
@@ -172,4 +201,13 @@ pub fn reaper(
 
     // Don't send the result to the parent
     std::process::exit(0)
+}
+
+fn execute_command(command: Command) -> Result<Option<String>> {
+    match command {
+        Command::Reset => {
+            procs::reset_pidns().context("Failed to reset pidns")?;
+            Ok(None)
+        }
+    }
 }

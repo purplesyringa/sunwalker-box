@@ -12,7 +12,6 @@ use std::time::{Duration, Instant};
 
 #[derive(Object)]
 pub enum Command {
-    Reset,
     RemountReadonly {
         path: String,
     },
@@ -53,7 +52,6 @@ pub fn manager(
 
 fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Result<Option<String>> {
     match command {
-        Command::Reset => Ok(None),
         Command::RemountReadonly { path } => {
             system::change_propagation(&path, system::MS_SLAVE)
                 .with_context(|| format!("Failed to change propagation of {path} to slave"))?;

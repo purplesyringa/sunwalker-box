@@ -1,13 +1,10 @@
 use crate::{
     entry,
-    linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
+    linux::{cgroups, controller, manager, rootfs, sandbox},
 };
-use anyhow::{anyhow, bail, Context, Result};
-use nix::{libc, libc::SYS_pidfd_open};
+use anyhow::{bail, Context, Result};
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
-use std::os::unix::io::{FromRawFd, OwnedFd, RawFd};
-use std::sync::mpsc;
 use std::time::Duration;
 
 pub fn main(cli_args: entry::CLIArgs) {
@@ -27,115 +24,22 @@ pub fn main(cli_args: entry::CLIArgs) {
 }
 
 fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
-    let cgroup = cgroups::Cgroup::new(cli_command.core).context("Failed to create cgroup")?;
-
-    // Move self to the right core so that spawning processes on the right core is fast. This also
-    // has to be done before unsharing userns, as we'd then lose our root privileges, and moving
-    // process from cgroup A to cgroup B requires write privileges in cgroup LCA(A, B), and if we
-    // don't do it now, we won't be able to do it later.
-    cgroup
-        .add_self_as_manager()
-        .expect("Failed to add self to manager cgroup");
-
-    let root =
-        std::fs::canonicalize(&cli_command.root).context("Failed to resolve path to root")?;
-
-    // Do whatever cannot be done inside the userns. This mostly amounts to mounting stuff.
-    // Create an isolated mountns for a dedicated /tmp/sunwalker_box directory
-    mountns::unshare_mountns().expect("Failed to unshare mount namespace");
-    // Ensure our working area is ours only
-    system::change_propagation("/", system::MS_PRIVATE | system::MS_REC)
-        .expect("Failed to change propagation to private");
-    // Create the dedicated /tmp/sunwalker_box
-    sandbox::enter_working_area().expect("Failed to enter working area");
-    // Create a copy of /dev
-    sandbox::create_dev_copy().expect("Failed to create /dev copy");
-
-    // Isolate various non-important namespaces
-    sandbox::unshare_persistent_namespaces().expect("Failed to unshare persistent namespaces");
-
-    // We need a separate worker to monitor the child (and no, using tokio won't work because then
-    // using stdio would require a dedicated thread), but threads can't be created after unsharing
-    // pidns, so we create the thread beforehand.
-    let (thread_tx, thread_rx) = mpsc::channel();
-    std::thread::spawn(move || {
-        let mut child: multiprocessing::Child<!> =
-            thread_rx.recv().expect("Failed to receive child in thread");
-        panic!("Child failed: {}", child.join().into_err());
-    });
-
-    // Run a child in a new PID namespace
-    procs::unshare_pidns().context("Failed to unshare pid namespace")?;
-
-    // Recreate environment, exposing reasonable defaults
-    for (key, _) in std::env::vars_os() {
-        std::env::remove_var(key);
-    }
-    std::env::set_var(
-        "LD_LIBRARY_PATH",
-        "/usr/local/lib64:/usr/local/lib:/usr/lib64:/usr/lib:/lib64:/lib",
-    );
-    std::env::set_var("LANGUAGE", "en_US");
-    std::env::set_var("LC_ALL", "en_US.UTF-8");
-    std::env::set_var("LC_ADDRESS", "en_US.UTF-8");
-    std::env::set_var("LC_NAME", "en_US.UTF-8");
-    std::env::set_var("LC_MONETARY", "en_US.UTF-8");
-    std::env::set_var("LC_PAPER", "en_US.UTF-8");
-    std::env::set_var("LC_IDENTIFIER", "en_US.UTF-8");
-    std::env::set_var("LC_TELEPHONE", "en_US.UTF-8");
-    std::env::set_var("LC_MEASUREMENT", "en_US.UTF-8");
-    std::env::set_var("LC_TIME", "en_US.UTF-8");
-    std::env::set_var("LC_NUMERIC", "en_US.UTF-8");
-    std::env::set_var("LANG", "en_US.UTF-8");
-    for (key, value) in &cli_command.env {
-        std::env::set_var(key, value);
-    }
-
-    // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
-    // communication doesn't work well, so we use pidfd. As a side note, pidfd_open sets O_CLOEXEC
-    // automatically.
-    let pidfd = unsafe { libc::syscall(SYS_pidfd_open, nix::unistd::getpid(), 0) } as RawFd;
-    if pidfd == -1 {
-        panic!(
-            "Failed to get pidfd of self: {}",
-            std::io::Error::last_os_error()
-        );
-    }
-    let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
-
-    let (mut ours, theirs) =
-        multiprocessing::duplex::<manager::Command, std::result::Result<Option<String>, String>>()
-            .context("Failed to create channel")?;
-
-    // Setup rootfs
-    let mut root_cur = std::path::PathBuf::from("/oldroot");
-    root_cur.extend(root.strip_prefix("/"));
-    rootfs::create_rootfs(&root_cur).expect("Failed to create rootfs");
-
     let quotas = rootfs::DiskQuotas {
         space: cli_command.quota_space,
         max_inodes: cli_command.quota_inodes,
     };
 
-    let child = reaper::reaper
-        .spawn(pidfd, cli_command, cgroup, theirs)
-        .context("Failed to start child")?;
-    thread_tx
-        .send(child)
-        .context("Failed to send child to thread")?;
-
-    ours.recv()
-        .context("Failed to recv readiness signal")?
-        .context("Manager terminated too early")?
-        .map_err(|e| anyhow!("Manager reported error during startup: {e}"))?;
-
-    rootfs::reset(&quotas).expect("Failed to reset rootfs");
+    let mut controller = controller::Controller::try_new(quotas)?;
+    controller.join_core(cli_command.core)?;
+    controller.enter_root(cli_command.root.as_ref())?;
+    controller.apply_environment(&cli_command.env);
+    controller.start(cli_command)?;
 
     for line in std::io::BufReader::new(std::io::stdin()).lines() {
-        let line = line.expect("Failed to read from stdin");
+        let line = line.context("Failed to read from stdin")?;
         let (command, arg) = line.split_once(' ').unwrap_or((&line, ""));
         let command = command.to_lowercase();
-        match handle_command(&mut ours, &quotas, &command, arg) {
+        match handle_command(&mut controller, &command, arg) {
             Ok(None) => {
                 println!("ok");
             }
@@ -152,22 +56,18 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
 }
 
 fn handle_command(
-    channel: &mut multiprocessing::Duplex<
-        manager::Command,
-        std::result::Result<Option<String>, String>,
-    >,
-    quotas: &rootfs::DiskQuotas,
+    controller: &mut controller::Controller,
     command: &str,
     arg: &str,
 ) -> Result<Option<String>> {
-    let sent_command = match command {
+    match command {
         "mkdir" => {
             let path = json::parse(arg)
                 .context("Invalid JSON")?
                 .take_string()
                 .context("Invalid command argument")?;
-            std::fs::create_dir(rootfs::resolve_abs_box_root(path)?)?;
-            return Ok(None);
+            controller.create_dir(&path)?;
+            Ok(None)
         }
         "ls" => {
             let path = json::parse(arg)
@@ -206,7 +106,7 @@ fn handle_command(
                     mode: permissions.mode(),
                 };
             }
-            return Ok(Some(entries.dump()));
+            Ok(Some(entries.dump()))
         }
         "cat" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
@@ -249,7 +149,7 @@ fn handle_command(
                 ptr += n_read;
             }
             buf.truncate(ptr);
-            return Ok(Some(json::stringify(buf)));
+            Ok(Some(json::stringify(buf)))
         }
         "mkfile" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
@@ -269,7 +169,7 @@ fn handle_command(
 
             let mut file = std::fs::File::create(rootfs::resolve_abs_box_root(path)?)?;
             file.write_all(&content)?;
-            return Ok(None);
+            Ok(None)
         }
         "mksymlink" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
@@ -280,7 +180,7 @@ fn handle_command(
                 .take_string()
                 .context("Invalid 'target' argument")?;
             std::os::unix::fs::symlink(target, rootfs::resolve_abs_box_root(link)?)?;
-            return Ok(None);
+            Ok(None)
         }
         "bind" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
@@ -291,24 +191,12 @@ fn handle_command(
                 .take_string()
                 .context("Invalid 'internal' argument")?;
             let ro = arg["ro"].as_bool().context("Invalid 'ro' argument")?;
-            system::bind_mount(
-                rootfs::resolve_abs_old_root(external)?,
-                rootfs::resolve_abs_box_root(&internal)?,
-            )?;
-            if ro {
-                manager::Command::RemountReadonly { path: internal }
-            } else {
-                return Ok(None);
-            }
+            controller.bind(&external, &internal, ro)?;
+            Ok(None)
         }
         "reset" => {
-            sandbox::reset_persistent_namespaces().context("Failed to persistent namespaces")?;
-            rootfs::reset(quotas).context("Failed to reset rootfs")?;
-            procs::reset_pidns().context("Failed to reset pidns")?;
-
-            // TODO: timens & rdtsc
-
-            manager::Command::Reset
+            controller.reset()?;
+            Ok(None)
         }
         "run" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
@@ -392,7 +280,7 @@ fn handle_command(
                 )
             };
 
-            manager::Command::Run {
+            controller.run_manager_command(manager::Command::Run {
                 argv,
                 stdin,
                 stdout,
@@ -402,20 +290,10 @@ fn handle_command(
                 idleness_time_limit,
                 memory_limit,
                 processes_limit,
-            }
+            })
         }
         _ => {
             bail!("Unknown command {command}");
         }
-    };
-
-    channel
-        .send(&sent_command)
-        .context("Failed to send command")?;
-
-    match channel.recv().context("Failed to recv reply")? {
-        None => bail!("No reply from child"),
-        Some(Ok(value)) => Ok(value),
-        Some(Err(e)) => bail!("{e}"),
     }
 }

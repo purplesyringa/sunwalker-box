@@ -12,6 +12,7 @@ pub mod entry;
 #[cfg(target_os = "linux")]
 mod linux {
     mod cgroups;
+    mod controller;
     pub mod entry;
     mod ids;
     mod manager;
