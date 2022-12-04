@@ -1,4 +1,4 @@
-use crate::linux::{cgroups, system, userns};
+use crate::linux::{cgroups, rootfs, system, userns};
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::{
@@ -33,6 +33,11 @@ pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
     mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
+    // Mount procfs and enter the sandboxed root
+    rootfs::configure_rootfs().expect("Failed to configure rootfs");
+    userns::enter_user_namespace().expect("Failed to unshare user namespace");
+    rootfs::enter_rootfs().expect("Failed to enter rootfs");
+
     channel
         .send(&Ok(None))
         .expect("Failed to notify parent about readiness");

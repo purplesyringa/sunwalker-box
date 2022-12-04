@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, manager, procs, rootfs, userns},
+    linux::{cgroups, manager, procs},
 };
 use anyhow::{Context, Result};
 use multiprocessing::Object;
@@ -120,11 +120,6 @@ pub fn reaper(
     // We don't want to terminate immediately if someone sends Ctrl-C via the controlling terminal,
     // but instead wait for the parent's termination and quit after that.
     nix::unistd::setsid().expect("Failed to setsid");
-
-    // Mount procfs and enter the sandboxed root
-    rootfs::configure_rootfs().expect("Failed to configure rootfs");
-    userns::enter_user_namespace().expect("Failed to unshare user namespace");
-    rootfs::enter_rootfs().expect("Failed to enter rootfs");
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.

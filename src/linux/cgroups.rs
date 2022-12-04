@@ -99,6 +99,17 @@ impl Cgroup {
             .write(b"+cpu +memory +pids\n")
             .context("Failed to enable cgroup controllers")?;
 
+        let proc_cgroup = self
+            .core_cgroup_fd
+            .sub_dir(format!("proc-{id}"))
+            .with_context(|| format!("Failed to open proc-{id}"))?;
+        nix::unistd::fchown(
+            proc_cgroup.as_raw_fd(),
+            Some(nix::unistd::Uid::from_raw(ids::EXTERNAL_ROOT_UID)),
+            Some(nix::unistd::Gid::from_raw(ids::EXTERNAL_ROOT_GID)),
+        )
+        .context("Failed to chown <cgroup>")?;
+
         Ok(ProcCgroup {
             core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
             id,

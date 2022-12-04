@@ -154,10 +154,12 @@ impl Controller {
             .context("Manager terminated too early")?
             .map_err(|e| anyhow!("Manager reported error during startup: {e}"))?;
 
-        rootfs::reset(&self.quotas).context("Failed to reset rootfs")?;
-
         self.reaper_channel = Some(reaper_ours);
         self.manager_channel = Some(manager_ours);
+
+        // It's a bit weird, but there's stuff that's slightly wrong after initialization, like
+        // pidns in an uncertain state or (more importantly) non-existent rootfs.
+        self.reset()?;
 
         Ok(())
     }
