@@ -165,6 +165,17 @@ pub fn reset(quotas: &DiskQuotas) -> Result<()> {
 
     // (Re)mount /tmp
     std::fs::create_dir("/root/space/.tmp").context("Failed to mkdir /root/space/.tmp")?;
+    std::os::unix::fs::chown(
+        "/root/space/.tmp",
+        Some(ids::INTERNAL_ROOT_UID),
+        Some(ids::INTERNAL_ROOT_GID),
+    )
+    .context("Failed to chown /root/space/.tmp")?;
+    std::fs::set_permissions(
+        "/root/space/.tmp",
+        std::os::unix::fs::PermissionsExt::from_mode(0o1777),
+    )
+    .context("Failed to chmod /root/space/.tmp")?;
     if let Err(e) = system::umount("/root/tmp") {
         if e.kind() == ErrorKind::InvalidInput {
             // This means /tmp is not a mountpoint, which is fine the first time we reset the fs
