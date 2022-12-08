@@ -256,7 +256,7 @@ pub fn create_dev_copy() -> Result<()> {
     std::fs::create_dir("/dev").context("Failed to mkdir /dev")?;
 
     for name in [
-        "null", "full", "zero", "urandom", "random", "stdin", "stdout", "stderr", "fd",
+        "null", "full", "zero", "urandom", "random", "stdin", "stdout", "stderr", "tty", "fd",
     ] {
         let source = if name == "random" {
             "/oldroot/dev/urandom".to_string() // prevent entropy depletion
