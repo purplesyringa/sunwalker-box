@@ -189,18 +189,10 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
                 }
 
                 // Check if any limits were exceeded
-                if real_time_limit
-                    .clone()
-                    .is_some_and(|limit| metrics.real_time > limit)
-                    || cpu_time_limit
-                        .clone()
-                        .is_some_and(|limit| metrics.cpu_time > limit)
-                    || idleness_time_limit
-                        .clone()
-                        .is_some_and(|limit| metrics.idleness_time > limit)
-                    || memory_limit
-                        .clone()
-                        .is_some_and(|limit| metrics.memory > limit)
+                if real_time_limit.is_some_and(|limit| metrics.real_time > limit)
+                    || cpu_time_limit.is_some_and(|limit| metrics.cpu_time > limit)
+                    || idleness_time_limit.is_some_and(|limit| metrics.idleness_time > limit)
+                    || memory_limit.is_some_and(|limit| metrics.memory > limit)
                 {
                     break;
                 }
@@ -302,25 +294,14 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
             }
 
             let mut limit_verdict;
-            if cpu_time_limit
-                .clone()
-                .is_some_and(|limit| metrics.cpu_time > limit)
-            {
+            if cpu_time_limit.is_some_and(|limit| metrics.cpu_time > limit) {
                 limit_verdict = "CPUTimeLimitExceeded";
-            } else if real_time_limit
-                .clone()
-                .is_some_and(|limit| metrics.real_time > limit)
-            {
+            } else if real_time_limit.is_some_and(|limit| metrics.real_time > limit) {
                 limit_verdict = "RealTimeLimitExceeded";
-            } else if idleness_time_limit
-                .clone()
-                .is_some_and(|limit| metrics.idleness_time > limit)
-            {
+            } else if idleness_time_limit.is_some_and(|limit| metrics.idleness_time > limit) {
                 limit_verdict = "IdlenessTimeLimitExceeded";
             } else if box_cgroup.was_oom_killed()?
-                || memory_limit
-                    .clone()
-                    .is_some_and(|limit| metrics.memory > limit)
+                || memory_limit.is_some_and(|limit| metrics.memory > limit)
             {
                 limit_verdict = "MemoryLimitExceeded";
             } else {
