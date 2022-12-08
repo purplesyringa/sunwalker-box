@@ -227,9 +227,11 @@ pub fn enter_working_area() -> Result<()> {
     system::mount("none", "/tmp/sunwalker_box", "tmpfs", 0, None)
         .context("Failed to mount tmpfs on /tmp/sunwalker_box")?;
 
-    // Make various temporary directories
+    // Make various temporary directories and files
     std::fs::create_dir("/tmp/sunwalker_box/emptydir")
         .context("Failed to mkdir /tmp/sunwalker_box/emptydir")?;
+    std::fs::write("/tmp/sunwalker_box/emptyfile", [])
+        .context("Failed to touch /tmp/sunwalker_box/emptyfile")?;
 
     // Move old root and pivot_root
     std::fs::create_dir("/tmp/sunwalker_box/oldroot")

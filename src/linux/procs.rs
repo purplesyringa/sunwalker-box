@@ -116,7 +116,7 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
         let source = if metadata.is_dir() {
             "/emptydir"
         } else {
-            "/dev/null"
+            "/emptyfile" // /dev/null cannot be bound read-only
         };
 
         system::bind_mount(source, &target)
