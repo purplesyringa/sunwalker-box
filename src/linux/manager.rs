@@ -244,7 +244,7 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
 
                 // Similarly, a process cannot exceed its idleness time limit during
                 // idleness_time_left seconds. It is not obvious how idleness time is to interact
-                // with multicore programs, so ve should forbid the limit in this case (TODO).
+                // with multicore programs, so we should forbid the limit in this case (TODO).
                 //
                 // We add 50ms here too, because when little idleness time is left, the process
                 // might just spend the rest of time crunching CPU cycles without spending idleness

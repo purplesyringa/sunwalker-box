@@ -60,9 +60,9 @@ pub fn drop_privileges() -> Result<()> {
     // disables ptracing and makes its /proc/<pid> subdirectory root-owned, which guarantees that a
     // malicious program cannot mess with the process except by sending signals to it. For the short
     // period of time between clone(2) and execve(2), this is not a problem. It would be a problem
-    // in some other cases though, e.g. if we called drop_privileges() in a manage process, because
+    // in some other cases though, e.g. if we called drop_privileges() in a manager process, because
     // that would allow the child to send SIGSTOP to circumvent time limit, or to send SIGKILL,
-    // whihc would confuse the system.
+    // which would confuse the system.
     if unsafe { libc::setgid(INTERNAL_USER_GID) } != 0 {
         return Err(std::io::Error::last_os_error()).context("Failed to setgid");
     }
