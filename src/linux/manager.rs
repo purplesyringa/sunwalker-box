@@ -228,22 +228,6 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
                 //         let guaranteed_real_time_left = guaranteed_cpu_time_left / n_cores;
                 //         sleep(guaranteed_real_time_left);
                 //     }
-                if let Some(cpu_time_limit) = cpu_time_limit {
-                    timeout = timeout.min(cpu_time_limit - metrics.cpu_time);
-                }
-
-                // Similarly, a process cannot exceed its idleness time limit during
-                // idleness_time_left seconds. It is not obvious how idleness time is to interact
-                // with multicore programs, so ve should forbid the limit in this case (TODO).
-                if let Some(idleness_time_limit) = idleness_time_limit {
-                    timeout = timeout.min(idleness_time_limit - metrics.idleness_time);
-                }
-
-                // Old kernels don't reveal memory.peak, so the only way to get memory usage stats
-                // is to use polling
-                if !has_peak {
-                    timeout = Duration::ZERO;
-                }
 
                 // Switching context takes time, some other operations take time too, etc., so less
                 // CPU time is usually used than permitted. We also don't really want to interrupt
@@ -253,8 +237,28 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
                 // to slow the judgment, not too small to steal resources from the solution in what
                 // is effectively a spin lock, and allows SIGPROF to fire just at the right moment
                 // under normal circumstances.
-                if timeout != Duration::MAX {
-                    timeout += Duration::from_millis(50);
+                if let Some(cpu_time_limit) = cpu_time_limit {
+                    timeout =
+                        timeout.min(cpu_time_limit - metrics.cpu_time + Duration::from_millis(50));
+                }
+
+                // Similarly, a process cannot exceed its idleness time limit during
+                // idleness_time_left seconds. It is not obvious how idleness time is to interact
+                // with multicore programs, so ve should forbid the limit in this case (TODO).
+                //
+                // We add 50ms here too, because when little idleness time is left, the process
+                // might just spend the rest of time crunching CPU cycles without spending idleness
+                // time.
+                if let Some(idleness_time_limit) = idleness_time_limit {
+                    timeout = timeout.min(
+                        idleness_time_limit - metrics.idleness_time + Duration::from_millis(50),
+                    );
+                }
+
+                // Old kernels don't reveal memory.peak, so the only way to get memory usage stats
+                // is to use polling
+                if !has_peak {
+                    timeout = Duration::from_millis(50);
                 }
 
                 let timeout_ms: i32 = if timeout == Duration::MAX {
