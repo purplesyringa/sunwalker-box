@@ -66,7 +66,9 @@ fn handle_command(
                 .context("Invalid JSON")?
                 .take_string()
                 .context("Invalid command argument")?;
-            controller.create_dir(&path)?;
+            let path = rootfs::resolve_abs_box_root(path)?;
+            controller.ensure_allowed_to_modify(&path)?;
+            std::fs::create_dir(path)?;
             Ok(None)
         }
         "ls" => {
@@ -166,8 +168,9 @@ fn handle_command(
                 }
                 _ => bail!("Invalid 'content' argument"),
             };
-
-            let mut file = std::fs::File::create(rootfs::resolve_abs_box_root(path)?)?;
+            let path = rootfs::resolve_abs_box_root(path)?;
+            controller.ensure_allowed_to_modify(&path)?;
+            let mut file = std::fs::File::create(path)?;
             file.write_all(&content)?;
             Ok(None)
         }
@@ -179,7 +182,9 @@ fn handle_command(
             let target = arg["target"]
                 .take_string()
                 .context("Invalid 'target' argument")?;
-            std::os::unix::fs::symlink(target, rootfs::resolve_abs_box_root(link)?)?;
+            let link = rootfs::resolve_abs_box_root(link)?;
+            controller.ensure_allowed_to_modify(&link)?;
+            std::os::unix::fs::symlink(target, link)?;
             Ok(None)
         }
         "bind" => {

@@ -5,6 +5,7 @@ use crate::{
 use anyhow::{anyhow, bail, Context, Result};
 use nix::{libc, libc::SYS_pidfd_open, sys::signal, unistd::Pid};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
 pub struct Controller {
@@ -52,7 +53,7 @@ impl Controller {
         Ok(())
     }
 
-    pub fn enter_root(&mut self, root: &std::path::Path) -> Result<()> {
+    pub fn enter_root(&mut self, root: &Path) -> Result<()> {
         let root = std::fs::canonicalize(root).context("Failed to resolve path to root")?;
 
         // Do whatever cannot be done inside the userns. This mostly amounts to mounting stuff.
@@ -67,7 +68,7 @@ impl Controller {
         sandbox::create_dev_copy().context("Failed to create /dev copy")?;
 
         // Setup rootfs
-        let mut root_cur = std::path::PathBuf::from("/oldroot");
+        let mut root_cur = PathBuf::from("/oldroot");
         root_cur.extend(root.strip_prefix("/"));
         self.rootfs_state =
             Some(rootfs::create_rootfs(&root_cur).context("Failed to create rootfs")?);
@@ -167,8 +168,11 @@ impl Controller {
         Ok(())
     }
 
-    pub fn create_dir(&self, path: &str) -> Result<()> {
-        std::fs::create_dir(rootfs::resolve_abs_box_root(path)?)?;
+    pub fn ensure_allowed_to_modify(&self, path: &Path) -> Result<()> {
+        if path.components().count() == 3 {
+            // /root/*
+            bail!("File {path:?} cannot be modified");
+        }
         Ok(())
     }
 
