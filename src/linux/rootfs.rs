@@ -1,5 +1,6 @@
 use crate::linux::{ids, mountns, procs, system};
 use anyhow::{anyhow, Context, Result};
+use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, ErrorKind};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
@@ -10,7 +11,11 @@ pub struct DiskQuotas {
     pub max_inodes: u64,
 }
 
-pub fn create_rootfs(root: &std::path::Path) -> Result<()> {
+pub struct RootfsState {
+    mount_points: HashMap<String, usize>,
+}
+
+pub fn create_rootfs(root: &std::path::Path) -> Result<RootfsState> {
     // We need to mount an image, and also add some directories to the hierarchy.
     //
     // We can't use overlayfs: it doesn't work as expected when a lowerdir contains child mounts
@@ -78,7 +83,14 @@ pub fn create_rootfs(root: &std::path::Path) -> Result<()> {
     system::bind_mount_opt("none", "/root/dev", system::MS_REMOUNT | system::MS_RDONLY)
         .context("Failed to remount /root/dev read-only")?;
 
-    Ok(())
+    // Remember current mounts so that we can restore the state on reset
+    let mut state = RootfsState {
+        mount_points: HashMap::new(),
+    };
+    for path in list_child_mounts("/root/")? {
+        *state.mount_points.entry(path).or_insert(0) += 1;
+    }
+    Ok(state)
 }
 
 pub fn configure_rootfs() -> Result<()> {
@@ -131,9 +143,27 @@ pub fn enter_rootfs() -> Result<()> {
     Ok(())
 }
 
-pub fn reset(quotas: &DiskQuotas) -> Result<()> {
-    // Unmount /space and everything beneath
-    unmount_recursively("/root/space", true)?;
+pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
+    // Unmount all non-whitelisted mounts. Except for /proc/*, which is a nightmare.
+    let mut mount_points: HashMap<&str, usize> = HashMap::new();
+    for (path, count) in &state.mount_points {
+        mount_points.insert(path, *count);
+    }
+    let mut paths_to_umount: Vec<&str> = Vec::new();
+    let current_mounts = list_child_mounts("/root/")?;
+    for path in &current_mounts {
+        if path != "/root/proc" && !path.starts_with("/root/proc/") {
+            let entry = mount_points.entry(path).or_insert(0);
+            if *entry <= 0 {
+                paths_to_umount.push(path);
+            } else {
+                *entry -= 1;
+            }
+        }
+    }
+    for path in paths_to_umount.into_iter().rev() {
+        system::umount(path).with_context(|| format!("Failed to unmount {path}"))?;
+    }
 
     // (Re)mount /space
     system::mount(
@@ -151,40 +181,33 @@ pub fn reset(quotas: &DiskQuotas) -> Result<()> {
     )
     .context("Failed to chown /root/space")?;
 
-    // (Re)mount /dev/shm
-    std::fs::create_dir("/root/space/.shm").context("Failed to mkdir /root/space/.shm")?;
-    if let Err(e) = system::umount("/root/dev/shm") {
-        if e.kind() == ErrorKind::InvalidInput {
-            // This means /dev/shm is not a mountpoint, which is fine the first time we reset the fs
-        } else {
-            return Err(e).context("Failed to unmount /root/dev/shm");
+    // (Re)mount /dev/shm and /tmp
+    for (path, orig_path) in [
+        ("/root/dev/shm", "/root/space/.shm"),
+        ("/root/tmp", "/root/space/.tmp"),
+    ] {
+        std::fs::create_dir(orig_path).with_context(|| format!("Failed to mkdir {orig_path}"))?;
+        std::os::unix::fs::chown(
+            orig_path,
+            Some(ids::INTERNAL_ROOT_UID),
+            Some(ids::INTERNAL_ROOT_GID),
+        )
+        .with_context(|| format!("Failed to chown {orig_path}"))?;
+        std::fs::set_permissions(
+            orig_path,
+            std::os::unix::fs::PermissionsExt::from_mode(0o1777),
+        )
+        .with_context(|| format!("Failed to chmod {orig_path}"))?;
+        if let Err(e) = system::umount(path) {
+            if e.kind() == ErrorKind::InvalidInput {
+                // This means /tmp is not a mountpoint, which is fine the first time we reset the fs
+            } else {
+                return Err(e).with_context(|| format!("Failed to unmount {path}"));
+            }
         }
+        system::bind_mount(orig_path, path)
+            .with_context(|| format!("Failed to bind-mount {orig_path} to {path}"))?;
     }
-    system::bind_mount("/root/space/.shm", "/root/dev/shm")
-        .context("Failed to bind-mount /root/space/.shm to /root/dev/shm")?;
-
-    // (Re)mount /tmp
-    std::fs::create_dir("/root/space/.tmp").context("Failed to mkdir /root/space/.tmp")?;
-    std::os::unix::fs::chown(
-        "/root/space/.tmp",
-        Some(ids::INTERNAL_ROOT_UID),
-        Some(ids::INTERNAL_ROOT_GID),
-    )
-    .context("Failed to chown /root/space/.tmp")?;
-    std::fs::set_permissions(
-        "/root/space/.tmp",
-        std::os::unix::fs::PermissionsExt::from_mode(0o1777),
-    )
-    .context("Failed to chmod /root/space/.tmp")?;
-    if let Err(e) = system::umount("/root/tmp") {
-        if e.kind() == ErrorKind::InvalidInput {
-            // This means /tmp is not a mountpoint, which is fine the first time we reset the fs
-        } else {
-            return Err(e).context("Failed to unmount /root/tmp");
-        }
-    }
-    system::bind_mount("/root/space/.tmp", "/root/tmp")
-        .context("Failed to bind-mount /root/space/.tmp to /root/tmp")?;
 
     // Reset pseudoterminals. On linux, devptsfs uses IDA[1], which allocates IDs sequentially,
     // returning the first unused ID each time, so simply deleting everything from /dev/pts works.
@@ -202,10 +225,7 @@ pub fn reset(quotas: &DiskQuotas) -> Result<()> {
     Ok(())
 }
 
-// Unmount everything beneath prefix recursively. Does not unmount prefix itself.
-fn unmount_recursively(prefix: &str, inclusive: bool) -> Result<()> {
-    let prefix_slash = format!("{prefix}/");
-
+fn list_child_mounts(prefix: &str) -> Result<Vec<String>> {
     let file = std::fs::File::open("/proc/self/mounts")
         .context("Failed to open /proc/self/mounts for reading")?;
 
@@ -215,16 +235,12 @@ fn unmount_recursively(prefix: &str, inclusive: bool) -> Result<()> {
         let mut it = line.split(' ');
         it.next().context("Invalid format of /proc/self/mounts")?;
         let target_path = it.next().context("Invalid format of /proc/self/mounts")?;
-        if target_path.starts_with(&prefix_slash) || (inclusive && target_path == prefix) {
+        if target_path.starts_with(&prefix) {
             vec.push(target_path.to_string());
         }
     }
 
-    for path in vec.into_iter().rev() {
-        system::umount(&path).with_context(|| format!("Failed to unmount {path}"))?;
-    }
-
-    Ok(())
+    Ok(vec)
 }
 
 fn resolve_abs(

@@ -17,6 +17,7 @@ pub struct Controller {
     manager_channel: Option<
         multiprocessing::Duplex<manager::Command, std::result::Result<Option<String>, String>>,
     >,
+    rootfs_state: Option<rootfs::RootfsState>,
 }
 
 impl Controller {
@@ -31,6 +32,7 @@ impl Controller {
             reaper_pid: None,
             reaper_channel: None,
             manager_channel: None,
+            rootfs_state: None,
         })
     }
 
@@ -50,7 +52,7 @@ impl Controller {
         Ok(())
     }
 
-    pub fn enter_root(&self, root: &std::path::Path) -> Result<()> {
+    pub fn enter_root(&mut self, root: &std::path::Path) -> Result<()> {
         let root = std::fs::canonicalize(root).context("Failed to resolve path to root")?;
 
         // Do whatever cannot be done inside the userns. This mostly amounts to mounting stuff.
@@ -67,7 +69,8 @@ impl Controller {
         // Setup rootfs
         let mut root_cur = std::path::PathBuf::from("/oldroot");
         root_cur.extend(root.strip_prefix("/"));
-        rootfs::create_rootfs(&root_cur).context("Failed to create rootfs")?;
+        self.rootfs_state =
+            Some(rootfs::create_rootfs(&root_cur).context("Failed to create rootfs")?);
 
         Ok(())
     }
@@ -171,7 +174,11 @@ impl Controller {
 
     pub fn reset(&mut self) -> Result<()> {
         sandbox::reset_persistent_namespaces().context("Failed to persistent namespaces")?;
-        rootfs::reset(&self.quotas).context("Failed to reset rootfs")?;
+        rootfs::reset(
+            self.rootfs_state.as_mut().context("Did not join a core")?,
+            &self.quotas,
+        )
+        .context("Failed to reset rootfs")?;
 
         // TODO: timens & rdtsc
 
