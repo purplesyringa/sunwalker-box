@@ -170,7 +170,7 @@ impl Controller {
 
     pub fn ensure_allowed_to_modify(&self, path: &Path) -> Result<()> {
         if path.components().count() == 3 {
-            // /root/*
+            // /newroot/*
             bail!("File {path:?} cannot be modified");
         }
         Ok(())
