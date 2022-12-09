@@ -213,9 +213,9 @@ pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
             .with_context(|| format!("Failed to bind-mount {orig_path} to {path}"))?;
     }
 
-    // Reset pseudoterminals. On linux, devptsfs uses IDA[1], which allocates IDs sequentially,
-    // returning the first unused ID each time, so simply deleting everything from /dev/pts works.
-    // [1]: https://www.kernel.org/doc/htmldocs/kernel-api/idr.html
+    // Reset pseudoterminals. On linux, devptsfs uses non-cyclic ida_alloc*, which allocates IDs
+    // sequentially, returning the first unused ID each time, so simply deleting everything from
+    // /dev/pts works. See https://www.kernel.org/doc/htmldocs/kernel-api/idr.html for more info.
     for entry in
         std::fs::read_dir("/newroot/dev/pts").context("Failed to readdir /newroot/dev/pts")?
     {

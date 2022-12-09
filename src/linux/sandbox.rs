@@ -92,6 +92,41 @@ pub fn unshare_persistent_namespaces() -> Result<()> {
     Ok(())
 }
 
+pub fn reset_sysv_set(name: &str, long_name: &str, remover: fn(c_int) -> c_int) -> Result<()> {
+    // Delete all message queues/semaphore sets/shared memory segments
+    let path = format!("/proc/sysvipc/{name}");
+
+    let file = std::fs::File::open(&path).with_context(|| format!("Failed to open {path}"))?;
+
+    let mut ids: Vec<c_int> = Vec::new();
+
+    // Skip header
+    for line in std::io::BufReader::new(file).lines().skip(1) {
+        let line = line.with_context(|| format!("Failed to read {path}"))?;
+        let mut it = line.trim().split_ascii_whitespace();
+
+        it.next()
+            .with_context(|| format!("Invalid format of {path}"))?;
+
+        let id = it
+            .next()
+            .with_context(|| format!("Invalid format of {path}"))?
+            .parse()
+            .with_context(|| format!("Invalid format of id in {path}"))?;
+
+        ids.push(id);
+    }
+
+    for id in ids {
+        if remover(id) == -1 {
+            return Err(std::io::Error::last_os_error())
+                .with_context(|| format!("Failed to delete System V {long_name} #{id}"));
+        }
+    }
+
+    Ok(())
+}
+
 pub fn reset_persistent_namespaces() -> Result<()> {
     // IPC namespace. This is critical to clean up correctly, because creating an IPC namespace in
     // the kernel is terribly slow, and *deleting* it actually happens asynchronously. This
@@ -100,97 +135,15 @@ pub fn reset_persistent_namespaces() -> Result<()> {
     // namespace) for a while--something to avoid at all costs.
 
     // Clean up System V message queues
-    {
-        let file =
-            std::fs::File::open("/proc/sysvipc/msg").context("Failed to open /proc/sysvipc/msg")?;
-
-        let mut msqids: Vec<c_int> = Vec::new();
-
-        // Skip header
-        for line in std::io::BufReader::new(file).lines().skip(1) {
-            let line = line.context("Failed to read /proc/sysvipc/msg")?;
-            let mut it = line.trim().split_ascii_whitespace();
-
-            it.next().context("Invalid format of /proc/sysvipc/msg")?;
-
-            let msqid = it
-                .next()
-                .context("Invalid format of /proc/sysvipc/msg")?
-                .parse()
-                .context("Invalid format of msqid in /proc/sysvipc/msg")?;
-
-            msqids.push(msqid);
-        }
-
-        for msqid in msqids {
-            if unsafe { libc::msgctl(msqid, libc::IPC_RMID, std::ptr::null_mut()) } == -1 {
-                return Err(std::io::Error::last_os_error())
-                    .with_context(|| format!("Failed to delete System V message queue #{msqid}"));
-            }
-        }
-    }
-
-    // Clean up System V semaphores sets
-    {
-        let file =
-            std::fs::File::open("/proc/sysvipc/sem").context("Failed to open /proc/sysvipc/sem")?;
-
-        let mut semids: Vec<c_int> = Vec::new();
-
-        // Skip header
-        for line in std::io::BufReader::new(file).lines().skip(1) {
-            let line = line.context("Failed to read /proc/sysvipc/sem")?;
-            let mut it = line.trim().split_ascii_whitespace();
-
-            it.next().context("Invalid format of /proc/sysvipc/sem")?;
-
-            let semid = it
-                .next()
-                .context("Invalid format of /proc/sysvipc/sem")?
-                .parse()
-                .context("Invalid format of semid in /proc/sysvipc/sem")?;
-
-            semids.push(semid);
-        }
-
-        for semid in semids {
-            if unsafe { libc::semctl(semid, 0, libc::IPC_RMID) } == -1 {
-                return Err(std::io::Error::last_os_error())
-                    .with_context(|| format!("Failed to delete System V semaphore #{semid}"));
-            }
-        }
-    }
-
-    // Clean up System V shared memory segments
-    {
-        let file =
-            std::fs::File::open("/proc/sysvipc/shm").context("Failed to open /proc/sysvipc/shm")?;
-
-        let mut shmids: Vec<c_int> = Vec::new();
-
-        // Skip header
-        for line in std::io::BufReader::new(file).lines().skip(1) {
-            let line = line.context("Failed to read /proc/sysvipc/shm")?;
-            let mut it = line.trim().split_ascii_whitespace();
-
-            it.next().context("Invalid format of /proc/sysvipc/shm")?;
-
-            let shmid = it
-                .next()
-                .context("Invalid format of /proc/sysvipc/shm")?
-                .parse()
-                .context("Invalid format of shmid in /proc/sysvipc/shm")?;
-
-            shmids.push(shmid);
-        }
-
-        for shmid in shmids {
-            if unsafe { libc::shmctl(shmid, libc::IPC_RMID, std::ptr::null_mut()) } == -1 {
-                return Err(std::io::Error::last_os_error())
-                    .with_context(|| format!("Failed to delete System V shared memory #{shmid}"));
-            }
-        }
-    }
+    reset_sysv_set("msg", "message queue", |id| unsafe {
+        libc::msgctl(id, libc::IPC_RMID, std::ptr::null_mut())
+    })?;
+    reset_sysv_set("sem", "semaphore set", |id| unsafe {
+        libc::semctl(id, 0, libc::IPC_RMID)
+    })?;
+    reset_sysv_set("shm", "shared memory segment", |id| unsafe {
+        libc::shmctl(id, libc::IPC_RMID, std::ptr::null_mut())
+    })?;
 
     // POSIX message queues are stored in /dev/mqueue as files, which we can simply unlink.
     for entry in std::fs::read_dir("/dev/mqueue").context("Failed to readdir /dev/mqueue")? {
