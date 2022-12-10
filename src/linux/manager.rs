@@ -1,4 +1,4 @@
-use crate::linux::{cgroups, rootfs, system, userns};
+use crate::linux::{cgroups, rootfs, system, timens, userns};
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::{
@@ -35,6 +35,7 @@ pub fn manager(
 ) {
     // Mount procfs and enter the sandboxed root
     rootfs::configure_rootfs().expect("Failed to configure rootfs");
+    let mut timens_controller = timens::TimeNsController::new().expect("Failed to adjust time");
     userns::enter_user_namespace().expect("Failed to unshare user namespace");
     rootfs::enter_rootfs().expect("Failed to enter rootfs");
 
@@ -47,15 +48,21 @@ pub fn manager(
         .expect("Failed to receive message from channel")
     {
         channel
-            .send(&match execute_command(command, &proc_cgroup) {
-                Ok(value) => Ok(value),
-                Err(e) => Err(format!("{e:?}")),
-            })
+            .send(
+                &match execute_command(command, &proc_cgroup, &mut timens_controller) {
+                    Ok(value) => Ok(value),
+                    Err(e) => Err(format!("{e:?}")),
+                },
+            )
             .expect("Failed to send reply to channel")
     }
 }
 
-fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Result<Option<String>> {
+fn execute_command(
+    command: Command,
+    proc_cgroup: &cgroups::ProcCgroup,
+    timens_controller: &mut timens::TimeNsController,
+) -> Result<Option<String>> {
     match command {
         Command::RemountReadonly { path } => {
             system::change_propagation(&path, system::MS_SLAVE)
@@ -75,6 +82,10 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
             memory_limit,
             processes_limit,
         } => {
+            timens_controller
+                .reset_system_time_for_children()
+                .context("Failed to virtualize boot time")?;
+
             let stdin = std::fs::File::open(stdin).context("Failed to open stdin file")?;
             let stdout = std::fs::File::options()
                 .write(true)

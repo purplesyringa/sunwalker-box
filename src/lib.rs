@@ -22,5 +22,6 @@ mod linux {
     mod rootfs;
     mod sandbox;
     mod system;
+    mod timens;
     mod userns;
 }

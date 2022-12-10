@@ -312,12 +312,29 @@ class SimpleTest(Test):
                                 sorted(patched_expected_value.split(b"\n")))
                         assert patched_value == patched_expected_value, f"Expected {key}: {expected_value}, actual: {value}"
 
-                    if self.expect.get(f"matching_{key}"):
+                    matching = self.expect.get(f"matching_{key}")
+                    if matching:
                         if i == 0:
                             previous_values[key] = (value, patched_value)
                         else:
                             previous_value, patched_previous_value = previous_values[key]
-                            assert patched_value == patched_previous_value, f"Expected {key} to match the value from the first run: {previous_value}, actual: {value}"
+
+                            err_text = f"Expected {key} to match the value from the first run: {previous_value}, actual: {value}"
+                            if matching is True:
+                                assert patched_value == patched_previous_value, err_text
+                            elif matching.startswith("+-"):
+                                previous_values = patched_previous_value.decode().split()
+                                new_values = patched_value.decode().split()
+
+                                assert len(previous_values) == len(
+                                    new_values), f"Different lengths of values: current: {new_values}, previous: {previous_values}"
+
+                                for prev, new in zip(previous_values, new_values):
+                                    l, r = parse_approximate_value(
+                                        prev + matching, float)
+                                    assert l <= float(new) <= r, err_text
+                            else:
+                                assert False, f"Invalid matching value: {matching}"
 
                 for (key, parser) in [
                     ("cpu_time", float),
