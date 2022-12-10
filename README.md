@@ -15,7 +15,7 @@ They are also usually optimized for long-running tasks, when the time the sandbo
 
 In contrast, competitive-programming-themed sandboxes typically protect against DoS attacks and common vulnerabilities, but little else: there are often ways to circumvent some of protections using slightly non-trivial OS features. They are also seldom extensible.
 
-Finally, sandboxes seldom prioritize efficiency. We can do much better than recreating a sandbox and restarting the same program from the filesystem a hundred times. And while preforking might not increase the performance by a lot, optimizations do accumulate.
+Finally, sandboxes seldom prioritize efficiency. We can do much better than recreating a sandbox and restarting the same program from the filesystem a hundred times. And while tricks such as preforking might not increase the performance by a lot, optimizations do accumulate.
 
 
 ## Building
@@ -61,14 +61,14 @@ After registering the cores, you can finally start a sunwalker box instance usin
 # sunwalker_box start --core {CORE}
 ```
 
-You will most likely need to pass more options to keep the sandbox secured, though. Most importantly, you will need to setup a chroot environment and pass a path to it using `--root {PATH}`. You might also want to adjust the amount of disk space the box is allowed to use using `--quota-inodes {INODES} --quota-inodes {BYTES}`. The defaults are 1024 inodes and 30 MiB respectively; you might want to increase or decrease those, depending on your usecase.
+You will most likely need to pass more options to keep the sandbox secured, though. Most importantly, you will need to setup a chroot environment and pass a path to it using `--root {PATH}`. You might also want to adjust the amount of disk space the box is allowed to use using `--quota-inodes {INODES} --quota-space {BYTES}`. The defaults are 1024 inodes and 30 MiB respectively; you might want to increase or decrease those, depending on your usecase.
 
 If, after running the `start` command, sunwalker quietly awaits input, you're doing it right and sunwalker has created an empty sandbox. To actually *do* anything with the box, you issue commands to sunwalker via stdin, as if you used, say, memcached. To stop the sandbox, just <kbd>^C</kbd> it--all resources will be cleaned up automatically.
 
 
 ### Commands
 
-The commands typically look like `{COMMAND_NAME} {JSON_ENCODED_ARGUMENT}` and are terminated with a newline. The box responses with a single line containing `ok`, `ok {ADDITIONAL_DATE}`, or `error {ERROR_DESCRIPTION_AS_A_STRING}`.
+The commands typically look like `{COMMAND_NAME} {JSON_ENCODED_ARGUMENT}` and are terminated with a newline. The box responses with a single line containing `ok`, `ok {ADDITIONAL_JSON_DATA}`, or `error {ERROR_DESCRIPTION_AS_A_JSON_STRING}`.
 
 
 ### Controlling processes
@@ -76,12 +76,12 @@ The commands typically look like `{COMMAND_NAME} {JSON_ENCODED_ARGUMENT}` and ar
 The command `run` starts a process inside the sandbox. It takes a JSON object with the following options as an argument:
 
 - `argv` (required) -- a list of arguments, including the path/name of the program as the first argument, e.g. `"argv": ["program_name", "arg1", ...]`.
-- `stdin`, `stdout`, `stderr` (optional) -- to which while standard streams are to be redirected. If missing, uses `/dev/null` (must be present inside the chroot environment). Example: `"stdin": "/space/input.txt"`.
+- `stdin`, `stdout`, `stderr` (optional) -- to which files standard streams are to be redirected. If missing, uses `/dev/null` (must be present inside the chroot environment). Example: `"stdin": "/space/input.txt"`.
 - `real_time_limit` (optional) -- how much wall time the program may use, in seconds, e.g. `"real_time_limit": 1.5`.
 - `cpu_time_limit` (optional) -- how much CPU time the program may use, in seconds, e.g. `"cpu_time_limit": 1.0`.
 - `idleness_time_limit` (optional) -- how much time the program may spend in iowait in total, in seconds, e.g. `"idleness_time_limit": 1.0`.
 - `memory_limit` (optional) -- how much RAM the program may use, in bytes, e.g. `"memory_limit": 128000000`.
-- `processes_limit` (optional) -- how many processes the program may use at once, e.g. `"processes_limit": 64`.
+- `processes_limit` (optional) -- how many processes the program may start at once (including itself), e.g. `"processes_limit": 64`. Must be positive.
 
 To prevent DOS, `cpu_time_limit` and `processes_limit` must necessarily be set. Setting `real_time_limit` and/or `idleness_time_limit` is also recommended, but not strictly necessary, e.g. if you kill the box on timeout manually.
 
@@ -93,10 +93,10 @@ This command is blocking. When the program exits or a limit expires, an `ok` sta
   - `"OK"` -- the program exitted without exceeding limits.
   - `"Signaled"` -- the program was terminated by a signal.
   - `"RealTimeLimitExceeded" / "CPUTimeLimitExceeded" / "IdlenessTimeLimitExceeded" / "MemoryLimitExceeded"` -- the program used more wall-clock time/CPU time/iowait time/memory than allowed.
-- `wait_status` -- either the exit code of the program from `0` to `255` (`0` typically indicates success), or, if `limit_verdict` is `"Signaled"`, minus the number of the signal, e.g. `-9` for `SIGKILL`.
+- `wait_status` -- either the exit code of the program from `0` to `255` (`0` typically indicates success), or, if `limit_verdict` is `"Signaled"`, the negated number of the signal, e.g. `-9` for `SIGKILL`.
 - `real_time / cpu_time / idleness_time / memory` -- approximately how much wall-clock time/CPU time/iowait time/memory the program used, in the same units as the corresponding limits (i.e. seconds or bytes). Note the word "approximately" -- even when the limit is exceeded, i.e. `limit_verdict` is not `"OK"`, the corresponding metric might be slightly less than the limit. How to handle this discrepancy is your choice, but **do not use metrics to check if a limit has been exceeded**.
 
-After the process finishes, you can run another program in the same box in the same way. And if you want to run another program (or the same program with different input, you get the gist), but without the leftovers of the previous processes (PIDs, temporary files, network data, etc.), don't restart the sandbox! Instead, use `reset`, which efficiently restores the box to the original state as if sunwalker-box was just invoked, and proceed without restarting sunwalker-box.
+After the process finishes, you can run another program in the same box in the same way. And if you want to run another program (or the same program with different input, you get the gist), but without the leftovers of the previous processes (PIDs, temporary files, network data, etc.), don't restart the sandbox! Instead, use `reset`, which efficiently restores the box to the original state as if sunwalker-box was just invoked, and proceed without restarting sunwalker-box. This is much more efficient.
 
 
 ### Managing file system

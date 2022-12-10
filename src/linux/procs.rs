@@ -78,7 +78,7 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
         "pressure",
         // Contains way too much information about the scheduler
         "sched_debug",
-        // Scheduler statistics, incldues monotonic counters
+        // Scheduler statistics, includes monotonic counters
         "schedstat",
         // SCSI
         "scsi",
