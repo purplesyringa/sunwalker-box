@@ -4,7 +4,8 @@ use multiprocessing::Object;
 use nix::{
     libc,
     libc::SYS_pidfd_open,
-    sys::{signal, wait},
+    sys::{ptrace, signal, wait},
+    unistd::Pid,
 };
 use std::ffi::CString;
 use std::io::ErrorKind;
@@ -177,14 +178,32 @@ fn execute_command(
                 );
             }
 
-            // The child will either report an error during execve, or nothing if execve succeeded
-            // and the pipe was closed automatically because it's CLOEXEC.
-            if let Some(e) = ours
-                .recv()
-                .context("Failed to read an error from the child")?
-            {
-                bail!("{e:?}");
+            // The child will either exit or trigger SIGTRAP due to ptrace
+            let wait_status =
+                wait::waitpid(Pid::from_raw(pid), None).context("Failed to waitpid for process")?;
+
+            match wait_status {
+                wait::WaitStatus::Exited(_, _) => {
+                    bail!(
+                        "{}",
+                        ours.recv()
+                            .context("Failed to read an error from the child")?
+                            .context("The child terminated but did not report any error")?
+                    );
+                }
+                wait::WaitStatus::Stopped(_, signal::Signal::SIGTRAP) => {
+                    // fallthrough
+                }
+                _ => {
+                    bail!("waitpid returned unexpected status: {wait_status:?}");
+                }
             }
+
+            // execve has happened--setup the child and detach. We could, perhaps, keep ourselves
+            // attached to the child, but we prefer seccomp to ptrace as it's less intrusive, more
+            // performant and easier to use in an asynchronous context.
+            ptrace::detach(Pid::from_raw(pid), None)
+                .context("Failed to ptrace-detach from child")?;
 
             // Listen for events
             use nix::sys::epoll::*;
@@ -351,7 +370,7 @@ fn execute_command(
             let mut exit_code: i32 = -1;
 
             if exitted {
-                let wait_status = wait::waitpid(nix::unistd::Pid::from_raw(pid), None)
+                let wait_status = wait::waitpid(Pid::from_raw(pid), None)
                     .context("Failed to waitpid for process")?;
 
                 if let wait::WaitStatus::Signaled(_, signal::Signal::SIGPROF, _) = wait_status {
@@ -419,13 +438,6 @@ fn executor_worker(
             args.push(CString::new(arg.into_bytes()).context("Argument contains null character")?);
         }
 
-        pipe.recv()
-            .context("Failed to await confirmation from master process")?
-            .context("No confirmation from master process")?;
-
-        // Fine to start the application now. We don't need to reset signals because we didn't
-        // configure them inside executor_worker()
-
         if let Some(cpu_time_limit) = cpu_time_limit {
             // An additional optimization for finer handling of cpu time limit. An ITIMER_PROF timer
             // can emit a signal when the given limit is exceeded and is not reset upon execve. This
@@ -454,6 +466,24 @@ fn executor_worker(
                 Err(std::io::Error::last_os_error()).context("Failed to set interval timer")?;
             }
         }
+
+        pipe.recv()
+            .context("Failed to await confirmation from master process")?
+            .context("No confirmation from master process")?;
+
+        // Fine to start the application now. We don't need to reset signals because we didn't
+        // configure them inside executor_worker()
+
+        // > let's give users a way to disable rdtsc
+        // > users disable rdtsc
+        // > glibc calls clock_gettime on start
+        // > vDSO uses rdtsc
+        // > SIGSEGV
+        // > *surprised pikachu*
+        // ...and this is why we need to disable vDSO. But we don't want to do that globally, so
+        // there's a bit of mangling with ptrace to achieve a similar effect by forcing libc to
+        // believe vDSO is unavailable by overriding AT_SYSINFO_EHDR.
+        ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
 
         if is_absolute_path {
             nix::unistd::execv(&args[0], &args).context("execv failed")?;
