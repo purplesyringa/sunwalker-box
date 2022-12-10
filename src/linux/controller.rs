@@ -84,6 +84,10 @@ impl Controller {
             "LD_LIBRARY_PATH",
             "/usr/local/lib64:/usr/local/lib:/usr/lib64:/usr/lib:/lib64:/lib",
         );
+        std::env::set_var(
+            "PATH",
+            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+        );
         std::env::set_var("LANGUAGE", "en_US");
         std::env::set_var("LC_ALL", "en_US.UTF-8");
         std::env::set_var("LC_ADDRESS", "en_US.UTF-8");
