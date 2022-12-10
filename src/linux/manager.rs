@@ -114,7 +114,7 @@ fn execute_command(command: Command, proc_cgroup: &cgroups::ProcCgroup) -> Resul
             }
             if let Some(processes_limit) = processes_limit {
                 box_cgroup
-                    .set_processes_limit(processes_limit)
+                    .set_processes_limit(processes_limit + 2) // +2 for reaper and manager
                     .context("Failed to apply processes limit")?;
             }
             box_cgroup

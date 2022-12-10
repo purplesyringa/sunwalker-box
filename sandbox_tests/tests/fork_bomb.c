@@ -1,5 +1,5 @@
 /*
-description: Cannot start more processes than allowed
+description: Can start exactly as many processes as allowed
 limits:
   processes: 100
 */
@@ -18,7 +18,7 @@ int main() {
       }
     case -1:
       fprintf(stderr, "Failed to fork at process %d\n", i);
-      return i < 80 ? 1 : 0;
+      return i == 99 ? 0 : 1;
     }
   }
   fprintf(stderr, "Did not fail to fork 100 times\n");
