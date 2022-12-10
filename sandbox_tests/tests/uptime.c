@@ -2,7 +2,7 @@
 description: Uptime should be zero
 runs: 2
 expect:
-  matching_stdout: +- 0.01
+  matching_stdout: +- 0.1
 */
 
 #include <stdio.h>
@@ -31,7 +31,7 @@ int main() {
     }
   }
 
-  if (usleep(100000) == -1) {
+  if (usleep(300000) == -1) {
     perror("usleep");
     return 1;
   }
@@ -48,10 +48,10 @@ int main() {
 
     long diff_msec = diff_nsec / 1000000;
 
-    if (!(90 <= diff_msec && diff_msec <= 110)) {
+    if (!(250 <= diff_msec && diff_msec <= 350)) {
       fprintf(stderr,
-              "Clock #%d was incremented by %ldms, [90; 110] was expected\n", i,
-              diff_msec);
+              "Clock #%d was incremented by %ldms, [250; 350] was expected\n",
+              i, diff_msec);
       return 1;
     }
   }

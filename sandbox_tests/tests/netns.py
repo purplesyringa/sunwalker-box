@@ -6,6 +6,6 @@ expect:
         link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00
 """
 
-import os
+import subprocess
 
-os.system("ip link")
+subprocess.run(["ip", "link"], check=True)
