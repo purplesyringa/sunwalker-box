@@ -23,5 +23,6 @@ mod linux {
     mod sandbox;
     mod system;
     mod timens;
+    mod tracing;
     mod userns;
 }

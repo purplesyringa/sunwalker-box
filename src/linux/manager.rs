@@ -1,15 +1,14 @@
-use crate::linux::{cgroups, rootfs, system, timens, userns};
+use crate::linux::{cgroups, rootfs, system, timens, tracing, userns};
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::{
     libc,
-    libc::SYS_pidfd_open,
-    sys::{ptrace, signal, wait},
+    sys::{ptrace, signal, signalfd, wait},
     unistd::Pid,
 };
 use std::ffi::CString;
 use std::io::ErrorKind;
-use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
 #[derive(Object)]
@@ -134,15 +133,15 @@ fn execute_command(
             let user_process = executor_worker
                 .spawn(argv, stdin, stdout, stderr, theirs, cpu_time_limit)
                 .context("Failed to spawn the child")?;
-            let pid = user_process.id();
+            let pid = Pid::from_raw(user_process.id());
 
-            // Acquire pidfd. This is safe because the process hasn't been awaited yet.
-            let pidfd = unsafe { libc::syscall(SYS_pidfd_open, pid, 0) } as RawFd;
-            if pidfd == -1 {
-                return Err(std::io::Error::last_os_error())
-                    .context("Failed to open pidfd for child process");
-            }
-            let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
+            // Create signalfd to watch child's state change
+            let mut sigset = signal::SigSet::empty();
+            sigset.add(signal::Signal::SIGCHLD);
+            sigset.thread_block().context("Failed to block SIGCHLD")?;
+            let mut sigfd =
+                signalfd::SignalFd::with_flags(&sigset, signalfd::SfdFlags::SFD_CLOEXEC)
+                    .context("Failed to create signalfd")?;
 
             // Apply cgroup limits
             let box_cgroup = proc_cgroup
@@ -159,7 +158,7 @@ fn execute_command(
                     .context("Failed to apply processes limit")?;
             }
             box_cgroup
-                .add_process(pid)
+                .add_process(pid.as_raw())
                 .context("Failed to move the child to user cgroup")?;
 
             let start_time = Instant::now();
@@ -179,8 +178,7 @@ fn execute_command(
             }
 
             // The child will either exit or trigger SIGTRAP due to ptrace
-            let wait_status =
-                wait::waitpid(Pid::from_raw(pid), None).context("Failed to waitpid for process")?;
+            let wait_status = wait::waitpid(pid, None).context("Failed to waitpid for process")?;
 
             match wait_status {
                 wait::WaitStatus::Exited(_, _) => {
@@ -199,11 +197,9 @@ fn execute_command(
                 }
             }
 
-            // execve has happened--setup the child and detach. We could, perhaps, keep ourselves
-            // attached to the child, but we prefer seccomp to ptrace as it's less intrusive, more
-            // performant and easier to use in an asynchronous context.
-            ptrace::detach(Pid::from_raw(pid), None)
-                .context("Failed to ptrace-detach from child")?;
+            // execve has just happened
+            let traced_process = tracing::StartingProcess::new(pid);
+            traced_process.resume()?;
 
             // Listen for events
             use nix::sys::epoll::*;
@@ -212,7 +208,7 @@ fn execute_command(
             epoll_ctl(
                 epollfd.as_raw_fd(),
                 EpollOp::EpollCtlAdd,
-                pidfd.as_raw_fd(),
+                sigfd.as_raw_fd(),
                 &mut EpollEvent::new(EpollFlags::EPOLLIN, 0),
             )
             .context("Failed to configure epoll")?;
@@ -233,6 +229,7 @@ fn execute_command(
             };
 
             let mut exitted = false;
+            let mut wait_status = wait::WaitStatus::StillAlive;
 
             loop {
                 let cpu_stats = box_cgroup.get_cpu_stats()?;
@@ -333,9 +330,25 @@ fn execute_command(
                         // on the next iteration of the loop
                     }
                     1 => {
-                        // pidfd fired -- the process has terminated. We will exit on the next
+                        // pidfd fired. If the process has terminated, we want to exit on the next
                         // iteration, right after collecting metrics
-                        exitted = true;
+                        sigfd.read_signal().context("Failed to read signal")?;
+
+                        loop {
+                            wait_status = wait::waitpid(pid, Some(wait::WaitPidFlag::WNOHANG))
+                                .context("Failed to waitpid for process")?;
+
+                            match wait_status {
+                                wait::WaitStatus::StillAlive => break,
+                                wait::WaitStatus::Stopped(_, signal) => {
+                                    traced_process.resume_signal(signal)?;
+                                }
+                                _ => {
+                                    exitted = true;
+                                    break;
+                                }
+                            }
+                        }
                     }
                     _ => {
                         return Err(std::io::Error::last_os_error())
@@ -370,9 +383,6 @@ fn execute_command(
             let mut exit_code: i32 = -1;
 
             if exitted {
-                let wait_status = wait::waitpid(Pid::from_raw(pid), None)
-                    .context("Failed to waitpid for process")?;
-
                 if let wait::WaitStatus::Signaled(_, signal::Signal::SIGPROF, _) = wait_status {
                     limit_verdict = "CPUTimeLimitExceeded";
                 }
@@ -474,15 +484,6 @@ fn executor_worker(
         // Fine to start the application now. We don't need to reset signals because we didn't
         // configure them inside executor_worker()
 
-        // > let's give users a way to disable rdtsc
-        // > users disable rdtsc
-        // > glibc calls clock_gettime on start
-        // > vDSO uses rdtsc
-        // > SIGSEGV
-        // > *surprised pikachu*
-        // ...and this is why we need to disable vDSO. But we don't want to do that globally, so
-        // there's a bit of mangling with ptrace to achieve a similar effect by forcing libc to
-        // believe vDSO is unavailable by overriding AT_SYSINFO_EHDR.
         ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
 
         if is_absolute_path {
