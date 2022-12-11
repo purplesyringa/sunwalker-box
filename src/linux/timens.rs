@@ -62,3 +62,11 @@ impl TimeNsController {
         Ok(())
     }
 }
+
+pub fn disable_rdtsc() -> Result<()> {
+    // TSC is (who would guess?) monotonic
+    if unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) } != 0 {
+        Err(std::io::Error::last_os_error()).context("prctl(PR_SET_TSC) failed")?;
+    }
+    Ok(())
+}

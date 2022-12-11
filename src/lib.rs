@@ -20,6 +20,7 @@ mod linux {
     mod procs;
     mod reaper;
     mod rootfs;
+    mod running;
     mod sandbox;
     mod system;
     mod timens;

@@ -316,6 +316,14 @@ impl BoxCgroup {
     pub fn destroy(mut self) -> Result<()> {
         self._destroy()
     }
+
+    pub fn kill(&mut self) -> Result<()> {
+        kill_cgroup(
+            &self.proc_cgroup_fd,
+            format!("box-{}", self.box_id).as_ref(),
+        )
+        .context("Failed to kill user cgroup")
+    }
 }
 
 impl Drop for BoxCgroup {

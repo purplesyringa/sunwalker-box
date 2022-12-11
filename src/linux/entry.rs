@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, controller, manager, rootfs, sandbox},
+    linux::{cgroups, controller, manager, rootfs, running, sandbox},
 };
 use anyhow::{bail, Context, Result};
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
@@ -286,15 +286,17 @@ fn handle_command(
             };
 
             controller.run_manager_command(manager::Command::Run {
-                argv,
-                stdin,
-                stdout,
-                stderr,
-                real_time_limit,
-                cpu_time_limit,
-                idleness_time_limit,
-                memory_limit,
-                processes_limit,
+                options: running::Options {
+                    argv,
+                    stdin,
+                    stdout,
+                    stderr,
+                    real_time_limit,
+                    cpu_time_limit,
+                    idleness_time_limit,
+                    memory_limit,
+                    processes_limit,
+                },
             })
         }
         _ => {
