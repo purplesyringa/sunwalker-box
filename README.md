@@ -26,7 +26,7 @@ Install rustc nightly and use
 $ make
 ```
 
-This generates a `sunwalker_box` executable in the current directory. The executable is statically linked and relatively small (around a megabyte, and smaller in compressed form), so it can be copied to any Linux machine and run without requiring any additional libraries or dependencies.
+This generates a `sunwalker_box` executable in the current directory. The executable is statically linked and relatively small (around half a megabyte, and smaller in compressed form), so it can be copied to any Linux machine and run without requiring any additional libraries or dependencies.
 
 
 ## Using
