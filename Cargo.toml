@@ -10,7 +10,7 @@ description = "Sandbox for sunwalker judge system"
 
 [dependencies]
 anyhow = "1.0"
-clap = { version = "3.1.6", features = ["derive"] }
+argh = "0.1.9"
 interfaces = "0.0.8"
 json = "0.12.4"
 multiprocessing = { path = "multiprocessing" }

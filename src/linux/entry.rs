@@ -12,11 +12,11 @@ pub fn main(cli_args: entry::CLIArgs) {
     sandbox::sanity_checks().expect("Sanity checks failed");
 
     match cli_args.command {
-        entry::CLICommand::Isolate { core } => {
-            cgroups::Cgroup::new(core).expect("Failed to create cgroup for core");
+        entry::CLICommand::Isolate(command) => {
+            cgroups::Cgroup::new(command.core).expect("Failed to create cgroup for core");
         }
-        entry::CLICommand::Free { core } => {
-            cgroups::revert_core_isolation(core).expect("Failed to core revert isolation");
+        entry::CLICommand::Free(command) => {
+            cgroups::revert_core_isolation(command.core).expect("Failed to core revert isolation");
         }
         entry::CLICommand::Start(command) => {
             start(command).expect("Failed to start box");

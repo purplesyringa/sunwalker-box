@@ -1,59 +1,67 @@
-use clap::{Args, Parser, Subcommand};
+use argh::FromArgs;
 use multiprocessing::Object;
 
-#[derive(Parser)]
-#[clap(author, version, about, long_about = None)]
+#[derive(FromArgs)]
+/// Sandbox for sunwalker judge system
 pub struct CLIArgs {
-    #[clap(subcommand)]
+    #[argh(subcommand)]
     pub command: CLICommand,
 }
 
-#[derive(Subcommand)]
+#[derive(FromArgs)]
+#[argh(subcommand)]
 pub enum CLICommand {
-    /// Isolates a CPU core so that a box can use it
-    Isolate {
-        /// CPU core number, 0-indexed
-        #[clap(short, long)]
-        core: u64,
-    },
-
-    /// Reverts CPU core isolation and returns it to the OS
-    Free {
-        /// CPU core number, 0-indexed
-        #[clap(short, long)]
-        core: u64,
-    },
-
-    /// Starts a new box
+    Isolate(CLIIsolateCommand),
+    Free(CLIFreeCommand),
     Start(CLIStartCommand),
 }
 
-#[derive(Args, Object)]
+#[derive(FromArgs)]
+/// Isolates a CPU core so that a box can use it
+#[argh(subcommand, name = "isolate")]
+pub struct CLIIsolateCommand {
+    /// CPU core number, 0-indexed
+    #[argh(option, short = 'c')]
+    pub core: u64,
+}
+
+#[derive(FromArgs)]
+/// Reverts CPU core isolation and returns it to the OS
+#[argh(subcommand, name = "free")]
+pub struct CLIFreeCommand {
+    /// CPU core number, 0-indexed
+    #[argh(option, short = 'c')]
+    pub core: u64,
+}
+
+#[derive(FromArgs, Object)]
+/// Starts a new box
+#[argh(subcommand, name = "start")]
 pub struct CLIStartCommand {
-    /// What core the box uses, 0-indexed
-    #[clap(short, long)]
+    /// what core the box uses, 0-indexed
+    #[argh(option, short = 'c')]
     pub core: u64,
 
-    /// Directory to use as new root environment
-    #[clap(short, long, default_value = "/", value_name = "PATH")]
+    /// directory to use as new root environment
+    #[argh(option, short = 'r', default = "\"/\".to_string()")]
     pub root: String,
 
-    /// How much disk space the box may use
-    #[clap(long, default_value_t = 32 * 1024 * 1024, value_name = "BYTES")]
+    /// how much disk space the box may use, in bytes
+    #[argh(option, default = "32 * 1024 * 1024")]
     pub quota_space: u64,
 
-    /// How many inodes the box may use
-    #[clap(long, default_value_t = 1024, value_name = "INODES")]
+    /// how many inodes the box may use
+    #[argh(option, default = "1024")]
     pub quota_inodes: u64,
 
-    /// (insecure) Don't abort preemptively if a non-CLOEXEC file descriptor is found. This should
+    /// insecure: don't abort preemptively if a non-CLOEXEC file descriptor is found. This should
     /// only be used for benchmarking.
-    #[clap(long)]
+    #[argh(switch)]
     pub ignore_non_cloexec: bool,
 }
 
 #[cfg(target_os = "linux")]
 pub fn main() {
-    let cli_args = CLIArgs::parse();
+    let cli_args = argh::from_env();
     crate::linux::entry::main(cli_args);
 }
