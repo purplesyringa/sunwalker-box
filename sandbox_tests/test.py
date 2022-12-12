@@ -16,6 +16,24 @@ import yaml
 
 CORE = 1
 
+DEFAULT_ENV = {
+    "LD_LIBRARY_PATH": "/usr/local/lib64:/usr/local/lib:/usr/lib64:/usr/lib:/lib64:/lib",
+    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "LANGUAGE": "en_US",
+    "LC_ALL": "en_US.UTF-8",
+    "LC_ADDRESS": "en_US.UTF-8",
+    "LC_NAME": "en_US.UTF-8",
+    "LC_MONETARY": "en_US.UTF-8",
+    "LC_PAPER": "en_US.UTF-8",
+    "LC_IDENTIFIER": "en_US.UTF-8",
+    "LC_TELEPHONE": "en_US.UTF-8",
+    "LC_MEASUREMENT": "en_US.UTF-8",
+    "LC_TIME": "en_US.UTF-8",
+    "LC_NUMERIC": "en_US.UTF-8",
+    "LANG": "en_US.UTF-8"
+}
+
+
 sunwalker_prefix = []
 
 
@@ -164,7 +182,23 @@ def create_dirs(structure: dict[str, ...], dir: str):
 
 
 class SimpleTest(Test):
-    def __init__(self, slug: str, description: str, runs: int = 1, pass_run_number: bool = False, assets: dict[str, str] = {}, root: Optional[dict[str, ...]] = None, preexec: list[str] = [], static: bool = False, outer_env: dict[str, str] = {}, env: dict[str, str] = {}, quotas: dict[str, ...] = {}, input: Optional[str] = None, expect: dict[str, ...] = {}, limits: dict[str, ...] = {}):
+    def __init__(
+        self,
+        slug: str,
+        description: str,
+        runs: int = 1,
+        pass_run_number: bool = False,
+        assets: dict[str, str] = {},
+        root: Optional[dict[str, ...]] = None,
+        preexec: list[str] = [],
+        static: bool = False,
+        outer_env: dict[str, str] = {},
+        env: dict[str, str] = DEFAULT_ENV,
+        quotas: dict[str, ...] = {},
+        input: Optional[str] = None,
+        expect: dict[str, ...] = {},
+        limits: dict[str, ...] = {}
+    ):
         self.slug = slug
         self.description = description
         self.runs = runs
