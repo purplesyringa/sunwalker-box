@@ -82,6 +82,7 @@ The command `run` starts a process inside the sandbox. It takes a JSON object wi
 - `idleness_time_limit` (optional) -- how much time the program may spend in iowait in total, in seconds, e.g. `"idleness_time_limit": 1.0`.
 - `memory_limit` (optional) -- how much RAM the program may use, in bytes, e.g. `"memory_limit": 128000000`.
 - `processes_limit` (optional) -- how many processes the program may start at once (including itself), e.g. `"processes_limit": 64`. Must be positive.
+- `env` (optional) -- the new environment of the process as a string-to-string dictionary. If missing, environment variables are inherited. If passed, all old environment variables are deleted.
 
 To prevent DOS, `cpu_time_limit` and `processes_limit` must necessarily be set. Setting `real_time_limit` and/or `idleness_time_limit` is also recommended, but not strictly necessary, e.g. if you kill the box on timeout manually.
 

@@ -76,35 +76,6 @@ impl Controller {
         Ok(())
     }
 
-    pub fn apply_environment(&self, env: &[(String, String)]) {
-        for (key, _) in std::env::vars_os() {
-            std::env::remove_var(key);
-        }
-        std::env::set_var(
-            "LD_LIBRARY_PATH",
-            "/usr/local/lib64:/usr/local/lib:/usr/lib64:/usr/lib:/lib64:/lib",
-        );
-        std::env::set_var(
-            "PATH",
-            "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
-        );
-        std::env::set_var("LANGUAGE", "en_US");
-        std::env::set_var("LC_ALL", "en_US.UTF-8");
-        std::env::set_var("LC_ADDRESS", "en_US.UTF-8");
-        std::env::set_var("LC_NAME", "en_US.UTF-8");
-        std::env::set_var("LC_MONETARY", "en_US.UTF-8");
-        std::env::set_var("LC_PAPER", "en_US.UTF-8");
-        std::env::set_var("LC_IDENTIFIER", "en_US.UTF-8");
-        std::env::set_var("LC_TELEPHONE", "en_US.UTF-8");
-        std::env::set_var("LC_MEASUREMENT", "en_US.UTF-8");
-        std::env::set_var("LC_TIME", "en_US.UTF-8");
-        std::env::set_var("LC_NUMERIC", "en_US.UTF-8");
-        std::env::set_var("LANG", "en_US.UTF-8");
-        for (key, value) in env {
-            std::env::set_var(key, value);
-        }
-    }
-
     pub fn start(&mut self, cli_command: entry::CLIStartCommand) -> Result<()> {
         // We need a separate worker to monitor the child (and no, using tokio won't work because then
         // using stdio would require a dedicated thread), but threads can't be created after unsharing

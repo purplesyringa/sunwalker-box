@@ -30,6 +30,7 @@ pub struct Options {
     pub idleness_time_limit: Option<Duration>,
     pub memory_limit: Option<usize>,
     pub processes_limit: Option<usize>,
+    pub env: Option<HashMap<String, String>>,
 }
 
 #[derive(PartialEq, Eq)]
@@ -179,6 +180,7 @@ impl SingleRun<'_> {
         let user_process = executor_worker
             .spawn(
                 self.options.argv.clone(),
+                self.options.env.clone(),
                 stdin,
                 stdout,
                 stderr,
@@ -641,6 +643,7 @@ impl SingleRun<'_> {
 #[multiprocessing::entrypoint]
 fn executor_worker(
     argv: Vec<String>,
+    env: Option<HashMap<String, String>>,
     stdin: std::fs::File,
     stdout: std::fs::File,
     stderr: std::fs::File,
@@ -655,6 +658,15 @@ fn executor_worker(
         timens::disable_rdtsc().context("Failed to disable rdtsc")?;
 
         std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
+
+        if let Some(env) = env {
+            for (key, _) in std::env::vars_os() {
+                std::env::remove_var(key);
+            }
+            for (key, value) in env {
+                std::env::set_var(key, value);
+            }
+        }
 
         nix::unistd::dup2(stdin.as_raw_fd(), libc::STDIN_FILENO)
             .context("dup2 for stdin failed")?;

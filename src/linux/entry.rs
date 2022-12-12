@@ -3,6 +3,7 @@ use crate::{
     linux::{cgroups, controller, manager, rootfs, running, sandbox},
 };
 use anyhow::{bail, Context, Result};
+use std::collections::HashMap;
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::time::Duration;
@@ -32,7 +33,6 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
     let mut controller = controller::Controller::try_new(quotas)?;
     controller.join_core(cli_command.core)?;
     controller.enter_root(cli_command.root.as_ref())?;
-    controller.apply_environment(&cli_command.env);
     controller.start(cli_command)?;
 
     for line in std::io::BufReader::new(std::io::stdin()).lines() {
@@ -285,6 +285,18 @@ fn handle_command(
                 )
             };
 
+            let mut env = None;
+            if !arg["env"].is_null() {
+                let mut env1 = HashMap::with_capacity(arg["env"].len());
+                for (key, value) in arg["env"].entries_mut() {
+                    env1.insert(
+                        key.to_string(),
+                        value.take_string().context("Invalid 'env' argument")?,
+                    );
+                }
+                env = Some(env1);
+            }
+
             controller.run_manager_command(manager::Command::Run {
                 options: running::Options {
                     argv,
@@ -296,6 +308,7 @@ fn handle_command(
                     idleness_time_limit,
                     memory_limit,
                     processes_limit,
+                    env,
                 },
             })
         }

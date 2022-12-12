@@ -1,21 +1,5 @@
-use anyhow::Result;
 use clap::{Args, Parser, Subcommand};
 use multiprocessing::Object;
-use std::error::Error;
-use std::str::FromStr;
-
-fn parse_key_val<T, U>(s: &str) -> Result<(T, U), Box<dyn Error + Send + Sync>>
-where
-    T: FromStr,
-    T::Err: Error + Send + Sync + 'static,
-    U: FromStr,
-    U::Err: Error + Send + Sync + 'static,
-{
-    let pos = s
-        .find('=')
-        .ok_or_else(|| format!("invalid KEY=value: no `=` found in `{s}`"))?;
-    Ok((s[..pos].parse()?, s[pos + 1..].parse()?))
-}
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -61,10 +45,6 @@ pub struct CLIStartCommand {
     /// How many inodes the box may use
     #[clap(long, default_value_t = 1024, value_name = "INODES")]
     pub quota_inodes: u64,
-
-    /// Environment variables
-    #[clap(short = 'E', long, parse(try_from_str = parse_key_val), number_of_values = 1)]
-    pub env: Vec<(String, String)>,
 
     /// (insecure) Don't abort preemptively if a non-CLOEXEC file descriptor is found. This should
     /// only be used for benchmarking.

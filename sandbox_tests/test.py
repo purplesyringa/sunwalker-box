@@ -116,7 +116,8 @@ class Box:
         cpu_time_limit: Optional[float] = None,
         idleness_time_limit: Optional[float] = None,
         memory_limit: Optional[int] = None,
-        processes_limit: Optional[int] = None
+        processes_limit: Optional[int] = None,
+        env: dict[str, str] = None
     ) -> dict[str, ...]:
         return self.cmd("run", {
             "argv": argv,
@@ -127,7 +128,8 @@ class Box:
             "cpu_time_limit": cpu_time_limit,
             "idleness_time_limit": idleness_time_limit,
             "memory_limit": memory_limit,
-            "processes_limit": processes_limit
+            "processes_limit": processes_limit,
+            "env": env
         })
 
 
@@ -206,8 +208,6 @@ class SimpleTest(Test):
             opts += ["--quota-space", str(self.quotas["space"])]
         if "inodes" in self.quotas:
             opts += ["--quota-inodes", str(self.quotas["inodes"])]
-        for key, value in self.env.items():
-            opts += ["-E", f"{key}={value}"]
         for key, value in self.outer_env.items():
             os.environ[key] = value
         if self.root is not None:
@@ -282,6 +282,7 @@ class SimpleTest(Test):
                     stdin=stdin,
                     stdout="/space/stdout.txt",
                     stderr="/space/stderr.txt",
+                    env=self.env,
                     **limits
                 )
 
