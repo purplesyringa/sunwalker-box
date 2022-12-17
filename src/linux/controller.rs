@@ -166,10 +166,9 @@ impl Controller {
     }
 
     pub fn bind(&mut self, external: &str, internal: &str, ro: bool) -> Result<()> {
-        system::bind_mount(
-            rootfs::resolve_abs_old_root(external)?,
-            rootfs::resolve_abs_box_root(internal)?,
-        )?;
+        let internal_abs = rootfs::resolve_abs_box_root(internal)?;
+        system::bind_mount(rootfs::resolve_abs_old_root(external)?, &internal_abs)?;
+        system::change_propagation(internal_abs, system::MS_PRIVATE)?; // linux@d29216842a85
         if ro {
             self.run_manager_command(manager::Command::RemountReadonly {
                 path: internal.to_string(),
