@@ -562,6 +562,33 @@ impl SingleRun<'_> {
         res
     }
 
+    fn cleanup(&mut self) -> Result<()> {
+        self.box_cgroup
+            .as_mut()
+            .unwrap()
+            .kill()
+            .context("Failed to kill user cgroup")?;
+
+        // We don't really care what happens after, but we have to waitpid() anyway
+        loop {
+            match wait::waitpid(None, Some(wait::WaitPidFlag::__WALL)) {
+                Ok(wait_status) => {
+                    self.handle_event(wait_status)?;
+                }
+                Err(errno::Errno::ECHILD) => break,
+                Err(e) => Err(e).context("Failed to waitpid")?,
+            }
+        }
+
+        self.box_cgroup
+            .take()
+            .unwrap()
+            .destroy()
+            .context("Failed to destroy user cgroup")?;
+
+        Ok(())
+    }
+
     pub fn run(&mut self) -> Result<()> {
         self.runner
             .timens_controller
@@ -613,28 +640,7 @@ impl SingleRun<'_> {
 
         self.results.verdict = self.compute_verdict(wait_status)?;
 
-        self.box_cgroup
-            .as_mut()
-            .unwrap()
-            .kill()
-            .context("Failed to kill user cgroup")?;
-
-        // We don't really care what happens after, but we have to waitpid() anyway
-        loop {
-            match wait::waitpid(None, Some(wait::WaitPidFlag::__WALL)) {
-                Ok(wait_status) => {
-                    self.handle_event(wait_status)?;
-                }
-                Err(errno::Errno::ECHILD) => break,
-                Err(e) => Err(e).context("Failed to waitpid")?,
-            }
-        }
-
-        self.box_cgroup
-            .take()
-            .unwrap()
-            .destroy()
-            .context("Failed to destroy user cgroup")?;
+        self.cleanup()?;
 
         Ok(())
     }
