@@ -132,6 +132,12 @@ fn handle_command(
                 bail!("The passed path does not refer to a regular file");
             }
             let file_len = metadata.len().try_into().context("Too big file")?;
+            if file_len == 0 && len == 0 && at == 0 {
+                // Might be a special file
+                let mut buf = vec![];
+                file.read_to_end(&mut buf)?;
+                return Ok(Some(json::stringify(buf)));
+            }
             if at > file_len {
                 bail!("Offset after end of file");
             }
