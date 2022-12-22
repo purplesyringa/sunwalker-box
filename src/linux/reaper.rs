@@ -1,12 +1,12 @@
 use crate::{
     entry,
-    linux::{cgroups, manager, procs},
+    linux::{cgroups, ipc, manager, procs},
 };
 use anyhow::{Context, Result};
 use multiprocessing::Object;
 use nix::{
     libc,
-    libc::{c_int, PR_SET_PDEATHSIG, SIGUSR1},
+    libc::{c_int, pid_t, PR_SET_PDEATHSIG, SIGUSR1},
     sys::{signal, wait},
 };
 use std::os::unix::io::{AsRawFd, OwnedFd, RawFd};
@@ -20,6 +20,7 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
 
 #[derive(Object)]
 pub enum Command {
+    Init,
     Reset,
 }
 
@@ -153,6 +154,7 @@ pub fn reaper(
                         .recv()
                         .expect("Failed to read command")
                         .expect("No command received"),
+                    child.id(),
                 );
                 let result = result.map_err(|e| format!("{e:?}"));
                 reaper_channel
@@ -198,10 +200,22 @@ pub fn reaper(
     std::process::exit(0)
 }
 
-fn execute_command(command: Command) -> Result<Option<String>> {
+fn execute_command(command: Command, child_pid: pid_t) -> Result<Option<String>> {
     match command {
+        Command::Init => {
+            ipc::join_process_ipc_namespace(child_pid).context("Failed to join manager's ipcns")?;
+
+            // Mounting /dev/mqueue has to happen a) inside ipcns, b) outside userns. We also don't
+            // want to pass fds back and forth, so the reaper is the only reasonable place to do
+            // this.
+            ipc::mount_mqueue("/newroot/dev/mqueue")
+                .context("Failed to mount /newroot/dev/mqueue")?;
+
+            Ok(None)
+        }
         Command::Reset => {
             procs::reset_pidns().context("Failed to reset pidns")?;
+            ipc::reset().context("Failed to reset IPC namespace")?;
             Ok(None)
         }
     }

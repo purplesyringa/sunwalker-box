@@ -107,10 +107,7 @@ impl Controller {
         // automatically.
         let pidfd = unsafe { libc::syscall(SYS_pidfd_open, nix::unistd::getpid(), 0) } as RawFd;
         if pidfd == -1 {
-            panic!(
-                "Failed to get pidfd of self: {}",
-                std::io::Error::last_os_error()
-            );
+            return Err(std::io::Error::last_os_error()).context("Failed to get pidfd of self");
         }
         let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
 
@@ -136,6 +133,8 @@ impl Controller {
         self.reaper_channel = Some(reaper_ours);
         self.manager_channel = Some(manager_ours);
 
+        self.run_reaper_command(reaper::Command::Init)?;
+
         // It's a bit weird, but there's stuff that's slightly wrong after initialization, like
         // pidns in an uncertain state or (more importantly) non-existent rootfs.
         self.reset()?;
@@ -158,8 +157,6 @@ impl Controller {
             &self.quotas,
         )
         .context("Failed to reset rootfs")?;
-
-        // TODO: timens & rdtsc
 
         self.run_reaper_command(reaper::Command::Reset)?;
         Ok(())

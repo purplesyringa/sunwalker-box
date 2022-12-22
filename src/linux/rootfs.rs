@@ -148,7 +148,7 @@ pub fn enter_rootfs() -> Result<()> {
 }
 
 pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
-    // Unmount all non-whitelisted mounts. Except for /proc/*, which is a nightmare.
+    // Unmount all non-whitelisted mounts. Except for /proc/*, which is a nightmare, and /dev/mqueue.
     let mut mount_points: HashMap<&str, usize> = HashMap::new();
     for (path, count) in &state.mount_points {
         mount_points.insert(path, *count);
@@ -156,7 +156,10 @@ pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
     let mut paths_to_umount: Vec<&str> = Vec::new();
     let current_mounts = list_child_mounts("/newroot/")?;
     for path in &current_mounts {
-        if path != "/newroot/proc" && !path.starts_with("/newroot/proc/") {
+        if path != "/newroot/proc"
+            && !path.starts_with("/newroot/proc/")
+            && path != "/newroot/dev/mqueue"
+        {
             let entry = mount_points.entry(path).or_insert(0);
             if *entry <= 0 {
                 paths_to_umount.push(path);

@@ -20,7 +20,7 @@ Finally, sandboxes seldom prioritize efficiency. We can do much better than recr
 
 ## Building
 
-Install rustc nightly and use
+Install rustc nightly, `gem install seccomp-tools`, and use
 
 ```shell
 $ make

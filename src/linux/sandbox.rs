@@ -2,10 +2,8 @@ use crate::linux::system;
 use anyhow::{bail, Context, Result};
 use nix::{
     libc,
-    libc::{c_char, c_int, CLONE_NEWIPC, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM},
+    libc::{c_char, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM},
 };
-use std::io::BufRead;
-use std::os::unix::fs::PermissionsExt;
 
 pub fn sanity_checks() -> Result<()> {
     // suid_dumpable = 1 means PR_SET_DUMPABLE does not trigger automatically on setuid, which is
@@ -43,7 +41,7 @@ pub fn sanity_checks() -> Result<()> {
 }
 
 pub fn unshare_persistent_namespaces() -> Result<()> {
-    if unsafe { libc::unshare(CLONE_NEWIPC | CLONE_NEWUTS | CLONE_SYSVSEM | CLONE_NEWNET) } != 0 {
+    if unsafe { libc::unshare(CLONE_NEWUTS | CLONE_SYSVSEM | CLONE_NEWNET) } != 0 {
         return Err(std::io::Error::last_os_error()).context("Failed to unshare namespaces");
     }
 
@@ -92,66 +90,7 @@ pub fn unshare_persistent_namespaces() -> Result<()> {
     Ok(())
 }
 
-pub fn reset_sysv_set(name: &str, long_name: &str, remover: fn(c_int) -> c_int) -> Result<()> {
-    // Delete all message queues/semaphore sets/shared memory segments
-    let path = format!("/proc/sysvipc/{name}");
-
-    let file = std::fs::File::open(&path).with_context(|| format!("Failed to open {path}"))?;
-
-    let mut ids: Vec<c_int> = Vec::new();
-
-    // Skip header
-    for line in std::io::BufReader::new(file).lines().skip(1) {
-        let line = line.with_context(|| format!("Failed to read {path}"))?;
-        let mut it = line.trim().split_ascii_whitespace();
-
-        it.next()
-            .with_context(|| format!("Invalid format of {path}"))?;
-
-        let id = it
-            .next()
-            .with_context(|| format!("Invalid format of {path}"))?
-            .parse()
-            .with_context(|| format!("Invalid format of id in {path}"))?;
-
-        ids.push(id);
-    }
-
-    for id in ids {
-        if remover(id) == -1 {
-            return Err(std::io::Error::last_os_error())
-                .with_context(|| format!("Failed to delete System V {long_name} #{id}"));
-        }
-    }
-
-    Ok(())
-}
-
 pub fn reset_persistent_namespaces() -> Result<()> {
-    // IPC namespace. This is critical to clean up correctly, because creating an IPC namespace in
-    // the kernel is terribly slow, and *deleting* it actually happens asynchronously. This
-    // basically means that if we create and drop IPC namespaces quickly enough, the deleting queue
-    // will overflow and we won't be able to do any IPC operation (including creation of an IPC
-    // namespace) for a while--something to avoid at all costs.
-
-    // Clean up System V message queues
-    reset_sysv_set("msg", "message queue", |id| unsafe {
-        libc::msgctl(id, libc::IPC_RMID, std::ptr::null_mut())
-    })?;
-    reset_sysv_set("sem", "semaphore set", |id| unsafe {
-        libc::semctl(id, 0, libc::IPC_RMID)
-    })?;
-    reset_sysv_set("shm", "shared memory segment", |id| unsafe {
-        libc::shmctl(id, libc::IPC_RMID, std::ptr::null_mut())
-    })?;
-
-    // POSIX message queues are stored in /dev/mqueue as files, which we can simply unlink.
-    for entry in std::fs::read_dir("/dev/mqueue").context("Failed to readdir /dev/mqueue")? {
-        let entry = entry.context("Failed to readdir /dev/mqueue")?;
-        std::fs::remove_file(entry.path())
-            .with_context(|| format!("Failed to rm {:?}", entry.path()))?;
-    }
-
     // Network namespaces are devised to isolate every network device the server has access to from
     // the programs, so we only really need to care about information stored by the kernel
     // internally. This includes statistics, which we nullify by bringing lo down, port occupation
@@ -235,16 +174,6 @@ pub fn create_dev_copy() -> Result<()> {
             .with_context(|| format!("Bind-mounting {source} to {target} failed"))?;
     }
 
-    // Mount /dev/mqueue. This has to happen inside the IPC namespace, because mqueuefs is attached
-    // to the namespace of the process that mounted it, and this has to happen before unsharing
-    // userns because mqueuefs can only be mounted by real root.
-    std::fs::create_dir("/dev/mqueue").context("Failed to mkdir /dev/mqueue")?;
-    system::mount("mqueue", "/dev/mqueue", "mqueue", 0, None)
-        .context("Failed to mount mqueue on /dev/mqueue")?;
-    // rwxrwxrwt
-    std::fs::set_permissions("/dev/mqueue", std::fs::Permissions::from_mode(0o1777))
-        .context("Failed to make /mqueue dev/world-writable")?;
-
     // Mount /dev/{pts,ptmx}
     std::fs::create_dir("/dev/pts").context("Failed to mkdir /dev/pts")?;
     system::mount(
@@ -260,8 +189,9 @@ pub fn create_dev_copy() -> Result<()> {
     system::bind_mount("/dev/pts/ptmx", "/dev/ptmx")
         .context("Failed to bind-mount /dev/pts/ptmx to /dev/ptmx")?;
 
-    // This directory will be mounted onto later
+    // These directories will be mounted onto later
     std::fs::create_dir("/dev/shm").context("Failed to mkdir /dev/shm")?;
+    std::fs::create_dir("/dev/mqueue").context("Failed to mkdir /dev/mqueue")?;
 
     Ok(())
 }

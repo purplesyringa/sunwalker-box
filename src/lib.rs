@@ -15,6 +15,7 @@ mod linux {
     mod controller;
     pub mod entry;
     mod ids;
+    mod ipc;
     mod manager;
     mod mountns;
     mod procs;

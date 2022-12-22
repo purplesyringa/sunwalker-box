@@ -1,4 +1,4 @@
-use crate::linux::{cgroups, rootfs, timens, tracing, userns};
+use crate::linux::{cgroups, ipc, rootfs, timens, tracing, userns};
 use anyhow::{bail, Context, Result};
 use multiprocessing::Object;
 use nix::{
@@ -55,6 +55,7 @@ pub struct RunResults {
 enum ProcessState {
     JustStarted,
     Alive,
+    EmulateSyscall(i64),
 }
 
 struct ProcessInfo {
@@ -71,6 +72,9 @@ struct SingleRun<'a> {
     start_time: Option<Instant>,
     processes: HashMap<Pid, ProcessInfo>,
     tsc_shift: u64,
+    sem_next_id: isize,
+    msg_next_id: isize,
+    shm_next_id: isize,
 }
 
 impl Runner {
@@ -80,6 +84,9 @@ impl Runner {
         let timens_controller = timens::TimeNsController::new().context("Failed to adjust time")?;
         userns::enter_user_namespace().context("Failed to unshare user namespace")?;
         rootfs::enter_rootfs().context("Failed to enter rootfs")?;
+
+        // Unshare IPC namespace now, so that it is owned by the new userns and can be configured
+        ipc::unshare_ipc_namespace().context("Failed to unshare IPC namespace")?;
 
         // Create signalfd to watch child's state change
         let mut sigset = signal::SigSet::empty();
@@ -127,6 +134,9 @@ impl Runner {
             start_time: None,
             processes: HashMap::new(),
             tsc_shift: rand::random::<u64>(),
+            sem_next_id: 0,
+            msg_next_id: 0,
+            shm_next_id: 0,
         };
         single_run.run()?;
         Ok(single_run.results)
@@ -428,6 +438,90 @@ impl SingleRun<'_> {
         Ok(())
     }
 
+    fn on_seccomp(&mut self, pid: Pid) -> Result<()> {
+        let traced_process = tracing::TracedProcess::new(pid);
+        let syscall_info = traced_process
+            .get_syscall_info()
+            .context("Failed to get syscall info")?;
+        let syscall_info = unsafe { syscall_info.u.seccomp };
+
+        match syscall_info.nr as i64 {
+            // We could theoretically let next_id stay 0 forever, but the present implementation
+            // mirrors the original behavior and might be somewhat more efficient.
+            //
+            // We execute the syscall in this process rather than continue execution to prevent the
+            // following TOCTOU attack:
+            // - Process A calls msgget()
+            // - Tracer intercepts msgget() and sets msg_next_id on behalf of A
+            // - Process B SIGSTOPs A
+            // - Tracer resumes A
+            // - Process B calls msgget()
+            // - Tracer intercepts msgget(), sets msg_next_id on behalf of B, and resumes B
+            // - Process B executes the msgget() syscall, resetting msg_next_id to -1
+            // - Process B SIGCONTs A
+            // - Process A executes the msgget() syscall, but msg_next_id = -1 at the moment
+            libc::SYS_semget => {
+                if ipc::get_next_id("sem")? == -1 {
+                    ipc::set_next_id("sem", self.sem_next_id)?;
+                    self.sem_next_id += 1;
+                }
+                return self.emulate_syscall_result_errno(pid, unsafe {
+                    libc::semget(
+                        syscall_info.args[0] as i32,
+                        syscall_info.args[1] as i32,
+                        syscall_info.args[2] as i32,
+                    )
+                } as i64);
+            }
+            libc::SYS_msgget => {
+                if ipc::get_next_id("msg")? == -1 {
+                    ipc::set_next_id("msg", self.msg_next_id)?;
+                    self.msg_next_id += 1;
+                }
+                return self.emulate_syscall_result_errno(pid, unsafe {
+                    libc::msgget(syscall_info.args[0] as i32, syscall_info.args[1] as i32)
+                } as i64);
+            }
+            libc::SYS_shmget => {
+                if ipc::get_next_id("shm")? == -1 {
+                    ipc::set_next_id("shm", self.shm_next_id)?;
+                    self.shm_next_id += 1;
+                }
+                return self.emulate_syscall_result_errno(pid, unsafe {
+                    libc::shmget(
+                        syscall_info.args[0] as i32,
+                        syscall_info.args[1] as usize,
+                        syscall_info.args[2] as i32,
+                    )
+                } as i64);
+            }
+            _ => {}
+        }
+
+        traced_process.resume()?;
+        Ok(())
+    }
+
+    fn emulate_syscall_result_errno(&mut self, pid: Pid, mut result: i64) -> Result<()> {
+        if result == -1 {
+            result = -errno::errno() as i64;
+        }
+        self.emulate_syscall_result(pid, result)
+    }
+
+    fn emulate_syscall_result(&mut self, pid: Pid, result: i64) -> Result<()> {
+        let Some(process) = self.processes.get_mut(&pid) else {
+            bail!("Unknown process");
+        };
+        let traced_process = tracing::TracedProcess::new(pid);
+        let mut regs = traced_process.get_registers()?;
+        regs.rax = u64::MAX; // skip syscall
+        traced_process.set_registers(regs)?;
+        process.state = ProcessState::EmulateSyscall(result);
+        traced_process.resume_step()?;
+        Ok(())
+    }
+
     fn handle_sigsegv(&self, pid: Pid) -> Result<()> {
         let traced_process = tracing::TracedProcess::new(pid);
 
@@ -491,14 +585,27 @@ impl SingleRun<'_> {
             wait::WaitStatus::Stopped(pid, signal) => {
                 let traced_process = tracing::TracedProcess::new(pid);
 
-                if signal == signal::Signal::SIGSTOP {
-                    if let Some(process) = self.processes.get_mut(&pid) {
-                        if process.state == ProcessState::JustStarted {
-                            process.state = ProcessState::Alive;
-                            self.on_after_fork(pid)?;
-                            traced_process.resume()?;
-                            return Ok(false);
+                if let Some(process) = self.processes.get_mut(&pid) {
+                    match signal {
+                        signal::Signal::SIGSTOP => {
+                            if process.state == ProcessState::JustStarted {
+                                process.state = ProcessState::Alive;
+                                self.on_after_fork(pid)?;
+                                traced_process.resume()?;
+                                return Ok(false);
+                            }
                         }
+                        signal::Signal::SIGTRAP => {
+                            if let ProcessState::EmulateSyscall(ret) = process.state {
+                                process.state = ProcessState::Alive;
+                                let mut regs = traced_process.get_registers()?;
+                                regs.rax = ret as u64;
+                                traced_process.set_registers(regs)?;
+                                traced_process.resume()?;
+                                return Ok(false);
+                            }
+                        }
+                        _ => {}
                     }
                 }
 
@@ -537,6 +644,9 @@ impl SingleRun<'_> {
                         },
                     );
                     self.on_after_execve(pid)?;
+                } else if event == ptrace::Event::PTRACE_EVENT_SECCOMP as i32 {
+                    self.on_seccomp(pid)?;
+                    return Ok(false);
                 }
 
                 traced_process.resume()?;
@@ -657,6 +767,8 @@ fn executor_worker(
     cpu_time_limit: Option<Duration>,
 ) {
     let result: Result<()> = try {
+        tracing::apply_seccomp_filter().context("Failed to apply seccomp filter")?;
+
         userns::drop_privileges().context("Failed to drop privileges")?;
 
         // We want to disable rdtsc. Turns out, ld.so always calls rdtsc when it starts and keeps
