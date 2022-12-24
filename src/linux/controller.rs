@@ -3,7 +3,7 @@ use crate::{
     linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
 };
 use anyhow::{anyhow, bail, Context, Result};
-use nix::{libc, libc::SYS_pidfd_open, sys::signal, unistd::Pid};
+use nix::{libc, libc::SYS_pidfd_open, sys::{signal, resource}, unistd::Pid};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -26,6 +26,10 @@ impl Controller {
         // Isolate various non-important namespaces
         sandbox::unshare_persistent_namespaces()
             .context("Failed to unshare persistent namespaces")?;
+
+        // Core dumps are dangerous if the box dumps in a user-controlled directory. They are incur
+        // a penalty on runtime errors.
+        resource::setrlimit(resource::Resource::RLIMIT_CORE, 0, 0).context("Failed to disable core dumps")?;
 
         Ok(Self {
             quotas,
