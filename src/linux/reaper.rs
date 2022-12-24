@@ -119,7 +119,8 @@ pub fn reaper(
     }
 
     // We don't want to terminate immediately if someone sends Ctrl-C via the controlling terminal,
-    // but instead wait for the parent's termination and quit after that.
+    // but instead wait for the parent's termination and quit after that. This also prevents command
+    // injection via ioctl(TIOCSTI).
     nix::unistd::setsid().expect("Failed to setsid");
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
