@@ -1,6 +1,6 @@
 use crate::linux::ids::*;
 use anyhow::{Context, Result};
-use nix::{libc, libc::CLONE_NEWUSER};
+use nix::{libc, libc::CLONE_NEWUSER, unistd};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
@@ -42,7 +42,7 @@ fn configure_ns(mut rx: multiprocessing::Receiver<()>) {
     )
     .expect("Failed to fill uid_map");
 
-    std::fs::write(format!("/newroot/proc/{ppid}/setgroups"), "deny\n")
+    std::fs::write(format!("/newroot/proc/{ppid}/setgroups"), "allow\n")
         .expect("Failed to fill setgroups");
 
     std::fs::write(
@@ -63,6 +63,8 @@ pub fn drop_privileges() -> Result<()> {
     // in some other cases though, e.g. if we called drop_privileges() in a manager process, because
     // that would allow the child to send SIGSTOP to circumvent time limit, or to send SIGKILL,
     // which would confuse the system.
+    unistd::setgroups(&[unistd::Gid::from_raw(INTERNAL_USER_GID)])
+        .context("Failed to setgroups")?;
     if unsafe { libc::setgid(INTERNAL_USER_GID) } != 0 {
         return Err(std::io::Error::last_os_error()).context("Failed to setgid");
     }
