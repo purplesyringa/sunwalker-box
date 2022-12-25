@@ -161,7 +161,7 @@ pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
             && path != "/newroot/dev/mqueue"
         {
             let entry = mount_points.entry(path).or_insert(0);
-            if *entry <= 0 {
+            if *entry == 0 {
                 paths_to_umount.push(path);
             } else {
                 *entry -= 1;
@@ -244,7 +244,7 @@ fn list_child_mounts(prefix: &str) -> Result<Vec<String>> {
         let mut it = line.split(' ');
         it.next().context("Invalid format of /proc/self/mounts")?;
         let target_path = it.next().context("Invalid format of /proc/self/mounts")?;
-        if target_path.starts_with(&prefix) {
+        if target_path.starts_with(prefix) {
             vec.push(target_path.to_string());
         }
     }
