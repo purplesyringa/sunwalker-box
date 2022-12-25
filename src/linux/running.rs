@@ -4,11 +4,14 @@ use multiprocessing::Object;
 use nix::{
     errno, libc,
     libc::pid_t,
-    sys::{epoll, ptrace, signal, signalfd, wait},
+    sys::{epoll, memfd, ptrace, signal, signalfd, wait},
+    unistd,
     unistd::Pid,
 };
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CStr, CString};
+use std::fs::File;
+use std::io::Write;
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
@@ -17,6 +20,7 @@ pub struct Runner {
     timens_controller: timens::TimeNsController,
     sigfd: signalfd::SignalFd,
     epollfd: OwnedFd,
+    exec_wrapper: File,
 }
 
 #[derive(Object)]
@@ -109,11 +113,25 @@ impl Runner {
         )
         .context("Failed to configure epoll")?;
 
+        let mut exec_wrapper = unsafe {
+            File::from_raw_fd(
+                memfd::memfd_create(
+                    CStr::from_bytes_with_nul_unchecked(b"exec_wrapper\0"),
+                    memfd::MemFdCreateFlag::MFD_CLOEXEC,
+                )
+                .context("Failed to create memfd for exec_wrapper")?,
+            )
+        };
+        exec_wrapper
+            .write_all(include_bytes!("../../target/exec_wrapper"))
+            .context("Failed to fill exec_wrapper memfd")?;
+
         Ok(Runner {
             proc_cgroup,
             timens_controller,
             sigfd,
             epollfd,
+            exec_wrapper,
         })
     }
 
@@ -144,16 +162,15 @@ impl Runner {
 }
 
 impl SingleRun<'_> {
-    fn open_standard_streams(&self) -> Result<[std::fs::File; 3]> {
-        let stdin =
-            std::fs::File::open(&self.options.stdin).context("Failed to open stdin file")?;
-        let stdout = std::fs::File::options()
+    fn open_standard_streams(&self) -> Result<[File; 3]> {
+        let stdin = File::open(&self.options.stdin).context("Failed to open stdin file")?;
+        let stdout = File::options()
             .write(true)
             .create(true)
             .truncate(true)
             .open(&self.options.stdout)
             .context("Failed to open stdout file")?;
-        let stderr = std::fs::File::options()
+        let stderr = File::options()
             .write(true)
             .create(true)
             .truncate(true)
@@ -186,7 +203,7 @@ impl SingleRun<'_> {
         let [stdin, stdout, stderr] = self.open_standard_streams()?;
 
         // Start process, redirecting standard streams and configuring ITIMER_PROF
-        let (mut ours, theirs) = multiprocessing::duplex().context("Failed to create a pipe")?;
+        let (theirs, mut ours) = multiprocessing::channel().context("Failed to create a pipe")?;
         let user_process = executor_worker
             .spawn(
                 self.options.argv.clone(),
@@ -196,31 +213,15 @@ impl SingleRun<'_> {
                 stderr,
                 theirs,
                 self.options.cpu_time_limit,
+                self.runner
+                    .exec_wrapper
+                    .try_clone()
+                    .context("Failed to clone exec_wrapper")?,
             )
             .context("Failed to spawn the child")?;
         self.main_pid = Pid::from_raw(user_process.id());
 
-        // Apply cgroup limits
-        self.create_box_cgroup()?;
-        self.box_cgroup
-            .as_mut()
-            .unwrap()
-            .add_process(self.main_pid.as_raw())
-            .context("Failed to move the child to user cgroup")?;
-
-        // Tell the child it's alright to start
-        if ours.send(&()).is_err() {
-            // This most likely indicates that the child has terminated before having a chance to
-            // wait on the pipe, i.e. a preparation failure
-            bail!(
-                "{}",
-                ours.recv()
-                    .context("Failed to read an error from the child")?
-                    .context("The child terminated preemptively but did not report any error")?
-            );
-        }
-
-        // The child will either exit or trigger SIGTRAP due to ptrace
+        // The child will either exit or trigger SIGTRAP on execve() to exec_wrapper due to ptrace
         let wait_status =
             wait::waitpid(self.main_pid, None).context("Failed to waitpid for process")?;
 
@@ -231,6 +232,36 @@ impl SingleRun<'_> {
                     ours.recv()
                         .context("Failed to read an error from the child")?
                         .context("The child terminated but did not report any error")?
+                );
+            }
+            wait::WaitStatus::Stopped(_, signal::Signal::SIGTRAP) => {}
+            _ => {
+                bail!("waitpid returned unexpected status: {wait_status:?}");
+            }
+        };
+
+        // Apply cgroup limits
+        self.create_box_cgroup()?;
+        self.box_cgroup
+            .as_mut()
+            .unwrap()
+            .add_process(self.main_pid.as_raw())
+            .context("Failed to move the child to user cgroup")?;
+
+        // execve() the real program
+        let traced_process = tracing::TracedProcess::new(self.main_pid);
+        traced_process.resume()?;
+
+        // The child will either exit or trigger SIGTRAP on execve() to the real program
+        let wait_status =
+            wait::waitpid(self.main_pid, None).context("Failed to waitpid for process")?;
+
+        match wait_status {
+            wait::WaitStatus::Exited(_, exit_code) => {
+                let errno = exit_code;
+                bail!(
+                    "Failed to start program with error {}",
+                    std::io::Error::from_raw_os_error(errno)
                 );
             }
             wait::WaitStatus::Stopped(_, signal::Signal::SIGTRAP) => Ok(()),
@@ -700,6 +731,17 @@ impl SingleRun<'_> {
     }
 
     pub fn run(&mut self) -> Result<()> {
+        // This is because no matter however small exec_wrapper is, the kernel is going to
+        // preallocate stack anyway. Moreover, the stack ulimit is silently increased to at least
+        // 128 KiB (ARG_MAX, to be precise), so the memory usage is going to be at least 128 KiB,
+        // at least if the kernel is not patched. In practice, the minimal enforced limit is
+        // slightly higher because of vdso, vvar, and other special pages.
+        if let Some(memory_limit) = self.options.memory_limit {
+            if memory_limit < 43 * 4096 {
+                bail!("Memory limit lower than 172 KiB cannot be enforced");
+            }
+        }
+
         self.runner
             .timens_controller
             .reset_system_time_for_children()
@@ -760,11 +802,12 @@ impl SingleRun<'_> {
 fn executor_worker(
     argv: Vec<String>,
     env: Option<HashMap<String, String>>,
-    stdin: std::fs::File,
-    stdout: std::fs::File,
-    stderr: std::fs::File,
-    mut pipe: multiprocessing::Duplex<String, ()>,
+    stdin: File,
+    stdout: File,
+    stderr: File,
+    mut pipe: multiprocessing::Sender<String>,
     cpu_time_limit: Option<Duration>,
+    exec_wrapper: File,
 ) {
     let result: Result<()> = try {
         tracing::apply_seccomp_filter().context("Failed to apply seccomp filter")?;
@@ -777,27 +820,36 @@ fn executor_worker(
 
         std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
 
-        if let Some(env) = env {
-            for (key, _) in std::env::vars_os() {
-                std::env::remove_var(key);
-            }
-            for (key, value) in env {
-                std::env::set_var(key, value);
-            }
-        }
+        unistd::dup2(stdin.as_raw_fd(), libc::STDIN_FILENO).context("dup2 for stdin failed")?;
+        unistd::dup2(stdout.as_raw_fd(), libc::STDOUT_FILENO).context("dup2 for stdout failed")?;
+        unistd::dup2(stderr.as_raw_fd(), libc::STDERR_FILENO).context("dup2 for stderr failed")?;
 
-        nix::unistd::dup2(stdin.as_raw_fd(), libc::STDIN_FILENO)
-            .context("dup2 for stdin failed")?;
-        nix::unistd::dup2(stdout.as_raw_fd(), libc::STDOUT_FILENO)
-            .context("dup2 for stdout failed")?;
-        nix::unistd::dup2(stderr.as_raw_fd(), libc::STDERR_FILENO)
-            .context("dup2 for stderr failed")?;
-
-        let is_absolute_path = argv[0].contains('/');
-
-        let mut args = Vec::with_capacity(argv.len());
+        let mut args = Vec::with_capacity(argv.len() + 1);
+        args.push(CString::new("exec_wrapper")?);
         for arg in argv {
             args.push(CString::new(arg.into_bytes()).context("Argument contains null character")?);
+        }
+
+        let mut envp;
+        match env {
+            Some(env) => {
+                envp = Vec::with_capacity(env.len());
+                for (name, value) in env {
+                    envp.push(
+                        CString::new(format!("{name}={value}").into_bytes())
+                            .context("Environment variable contains null character")?,
+                    );
+                }
+            }
+            None => {
+                envp = Vec::new();
+                for (name, value) in std::env::vars() {
+                    envp.push(
+                        CString::new(format!("{name}={value}").into_bytes())
+                            .context("Environment variable contains null character")?,
+                    );
+                }
+            }
         }
 
         if let Some(cpu_time_limit) = cpu_time_limit {
@@ -829,20 +881,17 @@ fn executor_worker(
             }
         }
 
-        pipe.recv()
-            .context("Failed to await confirmation from master process")?
-            .context("No confirmation from master process")?;
-
-        // Fine to start the application now. We don't need to reset signals because we didn't
-        // configure them inside executor_worker()
-
         ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
 
-        if is_absolute_path {
-            nix::unistd::execv(&args[0], &args).context("execv failed")?;
-        } else {
-            nix::unistd::execvp(&args[0], &args).context("execvp failed")?;
-        }
+        // We don't need to reset signals because we didn't configure them inside executor_worker()
+
+        // If we executed the user program directly, we wouldn't be able to catch the right moment
+        // to add the process to the cgroup. If we did that too early, sunwalker's memory usage
+        // would be included. If we did that too late, the kernel might have loaded too big an
+        // executable to memory already. Instead, we load a dummy executable that's only going to
+        // use a tiny bit of memory (at most 172 KiB in practice), enforce the limits, and then let
+        // the dummy execute the user program.
+        unistd::fexecve(exec_wrapper.as_raw_fd(), &args, &envp).context("execv failed")?;
     };
 
     if let Err(e) = result {
