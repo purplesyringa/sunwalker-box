@@ -2,7 +2,7 @@
 
 This is a sandbox for running untrusted programs completely isolated, primarily for competitive programming competitions. This sandbox is used by sunwalker, but may just as well be used for your projects.
 
-Licensed under GPL 3.0 or (at your option) any later version.
+Licensed under Apache 2.0.
 
 
 ## Why sunwalker-box?
