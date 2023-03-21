@@ -346,7 +346,14 @@ pub fn revert_core_isolation(core: u64) -> Result<()> {
 fn chown_cgroup(dir: &openat::Dir, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let uid = uid.map(nix::unistd::Uid::from_raw);
     let gid = gid.map(nix::unistd::Gid::from_raw);
-    nix::unistd::fchown(dir.as_raw_fd(), uid, gid).context("Failed to chown <cgroup>")?;
+    nix::unistd::fchownat(
+        Some(dir.as_raw_fd()),
+        ".",
+        uid,
+        gid,
+        nix::unistd::FchownatFlags::NoFollowSymlink,
+    )
+    .context("Failed to chown <cgroup>")?;
     for name in [
         "cgroup.freeze",
         "cgroup.kill",
