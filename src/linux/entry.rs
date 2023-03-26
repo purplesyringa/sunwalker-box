@@ -159,6 +159,19 @@ fn handle_command(
             buf.truncate(ptr);
             Ok(Some(json::stringify(buf)))
         }
+        "extpath" => {
+            let path = json::parse(arg)
+                .context("Invalid JSON")?
+                .take_string()
+                .context("Invalid command argument")?;
+            let path = rootfs::resolve_abs_box_root(path)?;
+            let pid = std::process::id();
+            let system_path = format!(
+                "/proc/{pid}/root{}",
+                path.to_str().context("Path is not UTF-8")?
+            );
+            Ok(Some(json::stringify(system_path)))
+        }
         "mkfile" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
             let path = arg["path"]

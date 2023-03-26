@@ -111,6 +111,7 @@ Unless specified otherwise, the paths are relative to the box chroot environment
 - `mkdir "/path/on/filesystem"` -- create a directory at the given path. Returns nothing.
 - `ls "/path/to/a/directory"` -- list the contents of the directory. Returns a JSON object with filenames as keys and objects satisfying `{file_type: "dir" | "file" | "symlink" | "block" | "char" | "fifo" | "socket" | "unknown", len: integer, mode: integer}` as values.
 - `cat "/path/to/a/file"` or `cat {"path": "/path/to/a/file", "at": seek_to_offset, "len": count_of_bytes_to_read}` -- returns the contents of the whole file or its part as an array of byte values. Seeking further than EOF is considered an error, reaching EOF before `len` is exhausted is not. A length limit of `0` means unlimited. Only regular files can be read this way.
+- `extpath "/path/to/a/file"` -- returns a path by which a file inside the sandbox can be accessed from outside.
 - `mkfile {"path": "/path/to/a/file", "content": [...byte_values]}` -- creates a regular file with the given bytes content.
 - `mksymlink {"link": "/where/to/put/the/link", "target": "/where/the/link/points/to"}` -- creates a symlink with the given target. The target does not have to exist or be a path.
 - `bind {"internal": "/path/inside/the/box", "external": "/path/outside/the/box", "ro": false/true}` -- creates a read-write or a read-only mirror of an external directory or file. The file/directory must already exist inside the sandbox; if they don't, use `mkfile`/`mkdir` before.
