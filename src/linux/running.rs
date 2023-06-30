@@ -798,7 +798,7 @@ impl SingleRun<'_> {
     }
 }
 
-#[multiprocessing::entrypoint]
+#[multiprocessing::func]
 fn executor_worker(
     argv: Vec<String>,
     env: Option<HashMap<String, String>>,

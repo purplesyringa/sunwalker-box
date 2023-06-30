@@ -13,7 +13,7 @@ anyhow = "1.0"
 argh = "0.1.9"
 interfaces = "0.0.8"
 json = "0.12.4"
-multiprocessing = { path = "multiprocessing" }
+multiprocessing = { git = "https://github.com/imachug/multiprocessing" }
 nix = "0.26.1"
 openat = "0.1.21"
 rand = "0.8.5"

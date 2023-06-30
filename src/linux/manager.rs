@@ -9,7 +9,7 @@ pub enum Command {
     Run { options: running::Options },
 }
 
-#[multiprocessing::entrypoint]
+#[multiprocessing::func]
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
     mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,

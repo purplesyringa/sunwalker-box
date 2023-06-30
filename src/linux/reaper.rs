@@ -24,7 +24,7 @@ pub enum Command {
     Reset,
 }
 
-#[multiprocessing::entrypoint]
+#[multiprocessing::func]
 pub fn reaper(
     ppidfd: OwnedFd,
     cli_command: entry::CLIStartCommand,

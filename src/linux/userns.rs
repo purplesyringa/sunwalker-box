@@ -24,7 +24,7 @@ pub fn enter_user_namespace() -> Result<()> {
     Ok(())
 }
 
-#[multiprocessing::entrypoint]
+#[multiprocessing::func]
 fn configure_ns(mut rx: multiprocessing::Receiver<()>) {
     rx.recv()
         .expect("Failed to recv")
