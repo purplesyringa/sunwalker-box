@@ -167,7 +167,7 @@ pub fn create_dev_copy() -> Result<()> {
         } else if metadata.is_dir() {
             std::fs::create_dir(&target).with_context(|| format!("Failed to mkdir {target:?}"))?;
         } else {
-            std::fs::File::create(&target)
+            std::fs::File::create_new(&target)
                 .with_context(|| format!("Failed to touch {target:?}"))?;
         }
         system::bind_mount(&source, &target)

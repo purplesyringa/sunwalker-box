@@ -1,4 +1,5 @@
 #![feature(
+    file_create_new,
     io_error_more,
     is_some_and,
     never_type,

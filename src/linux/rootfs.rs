@@ -60,7 +60,7 @@ pub fn create_rootfs(root: &std::path::Path) -> Result<RootfsState> {
                 std::fs::create_dir(&target_path)
                     .with_context(|| format!("Failed to mkdir {target_path}"))?;
             } else {
-                std::fs::File::create(&target_path)
+                std::fs::File::create_new(&target_path)
                     .with_context(|| format!("Failed to touch {target_path}"))?;
             }
 
