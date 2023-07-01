@@ -1,4 +1,4 @@
-.PHONY: sunwalker_box
+.PHONY: sunwalker_box test
 
 all: sunwalker_box
 
