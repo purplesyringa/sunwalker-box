@@ -74,8 +74,10 @@ impl Controller {
         // Setup rootfs
         let mut root_cur = PathBuf::from("/oldroot");
         root_cur.extend(root.strip_prefix("/"));
-        self.rootfs_state =
-            Some(rootfs::create_rootfs(&root_cur).context("Failed to create rootfs")?);
+        self.rootfs_state = Some(
+            rootfs::create_rootfs(&root_cur, self.quotas.clone())
+                .context("Failed to create rootfs")?,
+        );
 
         Ok(())
     }
@@ -156,13 +158,16 @@ impl Controller {
 
     pub fn reset(&mut self) -> Result<()> {
         sandbox::reset_persistent_namespaces().context("Failed to persistent namespaces")?;
-        rootfs::reset(
-            self.rootfs_state.as_mut().context("Did not join a core")?,
-            &self.quotas,
-        )
-        .context("Failed to reset rootfs")?;
+        rootfs::reset(self.rootfs_state.as_mut().context("Did not join a core")?)
+            .context("Failed to reset rootfs")?;
 
         self.run_reaper_command(reaper::Command::Reset)?;
+        Ok(())
+    }
+
+    pub fn commit(&mut self) -> Result<()> {
+        rootfs::commit(self.rootfs_state.as_mut().context("Did not join a core")?)
+            .context("Failed to commit rootfs")?;
         Ok(())
     }
 

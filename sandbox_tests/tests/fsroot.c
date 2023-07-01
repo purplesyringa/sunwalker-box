@@ -33,8 +33,6 @@ expect:
     /space/stderr.txt
     /space/stdout.txt
     /space/fsroot
-    /space/.tmp/
-    /space/.shm/
     /rootsymlink1 -> /absolute/path
     /rootdir/
     /rootdir/nestedsymlink1 -> /absolute/path

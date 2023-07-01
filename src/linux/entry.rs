@@ -222,6 +222,10 @@ fn handle_command(
             controller.reset()?;
             Ok(None)
         }
+        "commit" => {
+            controller.commit()?;
+            Ok(None)
+        }
         "run" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
             if !arg["argv"].is_array() {

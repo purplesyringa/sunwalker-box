@@ -104,8 +104,7 @@ void dumpfs() {
 int main() {
   dumpfs();
 
-  const char *paths[] = {"/space/newfile",    "/space/.tmp/test1", "/tmp/test2",
-                         "/space/.shm/test3", "/dev/shm/test4",    NULL};
+  const char *paths[] = {"/space/newfile", "/tmp/test2", "/dev/shm/test4", NULL};
 
   for (const char **path = paths; *path; path++) {
     if (access(*path, F_OK) != -1) {

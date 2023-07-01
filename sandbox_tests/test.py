@@ -124,6 +124,9 @@ class Box:
     def reset(self):
         return self.cmd("reset")
 
+    def commit(self):
+        return self.cmd("commit")
+
     def run(
         self,
         argv: list[str],
@@ -214,6 +217,7 @@ class SimpleTest(Test):
         self.expect = expect
         self.limits = limits
         self.root_dir = None
+        self.files_committed = False
 
     def prepare(self, tester):
         if self.root is not None:
@@ -260,6 +264,7 @@ class SimpleTest(Test):
                     stdin = "/space/stdin.txt"
                     box.mkfile(f"/space/stdin.txt", self.input.encode())
 
+                should_commit = False
                 for cmd in self.preexec:
                     args = cmd.split()
                     if args[0].startswith("~"):
@@ -286,6 +291,8 @@ class SimpleTest(Test):
                             source = os.path.abspath(
                                 self.assets_dir + "/" + source[1:])
                         box.bind(source, target, readonly=readonly)
+                    elif cmd == "commit":
+                        should_commit = True
                     else:
                         raise ValueError(f"Unknown command {cmd}")
 
@@ -383,6 +390,10 @@ class SimpleTest(Test):
                         l, r = parse_approximate_value(expected_value, parser)
                         assert l <= value <= r, f"Expected {key}: {expected_value}, actual: {value}\n\nstdout:\n{stdout}\nstderr:\n{stderr}"
 
+                if should_commit:
+                    box.commit()
+                    self.files_committed = True
+
 
 class CTest(SimpleTest):
     def prepare(self, tester):
@@ -400,17 +411,19 @@ class CTest(SimpleTest):
         super().prepare(tester)
 
     def _bind_and_run(self, box, argv: list[str], **kwargs):
-        box.mkfile(f"/space/{self.slug}")
-        box.bind(os.path.abspath(
-            f"build/{self.slug}"), f"/space/{self.slug}", readonly=True)
+        if not self.files_committed:
+            box.mkfile(f"/space/{self.slug}")
+            box.bind(os.path.abspath(
+                f"build/{self.slug}"), f"/space/{self.slug}", readonly=True)
         return box.run([f"/space/{self.slug}"] + argv, **kwargs)
 
 
 class PyTest(SimpleTest):
     def _bind_and_run(self, box, argv: list[str], **kwargs):
-        box.mkfile(f"/space/{self.slug}.py")
-        box.bind(os.path.abspath(
-            f"tests/{self.slug}.py"), f"/space/{self.slug}.py", readonly=True)
+        if not self.files_committed:
+            box.mkfile(f"/space/{self.slug}.py")
+            box.bind(os.path.abspath(
+                f"tests/{self.slug}.py"), f"/space/{self.slug}.py", readonly=True)
         return box.run(["/usr/bin/python3", f"/space/{self.slug}.py"] + argv, **kwargs)
 
 

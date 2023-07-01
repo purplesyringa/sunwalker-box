@@ -1,21 +1,25 @@
 use crate::linux::{ids, mountns, procs, system};
-use anyhow::{anyhow, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, ErrorKind};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
 
+#[derive(Clone)]
 pub struct DiskQuotas {
     pub space: u64,
     pub max_inodes: u64,
 }
 
 pub struct RootfsState {
-    mount_points: HashMap<String, usize>,
+    committed_mount_points: HashMap<String, usize>,
+    space_mounts_restore_actions: Vec<(String, String)>,
+    is_committed: bool,
+    quotas: DiskQuotas,
 }
 
-pub fn create_rootfs(root: &std::path::Path) -> Result<RootfsState> {
+pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<RootfsState> {
     // We need to mount an image, and also add some directories to the hierarchy.
     //
     // We can't use overlayfs: it doesn't work as expected when a lowerdir contains child mounts
@@ -72,11 +76,15 @@ pub fn create_rootfs(root: &std::path::Path) -> Result<RootfsState> {
     }
 
     // Mount ephemeral directories
-    for name in ["space", "dev", "proc", "tmp"] {
-        let path = format!("/newroot/{name}");
-        std::fs::create_dir(&path).with_context(|| format!("Failed to mkdir {path}"))?;
+    for path in [
+        "/newroot/space",
+        "/newroot/dev",
+        "/newroot/proc",
+        "/newroot/tmp",
+        "/staging",
+    ] {
+        std::fs::create_dir(path).with_context(|| format!("Failed to mkdir {path}"))?;
     }
-    // Don't mount /space and /tmp immediately, we'll mount them later
     // Mount /dev
     system::bind_mount_opt("/dev", "/newroot/dev", system::MS_REC)
         .context("Failed to bind-mount /newroot/dev")?;
@@ -89,11 +97,12 @@ pub fn create_rootfs(root: &std::path::Path) -> Result<RootfsState> {
 
     // Remember current mounts so that we can restore the state on reset
     let mut state = RootfsState {
-        mount_points: HashMap::new(),
+        committed_mount_points: HashMap::new(),
+        space_mounts_restore_actions: Vec::new(),
+        is_committed: false,
+        quotas,
     };
-    for path in list_child_mounts("/newroot/")? {
-        *state.mount_points.entry(path).or_insert(0) += 1;
-    }
+    update_committed_mount_points(&mut state, &list_mounts()?);
     Ok(state)
 }
 
@@ -147,57 +156,224 @@ pub fn enter_rootfs() -> Result<()> {
     Ok(())
 }
 
-pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
-    // Unmount all non-whitelisted mounts. Except for /proc/*, which is a nightmare, and /dev/mqueue.
-    let mut mount_points: HashMap<&str, usize> = HashMap::new();
-    for (path, count) in &state.mount_points {
-        mount_points.insert(path, *count);
-    }
-    let mut paths_to_umount: Vec<&str> = Vec::new();
-    let current_mounts = list_child_mounts("/newroot/")?;
-    for path in &current_mounts {
-        if path != "/newroot/proc"
-            && !path.starts_with("/newroot/proc/")
-            && path != "/newroot/dev/mqueue"
-        {
-            let entry = mount_points.entry(path).or_insert(0);
-            if *entry == 0 {
-                paths_to_umount.push(path);
+fn update_committed_mount_points(state: &mut RootfsState, mounts: &[String]) {
+    state.committed_mount_points.clear();
+    for path in mounts {
+        if path.starts_with("/newroot/") {
+            if let Some(count) = state.committed_mount_points.get_mut(path) {
+                *count += 1;
             } else {
-                *entry -= 1;
+                state.committed_mount_points.insert(path.to_string(), 1);
             }
         }
     }
-    for path in paths_to_umount.into_iter().rev() {
-        system::umount(path).with_context(|| format!("Failed to unmount {path}"))?;
+}
+
+pub fn commit(state: &mut RootfsState) -> Result<()> {
+    if state.is_committed {
+        bail!("Cannot commit rootfs twice");
     }
 
-    // (Re)mount /space
+    let mounts = list_mounts()?;
+    update_committed_mount_points(state, &mounts);
+    state.is_committed = true;
+
+    save_space_mounts(state, mounts)?;
+
+    // Make a new read-only base
     system::mount(
         "none",
         "/newroot/space",
         "tmpfs",
-        system::MS_NOSUID,
-        Some(format!("size={},nr_inodes={}", quotas.space, quotas.max_inodes).as_ref()),
+        system::MS_REMOUNT | system::MS_RDONLY | system::MS_NOSUID,
+        Some(
+            format!(
+                "size={},nr_inodes={}",
+                state.quotas.space, state.quotas.max_inodes
+            )
+            .as_ref(),
+        ),
     )
-    .context("Failed to mount tmpfs on /newroot/space")?;
+    .context("Failed to remount /newroot/space read-only")?;
+    std::fs::create_dir("/base").context("Failed to mkdir /base")?;
+    system::bind_mount("/newroot/space", "/base")
+        .context("Failed to bind-mount /newroot/space to /base")?;
+    system::umount("/newroot/space").context("Failed to unmount /newroot/space")?;
+
+    // Mount overlayfs on /newroot/space
+    std::fs::create_dir("/staging/upper").context("Failed to mkdir /staging/upper")?;
+    std::fs::create_dir("/staging/work").context("Failed to mkdir /staging/work")?;
+    system::mount(
+        "none",
+        "/newroot/space",
+        "overlay",
+        0,
+        Some(format!("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work").as_ref()),
+    )
+    .context("Failed to mount overlayfs on /newroot/space")?;
     std::os::unix::fs::chown(
         "/newroot/space",
-        Some(ids::INTERNAL_USER_UID),
-        Some(ids::INTERNAL_USER_GID),
+        Some(ids::EXTERNAL_USER_UID),
+        Some(ids::EXTERNAL_USER_GID),
     )
     .context("Failed to chown /newroot/space")?;
 
+    restore_space_mounts(state)?;
+
+    Ok(())
+}
+
+fn save_space_mounts(state: &mut RootfsState, mounts: Vec<String>) -> Result<()> {
+    std::fs::create_dir("/saved").context("Failed to mkdir /saved")?;
+
+    for (i, path) in mounts.into_iter().enumerate() {
+        if !path.starts_with("/newroot/space/") {
+            continue;
+        }
+
+        let saved_path = format!("/saved/saved{i}");
+
+        let metadata = std::fs::metadata(&path)
+            .with_context(|| format!("Failed to get metadata of {path}"))?;
+        if metadata.is_dir() {
+            std::fs::create_dir(&saved_path)
+                .with_context(|| format!("Failed to mkdir {saved_path}"))?;
+        } else {
+            std::fs::File::create_new(&saved_path)
+                .with_context(|| format!("Failed to touch {saved_path}"))?;
+        }
+
+        system::bind_mount(&path, &saved_path)
+            .with_context(|| format!("Failed to move mount {path} to {saved_path}"))?;
+        state.space_mounts_restore_actions.push((saved_path, path));
+    }
+
+    for (_, path) in state.space_mounts_restore_actions.iter().rev() {
+        system::umount(&path).with_context(|| format!("Failed to unmount {path}"))?;
+    }
+
+    Ok(())
+}
+
+fn restore_space_mounts(state: &RootfsState) -> Result<()> {
+    for (saved_path, path) in &state.space_mounts_restore_actions {
+        system::bind_mount(saved_path, path)
+            .with_context(|| format!("Failed to bind-mount {saved_path} to {path}"))?;
+    }
+    Ok(())
+}
+
+fn mount_user_dir(state: &RootfsState, path: &str) -> Result<()> {
+    system::mount(
+        "none",
+        path,
+        "tmpfs",
+        system::MS_NOSUID,
+        Some(
+            format!(
+                "size={},nr_inodes={}",
+                state.quotas.space, state.quotas.max_inodes
+            )
+            .as_ref(),
+        ),
+    )
+    .with_context(|| format!("Failed to mount tmpfs on {path}"))?;
+
+    std::os::unix::fs::chown(
+        path,
+        Some(ids::EXTERNAL_USER_UID),
+        Some(ids::EXTERNAL_USER_GID),
+    )
+    .with_context(|| format!("Failed to chown {path}"))?;
+
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .with_context(|| format!("Failed to chmod {path}"))?;
+
+    Ok(())
+}
+
+pub fn reset(state: &RootfsState) -> Result<()> {
+    // Unmount all non-whitelisted mounts. Except for /proc/*, which is a nightmare, and
+    // /dev/mqueue.
+    let mut mount_points: HashMap<&str, usize> = HashMap::new();
+    for (path, count) in &state.committed_mount_points {
+        mount_points.insert(path, *count);
+    }
+    let mut paths_to_umount: Vec<String> = Vec::new();
+    let mut current_mounts = Vec::new();
+    for path in list_mounts()? {
+        if (path.starts_with("/newroot/")
+            && path != "/newroot/proc"
+            && !path.starts_with("/newroot/proc/")
+            && path != "/newroot/dev/mqueue")
+            || path == "/staging"
+        {
+            match mount_points.get_mut(&path[..]) {
+                Some(n) if *n > 0 => *n -= 1,
+                _ => {
+                    paths_to_umount.push(path);
+                    continue;
+                }
+            }
+        }
+        current_mounts.push(path);
+    }
+    for path in paths_to_umount.into_iter().rev() {
+        system::umount(&path).with_context(|| format!("Failed to unmount {path}"))?;
+    }
+
+    // /staging and (if not committed) /newroot/space have just been unmounted
+    system::mount(
+        "none",
+        "/staging",
+        "tmpfs",
+        system::MS_NOSUID,
+        Some(
+            format!(
+                "size={},nr_inodes={}",
+                state.quotas.space, state.quotas.max_inodes
+            )
+            .as_ref(),
+        ),
+    )
+    .context("Failed to mount tmpfs on /staging")?;
+
+    if state.is_committed {
+        std::fs::create_dir("/staging/upper").context("Failed to mkdir /staging/upper")?;
+        std::fs::create_dir("/staging/work").context("Failed to mkdir /staging/work")?;
+        system::umount("/newroot/dev/shm").context("Failed to unmount /newroot/dev/shm")?;
+        system::umount("/newroot/tmp").context("Failed to unmount /newroot/tmp")?;
+        system::umount_opt("/newroot/space", system::MNT_DETACH)
+            .context("Failed to unmount /newroot/space")?;
+        system::mount(
+            "none",
+            "/newroot/space",
+            "overlay",
+            0,
+            Some(format!("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work").as_ref()),
+        )
+        .context("Failed to mount overlayfs on /newroot/space")?;
+        std::os::unix::fs::chown(
+            "/newroot/space",
+            Some(ids::EXTERNAL_USER_UID),
+            Some(ids::EXTERNAL_USER_GID),
+        )
+        .context("Failed to chown /newroot/space")?;
+        restore_space_mounts(state)?;
+    } else {
+        mount_user_dir(state, "/newroot/space")?;
+    }
+
     // (Re)mount /dev/shm and /tmp
     for (path, orig_path) in [
-        ("/newroot/dev/shm", "/newroot/space/.shm"),
-        ("/newroot/tmp", "/newroot/space/.tmp"),
+        ("/newroot/dev/shm", "/staging/shm"),
+        ("/newroot/tmp", "/staging/tmp"),
     ] {
         std::fs::create_dir(orig_path).with_context(|| format!("Failed to mkdir {orig_path}"))?;
         std::os::unix::fs::chown(
             orig_path,
-            Some(ids::INTERNAL_ROOT_UID),
-            Some(ids::INTERNAL_ROOT_GID),
+            Some(ids::EXTERNAL_ROOT_UID),
+            Some(ids::EXTERNAL_ROOT_GID),
         )
         .with_context(|| format!("Failed to chown {orig_path}"))?;
         std::fs::set_permissions(
@@ -205,13 +381,6 @@ pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
             std::os::unix::fs::PermissionsExt::from_mode(0o1777),
         )
         .with_context(|| format!("Failed to chmod {orig_path}"))?;
-        if let Err(e) = system::umount(path) {
-            if e.kind() == ErrorKind::InvalidInput {
-                // This means /tmp is not a mountpoint, which is fine the first time we reset the fs
-            } else {
-                return Err(e).with_context(|| format!("Failed to unmount {path}"));
-            }
-        }
         system::bind_mount(orig_path, path)
             .with_context(|| format!("Failed to bind-mount {orig_path} to {path}"))?;
     }
@@ -234,7 +403,7 @@ pub fn reset(state: &RootfsState, quotas: &DiskQuotas) -> Result<()> {
     Ok(())
 }
 
-fn list_child_mounts(prefix: &str) -> Result<Vec<String>> {
+fn list_mounts() -> Result<Vec<String>> {
     let file = std::fs::File::open("/proc/self/mounts")
         .context("Failed to open /proc/self/mounts for reading")?;
 
@@ -244,7 +413,7 @@ fn list_child_mounts(prefix: &str) -> Result<Vec<String>> {
         let mut it = line.split(' ');
         it.next().context("Invalid format of /proc/self/mounts")?;
         let target_path = it.next().context("Invalid format of /proc/self/mounts")?;
-        if target_path.starts_with(prefix) {
+        if target_path != "/oldroot" && !target_path.starts_with("/oldroot/") {
             vec.push(target_path.to_string());
         }
     }
