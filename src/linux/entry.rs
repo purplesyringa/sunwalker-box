@@ -1,8 +1,9 @@
 use crate::{
     entry,
-    linux::{cgroups, controller, manager, rootfs, running, sandbox},
+    linux::{cgroups, controller, ids, manager, rootfs, running, sandbox},
 };
 use anyhow::{bail, Context, Result};
+use nix::libc::mode_t;
 use std::collections::HashMap;
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -62,13 +63,31 @@ fn handle_command(
 ) -> Result<Option<String>> {
     match command {
         "mkdir" => {
-            let path = json::parse(arg)
-                .context("Invalid JSON")?
-                .take_string()
-                .context("Invalid command argument")?;
+            let (path, owner, mode);
+            let mut arg = json::parse(arg).context("Invalid JSON")?;
+            if arg.is_string() {
+                path = arg.take_string().unwrap();
+                owner = "root";
+                mode = 0o755;
+            } else {
+                path = arg["path"]
+                    .take_string()
+                    .context("Invalid 'path' argument")?;
+                owner = if arg["owner"].is_null() {
+                    "root"
+                } else {
+                    arg["owner"].as_str().context("Invalid 'owner' argument")?
+                };
+                mode = if arg["mode"].is_null() {
+                    0o755
+                } else {
+                    arg["mode"].as_u32().context("Invalid 'mode' argument")?
+                };
+            }
             let path = rootfs::resolve_abs_box_root(path)?;
             controller.ensure_allowed_to_modify(&path)?;
-            std::fs::create_dir(path)?;
+            std::fs::create_dir(&path)?;
+            fix_permissions(&path, owner, mode)?;
             Ok(None)
         }
         "ls" => {
@@ -187,10 +206,21 @@ fn handle_command(
                 }
                 _ => bail!("Invalid 'content' argument"),
             };
+            let owner = if arg["owner"].is_null() {
+                "root"
+            } else {
+                arg["owner"].as_str().context("Invalid 'owner' argument")?
+            };
+            let mode = if arg["mode"].is_null() {
+                0o644
+            } else {
+                arg["mode"].as_u32().context("Invalid 'mode' argument")?
+            };
             let path = rootfs::resolve_abs_box_root(path)?;
             controller.ensure_allowed_to_modify(&path)?;
-            let mut file = std::fs::File::create(path)?;
+            let mut file = std::fs::File::create(&path)?;
             file.write_all(&content)?;
+            fix_permissions(&path, owner, mode)?;
             Ok(None)
         }
         "mksymlink" => {
@@ -339,4 +369,17 @@ fn handle_command(
             bail!("Unknown command {command}");
         }
     }
+}
+
+fn fix_permissions(path: &std::path::Path, owner: &str, mode: mode_t) -> Result<()> {
+    let (uid, gid) = match owner {
+        "user" => (ids::EXTERNAL_USER_UID, ids::EXTERNAL_USER_GID),
+        "root" => (ids::EXTERNAL_ROOT_UID, ids::EXTERNAL_ROOT_GID),
+        _ => bail!("Invalid owner {owner}"),
+    };
+    std::os::unix::fs::chown(path, Some(uid), Some(gid))
+        .with_context(|| format!("Failed to chown {path:?}"))?;
+    std::fs::set_permissions(path, std::os::unix::fs::PermissionsExt::from_mode(mode))
+        .with_context(|| format!("Failed to chmod {path:?}"))?;
+    Ok(())
 }
