@@ -84,3 +84,30 @@ pub fn umount_opt<P: AsRef<Path>>(path: P, flags: c_int) -> Result<()> {
 pub fn umount<P: AsRef<Path>>(path: P) -> Result<()> {
     umount_opt(path, 0)
 }
+
+pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
+    // If a filesystem was mounted with NOSUID/NODEV/NOEXEC, we won't be able to remount the
+    // bind-mount without specifying those same flags. Parsing mountinfo seems slow, and this case
+    // isn't going to be triggered often in production anyway, so we just use the shotgun approach
+    // for now, bruteforcing the flags in the order of most likeliness.
+    let mut result = Ok(());
+    for flags in [
+        0,
+        MS_NOSUID,
+        MS_NODEV,
+        MS_NOSUID | MS_NODEV,
+        MS_NOEXEC,
+        MS_NOEXEC | MS_NOSUID,
+        MS_NOEXEC | MS_NODEV,
+        MS_NOEXEC | MS_NOSUID | MS_NODEV,
+    ] {
+        result = bind_mount_opt("none", path.as_ref(), MS_REMOUNT | MS_RDONLY | flags);
+        if let Err(ref e) = result {
+            if let ErrorKind::PermissionDenied = e.kind() {
+                continue;
+            }
+        }
+        break;
+    }
+    result
+}
