@@ -5,9 +5,14 @@ use nix::{
     sys::{ptrace, signal},
     unistd::Pid,
 };
+use std::ffi::CString;
+use std::fs::File;
+use std::io;
+use std::os::unix::fs::FileExt;
 
 pub struct TracedProcess {
     pid: Pid,
+    mem: File,
 }
 
 pub struct AuxiliaryEntry {
@@ -62,8 +67,24 @@ pub union ptrace_syscall_info_data {
 }
 
 impl TracedProcess {
-    pub fn new(pid: Pid) -> Self {
-        TracedProcess { pid }
+    pub fn new(pid: Pid) -> Result<Self> {
+        Ok(TracedProcess {
+            pid,
+            mem: Self::open_mem(pid)?,
+        })
+    }
+
+    pub fn reload_mm(&mut self) -> Result<()> {
+        self.mem = Self::open_mem(self.pid)?;
+        Ok(())
+    }
+
+    fn open_mem(pid: Pid) -> Result<File> {
+        File::options()
+            .read(true)
+            .write(true)
+            .open(format!("/proc/{pid}/mem"))
+            .with_context(|| format!("Failed to open /proc/{pid}/mem"))
     }
 
     pub fn init(&self) -> Result<()> {
@@ -80,15 +101,44 @@ impl TracedProcess {
         .context("Failed to set options")
     }
 
-    pub fn read_word(&self, address: usize) -> Result<usize> {
-        ptrace::read(self.pid, address as *mut c_void)
-            .map(|x| x as usize)
-            .context("Failed to read word")
+    pub fn read_memory(&self, address: usize, buf: &mut [u8]) -> io::Result<()> {
+        self.mem.read_exact_at(buf, address as u64)
     }
 
-    pub unsafe fn write_word(&self, address: usize, value: usize) -> Result<()> {
-        ptrace::write(self.pid, address as *mut c_void, value as *mut c_void)
-            .context("Failed to write word")
+    pub fn read_word(&self, address: usize) -> io::Result<usize> {
+        let mut word = [0u8; 8];
+        self.read_memory(address, &mut word)?;
+        Ok(usize::from_ne_bytes(word))
+    }
+
+    pub fn read_cstring(&self, address: usize, max_len: usize) -> io::Result<CString> {
+        let mut buf = vec![0u8; max_len + 1];
+        let mut offset = 0;
+
+        while offset < max_len + 1 {
+            let n_read = self.mem.read_at(&mut buf[offset..], address as u64)?;
+            if n_read == 0 {
+                return Err(io::Error::from_raw_os_error(libc::EFAULT));
+            }
+            if let Some(index) = buf[offset..n_read].iter().position(|&x| x == 0) {
+                buf.truncate(offset + index + 1);
+                unsafe {
+                    return Ok(CString::from_vec_with_nul_unchecked(buf));
+                }
+            } else {
+                offset += n_read;
+            }
+        }
+
+        Err(io::Error::from_raw_os_error(libc::EINVAL))
+    }
+
+    pub fn write_memory(&self, address: usize, buf: &[u8]) -> io::Result<()> {
+        self.mem.write_all_at(buf, address as u64)
+    }
+
+    pub unsafe fn write_word(&self, address: usize, value: usize) -> io::Result<()> {
+        self.write_memory(address, &value.to_ne_bytes())
     }
 
     pub fn get_registers(&self) -> Result<libc::user_regs_struct> {
@@ -105,12 +155,16 @@ impl TracedProcess {
         let mut address = regs.rsp as usize;
 
         // Skip argc & argv
-        let argc = self.read_word(address)?;
+        let argc = self.read_word(address).context("Failed to read argc")?;
         address += word_size;
         address += (argc + 1) * word_size;
 
         // Skip environment
-        while self.read_word(address)? != 0 {
+        while self
+            .read_word(address)
+            .context("Failed to read environment")?
+            != 0
+        {
             address += word_size;
         }
         address += word_size;
@@ -126,10 +180,12 @@ impl TracedProcess {
 
         let mut entries = Vec::new();
         loop {
-            let id = self.read_word(address)?;
-            address += word_size;
-            let value = self.read_word(address)?;
-            address += word_size;
+            let mut buf = [0u8; 16];
+            self.read_memory(address, &mut buf)
+                .context("Failed to read auxiliary entry")?;
+            let id = usize::from_ne_bytes(buf[..8].try_into().unwrap());
+            let value = usize::from_ne_bytes(buf[8..].try_into().unwrap());
+            address += 2 * word_size;
             if id == libc::AT_NULL as usize {
                 break;
             }
@@ -146,9 +202,8 @@ impl TracedProcess {
     pub fn disable_vdso(&self) -> Result<()> {
         for entry in self.get_auxiliary_entries()? {
             if entry.id == AT_SYSINFO_EHDR as usize {
-                unsafe {
-                    self.write_word(entry.address, libc::AT_IGNORE as usize)?;
-                }
+                unsafe { self.write_word(entry.address, libc::AT_IGNORE as usize) }
+                    .context("Failed to write AT_IGNORE")?;
             }
         }
         Ok(())

@@ -7,6 +7,7 @@ A = sys_number
 A == msgget ? trace : next
 A == semget ? trace : next
 A == shmget ? trace : next
+A == memfd_create ? trace : next
 
 allow:
 return ALLOW
