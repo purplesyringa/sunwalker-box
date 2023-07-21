@@ -25,6 +25,9 @@ const AT_SYSINFO_EHDR: u64 = 33; // x86-64
 const SECCOMP_SET_MODE_FILTER: c_uint = 1;
 const PTRACE_GET_SYSCALL_INFO: i32 = 0x420e;
 
+#[cfg(target_arch = "aarch64")]
+const NT_PRSTATUS: i32 = 1;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ptrace_syscall_info {
@@ -64,6 +67,15 @@ pub union ptrace_syscall_info_data {
     pub entry: ptrace_syscall_info_entry,
     pub exit: ptrace_syscall_info_exit,
     pub seccomp: ptrace_syscall_info_seccomp,
+}
+
+#[cfg(target_arch = "aarch64")]
+#[repr(C)]
+pub struct user_pt_regs {
+    pub regs: [u64; 31],
+    pub sp: u64,
+    pub pc: u64,
+    pub pstate: u64,
 }
 
 impl TracedProcess {
@@ -141,11 +153,61 @@ impl TracedProcess {
         self.write_memory(address, &value.to_ne_bytes())
     }
 
+    #[cfg(target_arch = "x86_64")]
     pub fn get_registers(&self) -> Result<libc::user_regs_struct> {
         ptrace::getregs(self.pid).context("Failed to load registers of the child")
     }
+    #[cfg(target_arch = "x86_64")]
     pub fn set_registers(&self, regs: libc::user_regs_struct) -> Result<()> {
         ptrace::setregs(self.pid, regs).context("Failed to store registers of the child")
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    pub fn get_registers(&self) -> Result<user_pt_regs> {
+        let mut data = std::mem::MaybeUninit::<user_pt_regs>::uninit();
+        let mut iovec = libc::iovec {
+            iov_base: data.as_mut_ptr() as *mut c_void,
+            iov_len: std::mem::size_of_val(&data),
+        };
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETREGSET,
+                self.pid.as_raw(),
+                NT_PRSTATUS as *mut c_void,
+                &mut iovec,
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("Failed to load registers of the child")?;
+        }
+        if iovec.iov_len < std::mem::size_of_val(&data) {
+            anyhow::bail!("Failed to load registers of the child: too short register set");
+        }
+        unsafe { Ok(data.assume_init()) }
+    }
+    #[cfg(target_arch = "aarch64")]
+    pub fn set_registers(&self, regs: user_pt_regs) -> Result<()> {
+        let mut iovec = libc::iovec {
+            iov_base: &regs as *const _ as *mut c_void,
+            iov_len: std::mem::size_of_val(&regs),
+        };
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_SETREGSET,
+                self.pid.as_raw(),
+                NT_PRSTATUS as *mut c_void,
+                &mut iovec,
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("Failed to store registers of the child")?;
+        }
+        if iovec.iov_len < std::mem::size_of_val(&regs) {
+            anyhow::bail!("Failed to store registers of the child: too short register set");
+        }
+        Ok(())
     }
 
     fn get_auxiliary_vector_address(&self) -> Result<usize> {
