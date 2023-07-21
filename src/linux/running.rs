@@ -633,6 +633,7 @@ impl SingleRun<'_> {
         Ok(())
     }
 
+    #[cfg(target_arch = "x86_64")]
     fn handle_sigsegv(&self, process: &ProcessInfo) -> Result<()> {
         let info = process.traced_process.get_signal_info()?;
         if info.si_signo != signal::Signal::SIGSEGV as i32 {
@@ -677,6 +678,14 @@ impl SingleRun<'_> {
             }
         }
 
+        process
+            .traced_process
+            .resume_signal(signal::Signal::SIGSEGV)?;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn handle_sigsegv(&self, process: &ProcessInfo) -> Result<()> {
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;

@@ -37,6 +37,13 @@ pub fn sanity_checks() -> Result<()> {
         }
     }
 
+    // On aarch64, unprivileged PMCCNTR reads must be disabled
+    if let Ok(perf_user_access) = std::fs::read_to_string("/proc/sys/kernel/perf_user_access") {
+        if perf_user_access != "0\n" {
+            bail!("perf_user_access is not set to 0, unable to continue safely");
+        }
+    }
+
     Ok(())
 }
 
