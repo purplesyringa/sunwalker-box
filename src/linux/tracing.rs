@@ -214,7 +214,7 @@ impl TracedProcess {
         let word_size = std::mem::size_of::<usize>();
 
         let regs = self.get_registers()?;
-        let mut address = regs.rsp as usize;
+        let mut address = get_stack_pointer(&regs);
 
         // Skip argc & argv
         let argc = self.read_word(address).context("Failed to read argc")?;
@@ -325,4 +325,13 @@ pub fn apply_seccomp_filter() -> Result<()> {
         Err(std::io::Error::last_os_error())?;
     }
     Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+pub fn get_stack_pointer(regs: &libc::user_regs_struct) -> usize {
+    regs.rsp as usize
+}
+#[cfg(target_arch = "aarch64")]
+pub fn get_stack_pointer(regs: &user_pt_regs) -> usize {
+    regs.sp as usize
 }

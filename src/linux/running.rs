@@ -559,7 +559,8 @@ impl SingleRun<'_> {
                         format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
                     file_name.append(&mut name);
 
-                    let file_name_addr = (regs.rsp - 128) as usize - file_name.len();
+                    let file_name_addr =
+                        (tracing::get_stack_pointer(&regs) - 128) as usize - file_name.len();
 
                     process
                         .traced_process
