@@ -593,7 +593,7 @@ impl SingleRun<'_> {
 
     fn emulate_syscall_result(process: &mut ProcessInfo, result: i64) -> Result<()> {
         let mut regs = process.traced_process.get_registers()?;
-        regs.rax = result as u64;
+        tracing::set_syscall_result(&mut regs, result as usize);
         regs.orig_rax = u64::MAX; // skip syscall
         process.traced_process.set_registers(regs)?;
         process.state = ProcessState::Alive;
@@ -618,7 +618,10 @@ impl SingleRun<'_> {
             }
             Err(err) => {
                 regs.orig_rax = u64::MAX; // skip syscall
-                regs.rax = -err.raw_os_error().unwrap_or(libc::EINVAL) as u64;
+                tracing::set_syscall_result(
+                    &mut regs,
+                    -err.raw_os_error().unwrap_or(libc::EINVAL) as usize,
+                );
             }
         }
         process.traced_process.set_registers(regs)?;

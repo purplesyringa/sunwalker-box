@@ -344,6 +344,11 @@ pub fn set_syscall_arg(regs: &mut libc::user_regs_struct, index: usize, arg: usi
         _ => unimplemented!(),
     }
 }
+#[cfg(target_arch = "x86_64")]
+pub fn set_syscall_result(regs: &mut libc::user_regs_struct, result: usize) {
+    regs.rax = result as u64;
+}
+
 #[cfg(target_arch = "aarch64")]
 pub fn get_stack_pointer(regs: &user_pt_regs) -> usize {
     regs.sp as usize
@@ -355,4 +360,8 @@ pub fn set_syscall_arg(regs: &mut user_pt_regs, index: usize, arg: usize) {
     } else {
         unimplemented!();
     }
+}
+#[cfg(target_arch = "aarch64")]
+pub fn set_syscall_result(regs: &mut user_pt_regs, result: usize) {
+    regs.regs[0] = result as u64;
 }
