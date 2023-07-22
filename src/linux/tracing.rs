@@ -15,6 +15,7 @@ pub struct TracedProcess {
     pid: Pid,
     mem: File,
     cached_registers: Option<Result<Registers, Errno>>,
+    registers_edited: bool,
 }
 
 pub struct AuxiliaryEntry {
@@ -95,6 +96,7 @@ impl TracedProcess {
             pid,
             mem: Self::open_mem(pid)?,
             cached_registers: None,
+            registers_edited: false,
         })
     }
 
@@ -322,9 +324,11 @@ impl TracedProcess {
             .map_err(|e| (*e).into())
     }
     fn _store_registers(&mut self) -> Result<()> {
-        if let Some(regs) = self.cached_registers.take() {
-            self._set_registers(regs?)?;
+        if self.registers_edited {
+            self.registers_edited = false;
+            self._set_registers(self.cached_registers.unwrap()?)?;
         }
+        self.cached_registers = None;
         Ok(())
     }
 
@@ -332,11 +336,13 @@ impl TracedProcess {
         self._load_registers().cloned()
     }
     pub fn set_registers(&mut self, regs: Registers) {
+        self.registers_edited = true;
         self.cached_registers = Some(Ok(regs));
     }
 
     #[cfg(target_arch = "x86_64")]
     pub fn set_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
+        self.registers_edited = true;
         self._load_registers()?.orig_rax = syscall_no as u64;
         Ok(())
     }
@@ -365,6 +371,7 @@ impl TracedProcess {
 
     #[cfg(target_arch = "x86_64")]
     pub fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
+        self.registers_edited = true;
         let regs = self._load_registers()?;
         let arg = arg as u64;
         match index {
@@ -381,6 +388,7 @@ impl TracedProcess {
     #[cfg(target_arch = "aarch64")]
     pub fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
         assert!(index < 6);
+        self.registers_edited = true;
         let regs = self._load_registers()?;
         regs.regs[index] = arg as u64;
         Ok(())
@@ -388,11 +396,13 @@ impl TracedProcess {
 
     #[cfg(target_arch = "x86_64")]
     pub fn set_syscall_result(&mut self, result: usize) -> io::Result<()> {
+        self.registers_edited = true;
         self._load_registers()?.rax = result as u64;
         Ok(())
     }
     #[cfg(target_arch = "aarch64")]
     pub fn set_syscall_result(&mut self, result: usize) -> io::Result<()> {
+        self.registers_edited = true;
         self._load_registers()?.regs[0] = result as u64;
         Ok(())
     }
