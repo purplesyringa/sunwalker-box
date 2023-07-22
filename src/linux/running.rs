@@ -570,7 +570,7 @@ impl SingleRun<'_> {
                         .write_memory(file_name_addr, &file_name)?;
 
                     Ok((
-                        libc::SYS_openat,
+                        libc::SYS_openat as i32,
                         [
                             libc::AT_FDCWD as usize,
                             file_name_addr,
@@ -604,7 +604,7 @@ impl SingleRun<'_> {
 
     fn emulate_syscall_redirect<const N: usize>(
         process: &mut ProcessInfo,
-        redirect: impl FnOnce(&mut ProcessInfo) -> std::io::Result<(i64, [usize; N])>,
+        redirect: impl FnOnce(&mut ProcessInfo) -> std::io::Result<(i32, [usize; N])>,
     ) -> Result<()> {
         match redirect(process) {
             Ok((syscall_no, args)) => {

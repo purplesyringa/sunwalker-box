@@ -30,6 +30,9 @@ const PTRACE_GET_SYSCALL_INFO: i32 = 0x420e;
 #[cfg(target_arch = "aarch64")]
 const NT_PRSTATUS: i32 = 1;
 
+#[cfg(target_arch = "aarch64")]
+const NT_ARM_SYSTEM_CALL: i32 = 0x404;
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct ptrace_syscall_info {
@@ -333,22 +336,29 @@ impl TracedProcess {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn set_syscall_no(&mut self, syscall_no: i64) -> io::Result<()> {
+    pub fn set_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
         self._load_registers()?.orig_rax = syscall_no as u64;
         Ok(())
     }
     #[cfg(target_arch = "aarch64")]
-    pub fn set_syscall_no(&mut self, syscall_no: i64) -> io::Result<()> {
+    pub fn set_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
+        let mut iovec = libc::iovec {
+            iov_base: &syscall_no as *const _ as *mut c_void,
+            iov_len: std::mem::size_of_val(&syscall_no),
+        };
         if unsafe {
             libc::ptrace(
-                libc::PTRACE_SET_SYSCALL,
+                libc::PTRACE_SETREGSET,
                 self.pid.as_raw(),
-                std::ptr::null(),
-                syscall_no as *mut c_void,
+                NT_ARM_SYSTEM_CALL as *mut c_void,
+                &mut iovec,
             )
         } == -1
         {
-            return Err(std::io::Error::last_os_error())?;
+            return Err(std::io::Error::last_os_error());
+        }
+        if iovec.iov_len < std::mem::size_of_val(&syscall_no) {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
         }
         Ok(())
     }
