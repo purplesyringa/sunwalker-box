@@ -78,6 +78,11 @@ pub struct user_pt_regs {
     pub pstate: u64,
 }
 
+#[cfg(target_arch = "x86_64")]
+pub type Registers = libc::user_regs_struct;
+#[cfg(target_arch = "aarch64")]
+pub type Registers = user_pt_regs;
+
 impl TracedProcess {
     pub fn new(pid: Pid) -> Result<Self> {
         Ok(TracedProcess {
@@ -154,17 +159,17 @@ impl TracedProcess {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn get_registers(&self) -> Result<libc::user_regs_struct> {
+    pub fn get_registers(&self) -> Result<Registers> {
         ptrace::getregs(self.pid).context("Failed to load registers of the child")
     }
     #[cfg(target_arch = "x86_64")]
-    pub fn set_registers(&self, regs: libc::user_regs_struct) -> Result<()> {
+    pub fn set_registers(&self, regs: Registers) -> Result<()> {
         ptrace::setregs(self.pid, regs).context("Failed to store registers of the child")
     }
 
     #[cfg(target_arch = "aarch64")]
-    pub fn get_registers(&self) -> Result<user_pt_regs> {
-        let mut data = std::mem::MaybeUninit::<user_pt_regs>::uninit();
+    pub fn get_registers(&self) -> Result<Registers> {
+        let mut data = std::mem::MaybeUninit::<Registers>::uninit();
         let mut iovec = libc::iovec {
             iov_base: data.as_mut_ptr() as *mut c_void,
             iov_len: std::mem::size_of_val(&data),
@@ -187,7 +192,7 @@ impl TracedProcess {
         unsafe { Ok(data.assume_init()) }
     }
     #[cfg(target_arch = "aarch64")]
-    pub fn set_registers(&self, regs: user_pt_regs) -> Result<()> {
+    pub fn set_registers(&self, regs: Registers) -> Result<()> {
         let mut iovec = libc::iovec {
             iov_base: &regs as *const _ as *mut c_void,
             iov_len: std::mem::size_of_val(&regs),
@@ -328,11 +333,11 @@ pub fn apply_seccomp_filter() -> Result<()> {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub fn get_stack_pointer(regs: &libc::user_regs_struct) -> usize {
+pub fn get_stack_pointer(regs: &Registers) -> usize {
     regs.rsp as usize
 }
 #[cfg(target_arch = "x86_64")]
-pub fn set_syscall_arg(regs: &mut libc::user_regs_struct, index: usize, arg: usize) {
+pub fn set_syscall_arg(regs: &mut Registers, index: usize, arg: usize) {
     let arg = arg as u64;
     match index {
         0 => regs.rdi = arg,
@@ -345,16 +350,16 @@ pub fn set_syscall_arg(regs: &mut libc::user_regs_struct, index: usize, arg: usi
     }
 }
 #[cfg(target_arch = "x86_64")]
-pub fn set_syscall_result(regs: &mut libc::user_regs_struct, result: usize) {
+pub fn set_syscall_result(regs: &mut Registers, result: usize) {
     regs.rax = result as u64;
 }
 
 #[cfg(target_arch = "aarch64")]
-pub fn get_stack_pointer(regs: &user_pt_regs) -> usize {
+pub fn get_stack_pointer(regs: &Registers) -> usize {
     regs.sp as usize
 }
 #[cfg(target_arch = "aarch64")]
-pub fn set_syscall_arg(regs: &mut user_pt_regs, index: usize, arg: usize) {
+pub fn set_syscall_arg(regs: &mut Registers, index: usize, arg: usize) {
     if index < 6 {
         regs.regs[index] = arg as u64;
     } else {
@@ -362,6 +367,6 @@ pub fn set_syscall_arg(regs: &mut user_pt_regs, index: usize, arg: usize) {
     }
 }
 #[cfg(target_arch = "aarch64")]
-pub fn set_syscall_result(regs: &mut user_pt_regs, result: usize) {
+pub fn set_syscall_result(regs: &mut Registers, result: usize) {
     regs.regs[0] = result as u64;
 }

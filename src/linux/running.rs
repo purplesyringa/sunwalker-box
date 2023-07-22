@@ -562,7 +562,7 @@ impl SingleRun<'_> {
                     file_name.append(&mut name);
 
                     let file_name_addr =
-                        (tracing::get_stack_pointer(&regs) - 128) as usize - file_name.len();
+                        (tracing::get_stack_pointer(regs) - 128) as usize - file_name.len();
 
                     process
                         .traced_process
@@ -607,7 +607,7 @@ impl SingleRun<'_> {
         process: &mut ProcessInfo,
         redirect: impl FnOnce(
             &mut ProcessInfo,
-            &libc::user_regs_struct,
+            &tracing::Registers,
         ) -> std::io::Result<(i64, [usize; N])>,
     ) -> Result<()> {
         let mut regs = process.traced_process.get_registers()?;
