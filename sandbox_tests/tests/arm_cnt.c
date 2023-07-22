@@ -5,12 +5,17 @@ arch:
 expect:
   limit_verdict: Signaled
   exit_code: -4
-  runs: 4
-  pass_run_number: true
+runs: 5
+pass_run_number: true
 */
 
+#pragma GCC target("arch=armv8.6-a")
+
+#include <stdio.h>
+#include <stdlib.h>
+
 int main(int argc, char **argv) {
-  int run = argv[1][0] - '0';
+  int run = atoi(argv[1]);
   long long val;
   if (run == 0) asm volatile("mrs %0, cntfrq_el0" : "=r" (val));
   if (run == 1) asm volatile("mrs %0, cntpctss_el0" : "=r" (val));
