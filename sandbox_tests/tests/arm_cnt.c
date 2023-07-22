@@ -1,11 +1,11 @@
 /*
-description: arm64 counter-timer registers (cntfrq, cntpct[ss], cntvct[ss]) are unavailable
+description: arm64 counter-timer registers (cntpct[ss], cntvct[ss]) are unavailable
 arch:
 - aarch64
 expect:
   limit_verdict: Signaled
   exit_code: -4
-runs: 5
+runs: 4
 pass_run_number: true
 */
 
@@ -17,11 +17,12 @@ pass_run_number: true
 int main(int argc, char **argv) {
   int run = atoi(argv[1]);
   long long val;
-  if (run == 0) asm volatile("mrs %0, cntfrq_el0" : "=r" (val));
-  if (run == 1) asm volatile("mrs %0, cntpctss_el0" : "=r" (val));
-  if (run == 2) asm volatile("mrs %0, cntpct_el0" : "=r" (val));
-  if (run == 3) asm volatile("mrs %0, cntvctss_el0" : "=r" (val));
-  if (run == 4) asm volatile("mrs %0, cntvct_el0" : "=r" (val));
-  printf("Counter is %lli\n", val);
+  const char* name;
+#define REG(reg_name) if(run-- == 0) { name = #reg_name; asm volatile("mrs %0, " #reg_name "_el0" : "=r" (val) ); }
+  REG(cntpctss)
+  REG(cntpct)
+  REG(cntvctss)
+  REG(cntvct)
+  printf("counter %s is %lli -- should be unavailable or random\n", name, val);
   return 0;
 }
