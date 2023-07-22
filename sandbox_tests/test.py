@@ -265,7 +265,7 @@ class SimpleTest(Test):
                     stdin = None
                 else:
                     stdin = "/space/stdin.txt"
-                    box.mkfile(f"/space/stdin.txt", self.input.encode())
+                    box.mkfile("/space/stdin.txt", self.input.encode())
 
                 should_commit = False
                 for cmd in self.preexec:
@@ -298,12 +298,6 @@ class SimpleTest(Test):
                         should_commit = True
                     else:
                         raise ValueError(f"Unknown command {cmd}")
-
-                for name in ("real_time", ""):
-                    if "memory" in self.limits:
-                        memory_limit = parse_size(self.limits["memory"])
-                    else:
-                        memory_limit = None
 
                 limits = {}
                 for (key, parser) in [
@@ -462,7 +456,7 @@ class Tester:
                 continue
             test.prepare(self)
 
-        self.f_makefile.write(f"all: " + " ".join(self.make_targets))
+        self.f_makefile.write("all: " + " ".join(self.make_targets))
         self.f_makefile.close()
 
         subprocess.run(["make", "-C", "build", "all"], check=True)
