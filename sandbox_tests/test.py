@@ -469,15 +469,17 @@ class Tester:
 
     def run(self):
         passes = 0
+        skips = 0
         failures = 0
         crashes = 0
 
         for test in self.tests:
-            print(f"          [{test.slug}]", end="", flush=True)
-
             if test.arch is not None and self.arch not in test.arch:
-                print("\x1b[93mSkipped\x1b[0m")
+                skips += 1
+                print(f"     \x1b[93mSKIP\x1b[0m [{test.slug}]", flush=True)
                 continue
+
+            print(f"          [{test.slug}]", end="", flush=True)
 
             buf_stdout = io.StringIO()
 
@@ -515,7 +517,6 @@ class Tester:
                 print("\x1b[32m OK\x1b[0m")
                 passes += 1
 
-        total = passes + failures + crashes
         print("  ".join(
             pattern
             .replace("{}", str(cnt))
@@ -523,12 +524,13 @@ class Tester:
             for pattern, cnt in
             [
                 ("\x1b[32m{} test{s} passed\x1b[0m", passes),
+                ("\x1b[93m{} test{s} skipped\x1b[0m", skips),
                 ("\x1b[91m{} test{s} failed\x1b[0m", failures),
                 ("\x1b[95m{} test{s} crashed\x1b[0m", crashes)
             ]
             if cnt > 0
         ))
-        if passes < total:
+        if failures > 0 or crashes > 0:
             raise SystemExit(1)
 
 
