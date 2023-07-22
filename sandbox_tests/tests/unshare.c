@@ -7,6 +7,10 @@ description: Cannot unshare any namespace
 #include <sched.h>
 #include <stdio.h>
 
+#ifndef CLONE_NEWTIME
+#define CLONE_NEWTIME 0x80
+#endif
+
 int main() {
   int namespaces[] = {CLONE_NEWCGROUP, CLONE_NEWIPC, CLONE_NEWIPC,
                       CLONE_NEWIPC,    CLONE_NEWPID, CLONE_NEWTIME,
