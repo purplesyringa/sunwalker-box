@@ -1,12 +1,16 @@
 MACHINE := $(subst -linux-gnu,,$(shell $(CC) -print-multiarch))
 TARGET := $(MACHINE)-unknown-linux-musl
 
+ifeq ($(MACHINE),aarch64)
+RUSTFLAGS := -C link-arg=-lgcc
+endif
+
 .PHONY: sunwalker_box test
 
 all: sunwalker_box
 
 sunwalker_box: target/seccomp_filter target/exec_wrapper
-	cargo +nightly build --target=$(TARGET) -Z build-std=std,panic_abort --release
+	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target=$(TARGET) -Z build-std=std,panic_abort --release
 	cp target/$(TARGET)/release/sunwalker_box sunwalker_box
 
 target/seccomp_filter: target/$(MACHINE)/seccomp_filter
