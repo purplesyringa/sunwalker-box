@@ -612,23 +612,8 @@ impl SingleRun<'_> {
         match redirect(process, &regs) {
             Ok((syscall_no, args)) => {
                 regs.orig_rax = syscall_no as u64;
-                if N >= 1 {
-                    regs.rdi = args[0] as u64;
-                }
-                if N >= 2 {
-                    regs.rsi = args[1] as u64;
-                }
-                if N >= 3 {
-                    regs.rdx = args[2] as u64;
-                }
-                if N >= 4 {
-                    regs.r10 = args[3] as u64;
-                }
-                if N >= 5 {
-                    regs.r8 = args[4] as u64;
-                }
-                if N >= 6 {
-                    regs.r9 = args[5] as u64;
+                for i in 0..N {
+                    tracing::set_syscall_arg(&mut regs, i, args[i]);
                 }
             }
             Err(err) => {

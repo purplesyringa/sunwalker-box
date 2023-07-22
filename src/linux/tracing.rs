@@ -331,7 +331,28 @@ pub fn apply_seccomp_filter() -> Result<()> {
 pub fn get_stack_pointer(regs: &libc::user_regs_struct) -> usize {
     regs.rsp as usize
 }
+#[cfg(target_arch = "x86_64")]
+pub fn set_syscall_arg(regs: &mut libc::user_regs_struct, index: usize, arg: usize) {
+    let arg = arg as u64;
+    match index {
+        0 => regs.rdi = arg,
+        1 => regs.rsi = arg,
+        2 => regs.rdx = arg,
+        3 => regs.r10 = arg,
+        4 => regs.r8 = arg,
+        5 => regs.r9 = arg,
+        _ => unimplemented!(),
+    }
+}
 #[cfg(target_arch = "aarch64")]
 pub fn get_stack_pointer(regs: &user_pt_regs) -> usize {
     regs.sp as usize
+}
+#[cfg(target_arch = "aarch64")]
+pub fn set_syscall_arg(regs: &mut user_pt_regs, index: usize, arg: usize) {
+    if index < 6 {
+        regs.regs[index] = arg as u64;
+    } else {
+        unimplemented!();
+    }
 }
