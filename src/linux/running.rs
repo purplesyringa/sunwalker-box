@@ -464,7 +464,7 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn on_after_execve(process: &ProcessInfo) -> Result<()> {
+    fn on_after_execve(process: &mut ProcessInfo) -> Result<()> {
         // Required to make clock_gettime work
         process.traced_process.disable_vdso()?;
         Ok(())
@@ -533,7 +533,7 @@ impl SingleRun<'_> {
                 } as i64);
             }
             libc::SYS_memfd_create => {
-                return Self::emulate_syscall_redirect(process, |process, regs| {
+                return Self::emulate_syscall_redirect(process, |process| {
                     let mut name = process
                         .traced_process
                         .read_cstring(syscall_info.args[0] as usize, 249)?
@@ -561,8 +561,9 @@ impl SingleRun<'_> {
                         format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
                     file_name.append(&mut name);
 
-                    let file_name_addr =
-                        (tracing::get_stack_pointer(regs) - 128) as usize - file_name.len();
+                    let file_name_addr = (process.traced_process.get_stack_pointer()? - 128)
+                        as usize
+                        - file_name.len();
 
                     process
                         .traced_process
@@ -594,10 +595,8 @@ impl SingleRun<'_> {
     }
 
     fn emulate_syscall_result(process: &mut ProcessInfo, result: i64) -> Result<()> {
-        let mut regs = process.traced_process.get_registers()?;
-        tracing::set_syscall_result(&mut regs, result as usize);
-        regs.orig_rax = u64::MAX; // skip syscall
-        process.traced_process.set_registers(regs)?;
+        process.traced_process.set_syscall_result(result as usize)?;
+        process.traced_process.set_syscall_no(-1)?; // skip syscall
         process.state = ProcessState::Alive;
         process.traced_process.resume()?;
         Ok(())
@@ -605,35 +604,34 @@ impl SingleRun<'_> {
 
     fn emulate_syscall_redirect<const N: usize>(
         process: &mut ProcessInfo,
-        redirect: impl FnOnce(
-            &mut ProcessInfo,
-            &tracing::Registers,
-        ) -> std::io::Result<(i64, [usize; N])>,
+        redirect: impl FnOnce(&mut ProcessInfo) -> std::io::Result<(i64, [usize; N])>,
     ) -> Result<()> {
-        let mut regs = process.traced_process.get_registers()?;
-        match redirect(process, &regs) {
+        match redirect(process) {
             Ok((syscall_no, args)) => {
-                regs.orig_rax = syscall_no as u64;
+                process.traced_process.set_syscall_no(syscall_no)?;
                 for i in 0..N {
-                    tracing::set_syscall_arg(&mut regs, i, args[i]);
+                    process.traced_process.set_syscall_arg(i, args[i])?;
                 }
             }
             Err(err) => {
-                regs.orig_rax = u64::MAX; // skip syscall
-                tracing::set_syscall_result(
-                    &mut regs,
-                    -err.raw_os_error().unwrap_or(libc::EINVAL) as usize,
-                );
+                process.traced_process.set_syscall_no(-1)?; // skip syscall
+                process
+                    .traced_process
+                    .set_syscall_result(-err.raw_os_error().unwrap_or(libc::EINVAL) as usize)?;
             }
         }
-        process.traced_process.set_registers(regs)?;
         process.state = ProcessState::Alive;
         process.traced_process.resume()?;
         Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn handle_sigsegv(&self, process: &ProcessInfo) -> Result<()> {
+    fn handle_sigsegv(&mut self, pid: Pid) -> Result<()> {
+        let process = self
+            .processes
+            .get_mut(&pid)
+            .with_context(|| format!("Unknown pid {pid}"))?;
+
         let info = process.traced_process.get_signal_info()?;
         if info.si_signo != signal::Signal::SIGSEGV as i32 {
             // Excuse me?
@@ -657,7 +655,7 @@ impl SingleRun<'_> {
                         tsc += self.tsc_shift;
                         regs.rdx = tsc >> 32;
                         regs.rax = tsc & 0xffffffff;
-                        process.traced_process.set_registers(regs)?;
+                        process.traced_process.set_registers(regs);
                         process.traced_process.resume()?;
                         return Ok(());
                     } else if word & 0xffffff == 0xf9010f {
@@ -669,7 +667,7 @@ impl SingleRun<'_> {
                         regs.rdx = tsc >> 32;
                         regs.rax = tsc & 0xffffffff;
                         regs.rcx = aux as u64;
-                        process.traced_process.set_registers(regs)?;
+                        process.traced_process.set_registers(regs);
                         process.traced_process.resume()?;
                         return Ok(());
                     }
@@ -684,7 +682,11 @@ impl SingleRun<'_> {
     }
 
     #[cfg(target_arch = "aarch64")]
-    fn handle_sigsegv(&self, process: &ProcessInfo) -> Result<()> {
+    fn handle_sigsegv(&mut self, pid: Pid) -> Result<()> {
+        let process = self
+            .processes
+            .get_mut(&pid)
+            .with_context(|| format!("Unknown pid {pid}"))?;
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;
@@ -704,13 +706,12 @@ impl SingleRun<'_> {
             wait::WaitStatus::Stopped(pid, signal) => {
                 let process = self
                     .processes
-                    .get(&pid)
+                    .get_mut(&pid)
                     .with_context(|| format!("Unknown pid {pid}"))?;
 
                 match signal {
                     signal::Signal::SIGSTOP => {
                         if process.state == ProcessState::JustStarted {
-                            let process = self.processes.get_mut(&pid).unwrap();
                             process.state = ProcessState::Alive;
                             Self::on_after_fork(process)?;
                             process.traced_process.resume()?;
@@ -718,7 +719,7 @@ impl SingleRun<'_> {
                         }
                     }
                     signal::Signal::SIGSEGV => {
-                        self.handle_sigsegv(process)?;
+                        self.handle_sigsegv(pid)?;
                         return Ok(false);
                     }
                     _ => {}
@@ -730,14 +731,14 @@ impl SingleRun<'_> {
             wait::WaitStatus::PtraceEvent(pid, _, event) => {
                 match event {
                     libc::PTRACE_EVENT_EXEC => {
-                        let process = ProcessInfo {
+                        let mut process = ProcessInfo {
                             state: ProcessState::Alive,
                             traced_process: tracing::TracedProcess::new(pid)?,
                         };
                         let old_pid =
                             Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
                         self.processes.remove(&old_pid);
-                        Self::on_after_execve(&process)?;
+                        Self::on_after_execve(&mut process)?;
                         process.traced_process.resume()?;
                         self.processes.insert(pid, process);
                         return Ok(false);
@@ -751,7 +752,7 @@ impl SingleRun<'_> {
 
                 let process = self
                     .processes
-                    .get(&pid)
+                    .get_mut(&pid)
                     .with_context(|| format!("Unknown pid {pid}"))?;
 
                 match event {
@@ -866,7 +867,7 @@ impl SingleRun<'_> {
                 traced_process,
             },
         );
-        let main_process = self.processes.get(&self.main_pid).unwrap();
+        let main_process = self.processes.get_mut(&self.main_pid).unwrap();
 
         Self::on_after_fork(main_process)?;
         Self::on_after_execve(main_process)?;
