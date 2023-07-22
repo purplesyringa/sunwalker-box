@@ -1,5 +1,7 @@
 /*
 description: rdtsc passes just like clock()
+arch:
+- x86_64
 */
 
 #include <stdio.h>

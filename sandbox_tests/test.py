@@ -157,6 +157,7 @@ class Box:
 class Test(abc.ABC):
     slug: str
     description: str
+    arch: list[str]
 
     def prepare(self, tester):
         pass
@@ -189,6 +190,7 @@ class SimpleTest(Test):
         self,
         slug: str,
         description: str,
+        arch: Optional[list[str]] = None,
         runs: int = 1,
         pass_run_number: bool = False,
         assets: dict[str, str] = {},
@@ -204,6 +206,7 @@ class SimpleTest(Test):
     ):
         self.slug = slug
         self.description = description
+        self.arch = arch
         self.runs = runs
         self.pass_run_number = pass_run_number
         self.assets = assets
@@ -428,8 +431,9 @@ class PyTest(SimpleTest):
 
 
 class Tester:
-    def __init__(self, f_makefile: io.TextIOBase):
+    def __init__(self, f_makefile: io.TextIOBase, arch: str):
         self.f_makefile = f_makefile
+        self.arch = arch
         self.make_targets: list[str] = []
         self.tests: list[Test] = []
 
@@ -454,6 +458,8 @@ class Tester:
 
     def prepare(self):
         for test in self.tests:
+            if test.arch is not None and self.arch not in test.arch:
+                continue
             test.prepare(self)
 
         self.f_makefile.write(f"all: " + " ".join(self.make_targets))
@@ -468,6 +474,10 @@ class Tester:
 
         for test in self.tests:
             print(f"          [{test.slug}]", end="", flush=True)
+
+            if test.arch is not None and self.arch not in test.arch:
+                print("\x1b[93mSkipped\x1b[0m")
+                continue
 
             buf_stdout = io.StringIO()
 
@@ -536,7 +546,19 @@ def main():
                    "--core", str(CORE)], check=True)
 
     try:
-        tester = Tester(f_makefile)
+        tester = Tester(f_makefile, sys.argv[1])
+
+        # with Box() as box:
+            # box.commit()
+            # for _ in range(1000):
+                # box.reset()
+                # box.run(["/usr/bin/python3", "-c", ""])
+        # box.mkfile("/space/cat")
+        # box.mkfile("/space/stdin", b"Hello, world!")
+        # box.bind("/usr/bin/cat", "/space/cat", readonly=True)
+        # box.run(["/space/cat"], stdin="/space/stdin",
+        #         stdout="/space/stdout")
+        # box.cat("/space/stdout")
 
         for test_file in sorted(os.listdir("tests")):
             if test_file.endswith(".c"):
