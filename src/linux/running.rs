@@ -75,6 +75,7 @@ struct SingleRun<'a> {
     main_pid: Pid,
     start_time: Option<Instant>,
     processes: HashMap<Pid, ProcessInfo>,
+    #[cfg(target_arch = "x86_64")]
     tsc_shift: u64,
     sem_next_id: isize,
     msg_next_id: isize,
@@ -151,6 +152,7 @@ impl Runner {
             main_pid: Pid::from_raw(0),
             start_time: None,
             processes: HashMap::new(),
+            #[cfg(target_arch = "x86_64")]
             tsc_shift: rand::random::<u64>(),
             sem_next_id: 0,
             msg_next_id: 0,
