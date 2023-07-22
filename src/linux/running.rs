@@ -566,7 +566,15 @@ impl SingleRun<'_> {
                         .traced_process
                         .write_memory(file_name_addr, &file_name)?;
 
-                    Ok((libc::SYS_open, [file_name_addr, open_flags as usize, 0o700]))
+                    Ok((
+                        libc::SYS_openat,
+                        [
+                            libc::AT_FDCWD as usize,
+                            file_name_addr,
+                            open_flags as usize,
+                            0o700,
+                        ],
+                    ))
                 });
             }
             _ => {}
