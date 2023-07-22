@@ -59,8 +59,6 @@ pub struct RunResults {
 enum ProcessState {
     JustStarted,
     Alive,
-    EmulateSyscall(i64),
-    RedirectSyscall(u64),
 }
 
 struct ProcessInfo {
@@ -533,7 +531,42 @@ impl SingleRun<'_> {
                 } as i64);
             }
             libc::SYS_memfd_create => {
-                return Self::emulate_syscall_two_step(process, syscall_info.nr);
+                return Self::emulate_syscall_redirect(process, |process, regs| {
+                    let mut name = process
+                        .traced_process
+                        .read_cstring(syscall_info.args[0] as usize, 249)?
+                        .into_bytes_with_nul();
+
+                    let mut open_flags = libc::O_RDWR | libc::O_CREAT;
+                    if syscall_info.args[1] & (libc::MFD_CLOEXEC as u64) != 0 {
+                        open_flags |= libc::O_CLOEXEC;
+                    }
+                    // TODO: sealing
+                    if syscall_info.args[1]
+                        & !(libc::MFD_CLOEXEC
+                            | libc::MFD_HUGETLB
+                            | (libc::MFD_HUGE_MASK << libc::MFD_HUGE_SHIFT))
+                            as u64
+                        != 0
+                    {
+                        Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+                    }
+
+                    // We don't care about .. in this context because open(2) is executed in the
+                    // context of the unprivileged process, and no sane person is going to use ..
+                    // in the name for benign reasons.
+                    let mut file_name =
+                        format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
+                    file_name.append(&mut name);
+
+                    let file_name_addr = (regs.rsp - 128) as usize - file_name.len();
+
+                    process
+                        .traced_process
+                        .write_memory(file_name_addr, &file_name)?;
+
+                    Ok((libc::SYS_open, [file_name_addr, open_flags as usize, 0o700]))
+                });
             }
             _ => {}
         }
@@ -551,19 +584,52 @@ impl SingleRun<'_> {
 
     fn emulate_syscall_result(process: &mut ProcessInfo, result: i64) -> Result<()> {
         let mut regs = process.traced_process.get_registers()?;
-        regs.rax = u64::MAX; // skip syscall
+        regs.rax = result as u64;
+        regs.orig_rax = u64::MAX; // skip syscall
         process.traced_process.set_registers(regs)?;
-        process.state = ProcessState::EmulateSyscall(result);
-        process.traced_process.resume_step()?;
+        process.state = ProcessState::Alive;
+        process.traced_process.resume()?;
         Ok(())
     }
 
-    fn emulate_syscall_two_step(process: &mut ProcessInfo, syscall_no: u64) -> Result<()> {
+    fn emulate_syscall_redirect<const N: usize>(
+        process: &mut ProcessInfo,
+        redirect: impl FnOnce(
+            &mut ProcessInfo,
+            &libc::user_regs_struct,
+        ) -> std::io::Result<(i64, [usize; N])>,
+    ) -> Result<()> {
         let mut regs = process.traced_process.get_registers()?;
-        regs.rax = u64::MAX; // skip syscall
+        match redirect(process, &regs) {
+            Ok((syscall_no, args)) => {
+                regs.orig_rax = syscall_no as u64;
+                if N >= 1 {
+                    regs.rdi = args[0] as u64;
+                }
+                if N >= 2 {
+                    regs.rsi = args[1] as u64;
+                }
+                if N >= 3 {
+                    regs.rdx = args[2] as u64;
+                }
+                if N >= 4 {
+                    regs.r10 = args[3] as u64;
+                }
+                if N >= 5 {
+                    regs.r8 = args[4] as u64;
+                }
+                if N >= 6 {
+                    regs.r9 = args[5] as u64;
+                }
+            }
+            Err(err) => {
+                regs.orig_rax = u64::MAX; // skip syscall
+                regs.rax = -err.raw_os_error().unwrap_or(libc::EINVAL) as u64;
+            }
+        }
         process.traced_process.set_registers(regs)?;
-        process.state = ProcessState::RedirectSyscall(syscall_no);
-        process.traced_process.resume_step()?;
+        process.state = ProcessState::Alive;
+        process.traced_process.resume()?;
         Ok(())
     }
 
@@ -617,68 +683,6 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn redirect_syscall(&mut self, pid: Pid, syscall_no: i64) -> Result<()> {
-        match syscall_no {
-            libc::SYS_memfd_create => {
-                let process = self.processes.get_mut(&pid).unwrap();
-                let mut regs = process.traced_process.get_registers()?;
-
-                let res: std::io::Result<()> = try {
-                    let mut name = process
-                        .traced_process
-                        .read_cstring(regs.rdi as usize, 249)?
-                        .into_bytes_with_nul();
-
-                    let mut open_flags = libc::O_RDWR | libc::O_CREAT;
-                    if regs.rsi & (libc::MFD_CLOEXEC as u64) != 0 {
-                        open_flags |= libc::O_CLOEXEC;
-                    }
-                    // TODO: sealing
-                    if regs.rsi
-                        & !(libc::MFD_CLOEXEC
-                            | libc::MFD_HUGETLB
-                            | (libc::MFD_HUGE_MASK << libc::MFD_HUGE_SHIFT))
-                            as u64
-                        != 0
-                    {
-                        Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
-                    }
-
-                    // We don't care about .. in this context because open(2) is executed in the
-                    // context of the unprivileged process, and no sane person is going to use ..
-                    // in the name for benign reasons.
-                    let mut file_name =
-                        format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
-                    file_name.append(&mut name);
-
-                    let file_name_addr = (regs.rsp - 128) as usize - file_name.len();
-
-                    process
-                        .traced_process
-                        .write_memory(file_name_addr, &file_name)?;
-
-                    regs.rip -= 2;
-                    regs.rax = libc::SYS_open as u64;
-                    regs.rdi = file_name_addr as u64;
-                    regs.rsi = open_flags as u64;
-                    regs.rdx = 0o700;
-                };
-
-                if let Err(err) = res {
-                    regs.rax = -err.raw_os_error().unwrap() as u64;
-                }
-
-                process.traced_process.set_registers(regs)?;
-                process.state = ProcessState::Alive;
-                process.traced_process.resume()?;
-            }
-
-            _ => bail!("Unexpected redirected syscall {syscall_no}"),
-        }
-
-        Ok(())
-    }
-
     fn _handle_event(&mut self, wait_status: wait::WaitStatus) -> Result<bool> {
         match wait_status {
             wait::WaitStatus::StillAlive => {}
@@ -705,22 +709,6 @@ impl SingleRun<'_> {
                             return Ok(false);
                         }
                     }
-                    signal::Signal::SIGTRAP => match process.state {
-                        ProcessState::EmulateSyscall(ret) => {
-                            let process = self.processes.get_mut(&pid).unwrap();
-                            process.state = ProcessState::Alive;
-                            let mut regs = process.traced_process.get_registers()?;
-                            regs.rax = ret as u64;
-                            process.traced_process.set_registers(regs)?;
-                            process.traced_process.resume()?;
-                            return Ok(false);
-                        }
-                        ProcessState::RedirectSyscall(syscall_no) => {
-                            self.redirect_syscall(pid, syscall_no as i64)?;
-                            return Ok(false);
-                        }
-                        _ => {}
-                    },
                     signal::Signal::SIGSEGV => {
                         self.handle_sigsegv(process)?;
                         return Ok(false);
