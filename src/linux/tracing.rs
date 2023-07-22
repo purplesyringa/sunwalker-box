@@ -326,7 +326,8 @@ impl TracedProcess {
     fn _store_registers(&mut self) -> Result<()> {
         if self.registers_edited {
             self.registers_edited = false;
-            self._set_registers(self.cached_registers.unwrap()?)?;
+            let regs = self.cached_registers.take().unwrap();
+            self._set_registers(regs?)?;
         }
         self.cached_registers = None;
         Ok(())
