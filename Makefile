@@ -5,7 +5,7 @@ ifeq ($(ARCH),aarch64)
 RUSTFLAGS := -C link-arg=-lgcc
 endif
 
-.PHONY: target/$(TARGET)/release/sunwalker_box test
+.PHONY: target/$(TARGET)/release/sunwalker_box test clean
 
 all: sunwalker_box
 
@@ -33,3 +33,6 @@ target/aarch64/exec_wrapper.o: src/linux/aarch64/exec_wrapper.asm
 
 test:
 	cd sandbox_tests && ./test.py $(ARCH)
+
+clean:
+	rm -r target sunwalker_box *-sunwalker_box || true
