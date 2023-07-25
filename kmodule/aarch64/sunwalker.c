@@ -41,6 +41,7 @@ static bool is_offset_enabled(struct task_struct *task)
 	u64 cur_controller_start_time;
 	unsigned int ns_level;
 	struct task_struct* proc;
+	bool found = false;
 
 	cur_controller_pid = this_cpu_read(controller_pid);
 	if (cur_controller_pid == 0)
@@ -48,15 +49,25 @@ static bool is_offset_enabled(struct task_struct *task)
 
 	cur_controller_start_time = this_cpu_read(controller_start_time);
 
-	ns_level = task_pid(task)->level;
-	for (proc = task; task_pid(proc)->level == ns_level; proc = proc->real_parent) {
-		if (proc->tgid == cur_controller_pid && proc->start_time == cur_controller_start_time)
-			return true;
-		if (proc == &init_task)
-			break;
+	rcu_read_lock();
+	if (pid_alive(task)) {
+		ns_level = task_pid(task)->level;
+		for (
+			proc = rcu_dereference(task->real_parent);
+			pid_alive(proc) && task_pid(proc)->level == ns_level;
+			proc = rcu_dereference(proc->real_parent)
+		) {
+			if (proc->tgid == cur_controller_pid && proc->start_time == cur_controller_start_time) {
+				found = true;
+				break;
+			}
+			if (proc == &init_task)
+				break;
+		}
 	}
+	rcu_read_unlock();
 
-	return false;
+	return found;
 }
 
 // Disable ARM64_WORKAROUND_1418040 if on a sunwalker core
