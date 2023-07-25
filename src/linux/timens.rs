@@ -7,13 +7,17 @@ const CLONE_NEWTIME: c_int = 0x80;
 
 pub struct TimeNsController {
     timens_offsets: File,
+    arch_dependent: TimeNsControllerArchDependent,
 }
 
 impl TimeNsController {
     pub fn new() -> Result<Self> {
-        let timens_offsets = File::create("/newroot/proc/self/timens_offsets")
-            .context("Failed to open /newroot/proc/self/timens_offsets for writing")?;
-        Ok(Self { timens_offsets })
+        let timens_offsets = File::create("/oldroot/proc/self/timens_offsets")
+            .context("Failed to open /oldroot/proc/self/timens_offsets for writing")?;
+        Ok(Self {
+            timens_offsets,
+            arch_dependent: TimeNsControllerArchDependent::new()?,
+        })
     }
 
     pub fn reset_system_time_for_children(&mut self) -> Result<()> {
@@ -45,7 +49,7 @@ impl TimeNsController {
 
         self.timens_offsets
             .rewind()
-            .context("Failed to rewind /newroot/proc/self/timens_offsets")?;
+            .context("Failed to rewind /oldroot/proc/self/timens_offsets")?;
         self.timens_offsets
             .write_all(
                 format!(
@@ -58,6 +62,8 @@ impl TimeNsController {
                 .as_ref(),
             )
             .context("Failed to adjust timens offset")?;
+
+        self.arch_dependent.reset_system_time_for_children()?;
 
         Ok(())
     }
@@ -75,4 +81,54 @@ pub fn disable_rdtsc() -> Result<()> {
 #[cfg(target_arch = "aarch64")]
 pub fn disable_rdtsc() -> Result<()> {
     Ok(())
+}
+
+#[cfg(target_arch = "x86_64")]
+struct TimeNsControllerArchDependent;
+
+#[cfg(target_arch = "x86_64")]
+impl TimeNsControllerArchDependent {
+    pub fn new() -> Result<Self> {
+        Ok(Self)
+    }
+
+    pub fn reset_system_time_for_children(&mut self) -> Result<()> {
+        Ok(())
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+struct TimeNsControllerArchDependent {
+    kmodule_timing: File,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl TimeNsControllerArchDependent {
+    pub fn new() -> Result<Self> {
+        let kmodule_timing = File::create("/oldroot/sys/kernel/sunwalker/timing")
+            .context("Failed to open /oldroot/sys/kernel/sunwalker/timing for writing")?;
+        Ok(Self { kmodule_timing })
+    }
+
+    pub fn reset_system_time_for_children(&mut self) -> Result<()> {
+        self.kmodule_timing
+            .rewind()
+            .context("Failed to rewind /oldroot/proc/self/kmodule_timing")?;
+
+        let mut cntvct_offset: u64;
+        unsafe {
+            std::arch::asm!(
+                "isb",
+                "mrs {cntvct_offset}, CNTVCT_EL0",
+                cntvct_offset = out(reg) cntvct_offset
+            );
+        }
+        cntvct_offset = 0 - cntvct_offset;
+
+        self.kmodule_timing
+            .write_all(format!("{} {}\n", std::process::id(), cntvct_offset).as_ref())
+            .context("Failed to adjust CPU timers offset")?;
+
+        Ok(())
+    }
 }
