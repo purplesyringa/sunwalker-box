@@ -14,7 +14,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	cp $^ $@
 target/$(TARGET)/release/sunwalker_box: target/seccomp_filter target/exec_wrapper
-	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target=$(TARGET) -Z build-std=std,panic_abort --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(ARCH)-linux-musl-gcc\"
+	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target=$(TARGET) -Z build-std=std,panic_abort --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(ARCH)-linux-gnu-gcc\"
 
 target/seccomp_filter: target/$(ARCH)/seccomp_filter
 	cp $^ $@
