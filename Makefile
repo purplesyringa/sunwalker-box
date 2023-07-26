@@ -1,4 +1,4 @@
-ARCH := $(subst -linux-gnu,,$(shell musl-gcc -print-multiarch))
+ARCH := $(shell musl-gcc -dumpmachine | cut -d- -f1)
 TARGET := $(ARCH)-unknown-linux-musl
 
 RUSTFLAGS := --remap-path-prefix ${HOME}/.rustup=~/.rustup --remap-path-prefix ${HOME}/.cargo=~/.cargo --remap-path-prefix $(shell pwd)=.
