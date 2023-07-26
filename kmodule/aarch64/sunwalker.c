@@ -74,7 +74,7 @@ static bool is_offset_enabled(struct task_struct *task)
 static int this_cpu_has_cap_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	unsigned int n = regs->regs[0];
-	if (n == ARM64_WORKAROUND_1418040 && is_offset_enabled(current))
+	if (n == ARM64_WORKAROUND_1418040)
 		regs->regs[0] = -1;
 	return 0;
 }
