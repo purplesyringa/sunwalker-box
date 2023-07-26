@@ -1,0 +1,6 @@
+*.cmd
+Module.symvers
+modules.order
+sunwalker.ko
+sunwalker.mod*
+sunwalker.o

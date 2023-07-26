@@ -113,7 +113,7 @@ impl TimeNsControllerArchDependent {
     pub fn reset_system_time_for_children(&mut self) -> Result<()> {
         self.kmodule_timing
             .rewind()
-            .context("Failed to rewind /oldroot/proc/self/kmodule_timing")?;
+            .context("Failed to rewind /oldroot/sys/kernel/sunwalker/timing")?;
 
         let mut cntvct_offset: u64;
         unsafe {

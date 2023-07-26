@@ -13,7 +13,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	cp $^ $@
-target/$(TARGET)/release/sunwalker_box: target/seccomp_filter target/exec_wrapper
+target/$(TARGET)/release/sunwalker_box: target/seccomp_filter target/exec_wrapper target/sunwalker.ko
 	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target=$(TARGET) -Z build-std=std,panic_abort --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(ARCH)-linux-gnu-gcc\"
 
 target/seccomp_filter: target/$(ARCH)/seccomp_filter
@@ -29,6 +29,13 @@ target/x86_64/exec_wrapper.o: src/linux/x86_64/exec_wrapper.asm
 	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
 target/aarch64/exec_wrapper.o: src/linux/aarch64/exec_wrapper.asm
 	mkdir -p target/aarch64 && aarch64-linux-gnu-as $^ -o $@
+
+target/sunwalker.ko: kmodule/$(ARCH)/sunwalker.ko
+	cp $^ $@
+kmodule/x86_64/sunwalker.ko:
+	touch $@
+kmodule/aarch64/sunwalker.ko: kmodule/aarch64/sunwalker.c
+	$(MAKE) -C kmodule/aarch64
 
 
 test:

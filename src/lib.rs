@@ -16,6 +16,7 @@ mod linux {
     pub mod entry;
     mod ids;
     mod ipc;
+    mod kmodule;
     mod manager;
     mod mountns;
     mod procs;
