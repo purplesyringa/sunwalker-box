@@ -1,4 +1,4 @@
-ARCH := $(subst -linux-gnu,,$(shell $(CC) -print-multiarch))
+ARCH := $(subst -linux-gnu,,$(shell musl-gcc -print-multiarch))
 TARGET := $(ARCH)-unknown-linux-musl
 
 ifeq ($(ARCH),aarch64)
@@ -42,4 +42,4 @@ test:
 	cd sandbox_tests && ./test.py $(ARCH)
 
 clean:
-	rm -r target sunwalker_box *-sunwalker_box || true
+	rm -r target sunwalker_box *-sunwalker_box kmodule/*/Module.symvers kmodule/*/modules.order kmodule/*/sunwalker.ko kmodule/*/sunwalker.mod* kmodule/*/sunwalker.o || true
