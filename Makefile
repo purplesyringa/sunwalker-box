@@ -1,8 +1,10 @@
 ARCH := $(subst -linux-gnu,,$(shell musl-gcc -print-multiarch))
 TARGET := $(ARCH)-unknown-linux-musl
 
+RUSTFLAGS := --remap-path-prefix ${HOME}/.rustup=~/.rustup --remap-path-prefix ${HOME}/.cargo=~/.cargo --remap-path-prefix $(shell pwd)=.
+
 ifeq ($(ARCH),aarch64)
-RUSTFLAGS := -C link-arg=-lgcc
+RUSTFLAGS += -C link-arg=-lgcc
 endif
 
 .PHONY: target/$(TARGET)/release/sunwalker_box test clean
