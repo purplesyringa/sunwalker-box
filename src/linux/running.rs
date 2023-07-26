@@ -85,8 +85,8 @@ struct SingleRun<'a> {
 impl Runner {
     pub fn new(proc_cgroup: cgroups::ProcCgroup) -> Result<Self> {
         // Mount procfs and enter the sandboxed root
-        rootfs::configure_rootfs().context("Failed to configure rootfs")?;
         let timens_controller = timens::TimeNsController::new().context("Failed to adjust time")?;
+        rootfs::configure_rootfs().context("Failed to configure rootfs")?;
         userns::enter_user_namespace().context("Failed to unshare user namespace")?;
         rootfs::enter_rootfs().context("Failed to enter rootfs")?;
 

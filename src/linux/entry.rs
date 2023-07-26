@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, controller, ids, manager, rootfs, running, sandbox},
+    linux::{cgroups, controller, ids, kmodule, manager, rootfs, running, sandbox},
 };
 use anyhow::{bail, Context, Result};
 use nix::libc::mode_t;
@@ -14,12 +14,14 @@ pub fn main(cli_args: entry::CLIArgs) {
 
     match cli_args.command {
         entry::CLICommand::Isolate(command) => {
+            kmodule::install().expect("Failed to install kernel module");
             cgroups::Cgroup::new(command.core).expect("Failed to create cgroup for core");
         }
         entry::CLICommand::Free(command) => {
             cgroups::revert_core_isolation(command.core).expect("Failed to core revert isolation");
         }
         entry::CLICommand::Start(command) => {
+            kmodule::install().expect("Failed to install kernel module");
             start(command).expect("Failed to start box");
         }
     }
