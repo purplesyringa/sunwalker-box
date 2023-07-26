@@ -71,7 +71,6 @@ struct SingleRun<'a> {
     options: Options,
     results: RunResults,
     box_cgroup: Option<cgroups::BoxCgroup>,
-    has_peak: bool,
     main_pid: Pid,
     start_time: Option<Instant>,
     processes: HashMap<Pid, ProcessInfo>,
@@ -148,7 +147,6 @@ impl Runner {
                 memory: 0,
             },
             box_cgroup: None,
-            has_peak: false,
             main_pid: Pid::from_raw(0),
             start_time: None,
             processes: HashMap::new(),
@@ -323,12 +321,6 @@ impl SingleRun<'_> {
                 .min(idleness_time_limit - self.results.idleness_time + Duration::from_millis(50));
         }
 
-        // Old kernels don't reveal memory.peak, so the only way to get memory usage stats is to use
-        // polling
-        if !self.has_peak {
-            timeout = Duration::from_millis(50);
-        }
-
         if timeout == Duration::MAX {
             -1
         } else {
@@ -450,12 +442,6 @@ impl SingleRun<'_> {
         self.results.cpu_time = cpu_stats.total;
         self.results.real_time = self.start_time.unwrap().elapsed();
         self.results.idleness_time = self.results.real_time.saturating_sub(self.results.cpu_time);
-        if !self.has_peak {
-            self.results.memory = self
-                .results
-                .memory
-                .max(self.box_cgroup.as_mut().unwrap().get_memory_total()?);
-        }
         Ok(())
     }
 
@@ -890,13 +876,6 @@ impl SingleRun<'_> {
 
         let traced_process = self.start_worker()?;
 
-        self.has_peak = self
-            .box_cgroup
-            .as_mut()
-            .unwrap()
-            .get_memory_peak()?
-            .is_some();
-
         // execve has just happened
         self.start_time = Some(Instant::now());
 
@@ -922,16 +901,7 @@ impl SingleRun<'_> {
             self.update_metrics()?;
         }
 
-        if self.has_peak {
-            self.results.memory = self.results.memory.max(
-                self.box_cgroup
-                    .as_mut()
-                    .unwrap()
-                    .get_memory_peak()?
-                    .context("memory.peak is unexpectedly unavailable")?,
-            );
-        }
-
+        self.results.memory = self.box_cgroup.as_mut().unwrap().get_memory_peak()?;
         self.results.verdict = self.compute_verdict(wait_status)?;
 
         self.cleanup()?;

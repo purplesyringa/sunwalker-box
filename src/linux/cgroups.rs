@@ -227,53 +227,14 @@ impl BoxCgroup {
         Ok(stat)
     }
 
-    pub fn get_memory_peak(&self) -> Result<Option<usize>> {
-        match self
-            .proc_cgroup_fd
-            .open_file(format!("box-{}/memory.peak", self.box_id))
-        {
-            Ok(mut file) => {
-                let mut buf = String::new();
-                file.read_to_string(&mut buf)
-                    .context("Failed to read memory.peak")?;
-                Ok(Some(
-                    buf.trim().parse().context("Invalid memory.peak format")?,
-                ))
-            }
-            Err(e) => {
-                if e.kind() == std::io::ErrorKind::NotFound {
-                    Ok(None)
-                } else {
-                    Err(e).context("Failed to open memory.peak for reading")
-                }
-            }
-        }
-    }
-
-    pub fn get_memory_total(&self) -> Result<usize> {
+    pub fn get_memory_peak(&self) -> Result<usize> {
         let mut buf = String::new();
         self.proc_cgroup_fd
-            .open_file(format!("box-{}/memory.stat", self.box_id))
-            .context("Failed to open memory.stat for reading")?
+            .open_file(format!("box-{}/memory.peak", self.box_id))
+            .context("Failed to open memory.peak for reading")?
             .read_to_string(&mut buf)
-            .context("Failed to read memory.stat")?;
-
-        let mut total = 0;
-        for line in buf.lines() {
-            if line.starts_with("anon ") || line.starts_with("sock ") || line.starts_with("shmem ")
-            {
-                let mut it = line.split_ascii_whitespace();
-                it.next();
-                let memory: usize = it
-                    .next()
-                    .context("Invalid memory.stat format")?
-                    .parse()
-                    .context("Invalid memory.stat format")?;
-                total += memory;
-            }
-        }
-
-        Ok(total)
+            .context("Failed to read memory.peak")?;
+        buf.trim().parse().context("Invalid memory.peak format")
     }
 
     pub fn was_oom_killed(&self) -> Result<bool> {
