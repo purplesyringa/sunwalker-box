@@ -234,10 +234,6 @@ impl TracedProcess {
         self._store_registers()?;
         ptrace::cont(self.pid, Some(signal)).context("Failed to ptrace-resume the child")
     }
-    pub fn resume_step(&mut self) -> Result<()> {
-        self._store_registers()?;
-        ptrace::step(self.pid, None).context("Failed to ptrace-resume the child")
-    }
 
     pub fn get_signal_info(&self) -> Result<libc::siginfo_t> {
         ptrace::getsiginfo(self.pid).context("Failed to get signal info")

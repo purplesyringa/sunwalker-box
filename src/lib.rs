@@ -3,7 +3,6 @@
     io_error_more,
     never_type,
     try_blocks,
-    unix_chown,
     unwrap_infallible
 )]
 
