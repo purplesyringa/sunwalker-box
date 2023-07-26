@@ -26,7 +26,7 @@ target/aarch64/seccomp_filter: src/linux/aarch64/seccomp_filter.asm
 	mkdir -p target/aarch64 && seccomp-tools asm $^ -o $@ -f raw
 
 target/exec_wrapper: target/$(ARCH)/exec_wrapper.o
-	$(ARCH)-linux-gnu-ld $^ -o $@ -static -n -s
+	$(ARCH)-linux-gnu-gcc $^ -o $@ -static -nostartfiles -n -s
 target/x86_64/exec_wrapper.o: src/linux/x86_64/exec_wrapper.asm
 	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
 target/aarch64/exec_wrapper.o: src/linux/aarch64/exec_wrapper.asm
