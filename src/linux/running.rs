@@ -324,12 +324,7 @@ impl SingleRun<'_> {
         if timeout == Duration::MAX {
             -1
         } else {
-            // Old kernels don't support very large timeouts
-            timeout
-                .as_millis()
-                .try_into()
-                .unwrap_or(i32::MAX)
-                .min(1000000)
+            timeout.as_millis().try_into().unwrap_or(i32::MAX)
         }
     }
 
