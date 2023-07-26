@@ -29,8 +29,7 @@
                                          ESR_ELx_CP15_64_ISS_DIR_READ)
 #endif
 
-DEFINE_PER_CPU(pid_t, controller_pid);
-DEFINE_PER_CPU(u64, controller_start_time);
+DEFINE_PER_CPU(struct pid *, controller_pid);
 DEFINE_PER_CPU(u64, cntvct_offset);
 DEFINE_PER_CPU(struct task_struct *, next_current);
 
@@ -38,27 +37,26 @@ static void (*sw_arm64_skip_faulting_instruction)(struct pt_regs *regs, unsigned
 
 static bool is_offset_enabled(struct task_struct *task)
 {
-	pid_t cur_controller_pid;
-	u64 cur_controller_start_time;
-	unsigned int ns_level;
+	struct pid *ctl_pid;
 	struct task_struct* proc;
 	bool found = false;
 
-	cur_controller_pid = this_cpu_read(controller_pid);
-	if (cur_controller_pid == 0)
+	ctl_pid = this_cpu_read(controller_pid);
+	if (!ctl_pid)
 		return false;
 
-	cur_controller_start_time = this_cpu_read(controller_start_time);
-
 	rcu_read_lock();
-	if (pid_alive(task)) {
-		ns_level = task_pid(task)->level;
+
+	if (!pid_has_task(ctl_pid, PIDTYPE_TGID)) {
+		this_cpu_write(controller_pid, NULL);
+		put_pid(ctl_pid);
+	} else if (pid_alive(task)) {
 		for (
 			proc = rcu_dereference(task->real_parent);
-			pid_alive(proc) && task_pid(proc)->level == ns_level;
+			pid_alive(proc) && task_pid(proc)->level >= ctl_pid->level;
 			proc = rcu_dereference(proc->real_parent)
 		) {
-			if (proc->tgid == cur_controller_pid && proc->start_time == cur_controller_start_time) {
+			if (task_pid(proc) == ctl_pid) {
 				found = true;
 				break;
 			}
@@ -66,6 +64,7 @@ static bool is_offset_enabled(struct task_struct *task)
 				break;
 		}
 	}
+
 	rcu_read_unlock();
 
 	return found;
@@ -105,14 +104,11 @@ static struct pt_regs fake_regs = {
 
 static int do_el0_sys_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
-	unsigned int esr;
-	struct pt_regs *userland_regs;
+	unsigned int esr = regs->regs[0];
+	struct pt_regs *userland_regs = (void *)regs->regs[1];
 
 	if (!is_offset_enabled(current))
 		return 0;
-
-	esr = regs->regs[0];
-	userland_regs = (void *)regs->regs[1];
 
 	if (
 		(esr & ESR_ELx_SYS64_ISS_SYS_OP_MASK) == ESR_ELx_SYS64_ISS_SYS_CNTVCT
@@ -130,14 +126,11 @@ static int do_el0_sys_pre_handler(struct kprobe *p, struct pt_regs *regs)
 #ifdef CONFIG_COMPAT
 static int do_el0_cp15_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
-	unsigned int esr;
-	struct pt_regs *userland_regs;
+	unsigned int esr = regs->regs[0];
+	struct pt_regs *userland_regs = (void *)regs->regs[1];
 
 	if (!is_offset_enabled(current))
 		return 0;
-
-	esr = regs->regs[0];
-	userland_regs = (void *)regs->regs[1];
 
 	if (
 		ESR_ELx_EC(esr) == ESR_ELx_EC_CP15_64
@@ -195,9 +188,8 @@ static ssize_t timing_show(struct kobject *kobj, struct kobj_attribute *attr, ch
 {
 	return sprintf(
 		buf,
-		"%d %llu %llu %lld\n",
-		this_cpu_read(controller_pid),
-		this_cpu_read(controller_start_time),
+		"%d %llu %lld\n",
+		pid_vnr(this_cpu_read(controller_pid)),
 		this_cpu_read(cntvct_offset),
 		read_sysreg(cntkctl_el1)
 	);
@@ -207,16 +199,26 @@ static ssize_t timing_store(struct kobject *kobj, struct kobj_attribute *attr, c
 {
 	pid_t pid;
 	u64 offset;
+	struct pid *old_pid;
+	struct pid *new_pid = NULL;
+
 	if (sscanf(buf, "%d%llu", &pid, &offset) != 2)
 		return -EINVAL;
+
 	if (pid != 0) {
-		struct task_struct *task = pid_task(find_vpid(pid), PIDTYPE_PID);
-		if (!task)
+		new_pid = find_get_pid(pid);
+		if (!new_pid)
 			return -EINVAL;
-		this_cpu_write(controller_start_time, task->start_time);
+		if (!pid_has_task(new_pid, PIDTYPE_TGID))
+			return -EINVAL;
 	}
-	this_cpu_write(controller_pid, pid);
+
+	old_pid = this_cpu_read(controller_pid);
+	this_cpu_write(controller_pid, new_pid);
+	put_pid(old_pid);
+
 	this_cpu_write(cntvct_offset, offset);
+
 	return count;
 }
 
