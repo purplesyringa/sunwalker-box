@@ -32,6 +32,7 @@
 DEFINE_PER_CPU(pid_t, controller_pid);
 DEFINE_PER_CPU(u64, controller_start_time);
 DEFINE_PER_CPU(u64, cntvct_offset);
+DEFINE_PER_CPU(struct task_struct *, next_current);
 
 static void (*sw_arm64_skip_faulting_instruction)(struct pt_regs *regs, unsigned long size);
 
@@ -74,14 +75,18 @@ static bool is_offset_enabled(struct task_struct *task)
 static int this_cpu_has_cap_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	unsigned int n = regs->regs[0];
-	if (n == ARM64_WORKAROUND_1418040)
-		regs->regs[0] = -1;
+	if (n == ARM64_WORKAROUND_1418040) {
+		struct task_struct *next = this_cpu_read(next_current);
+		if (next && is_offset_enabled(next))
+			regs->regs[0] = -1;
+	}
 	return 0;
 }
 
 static int __switch_to_pre_handler(struct kprobe *p, struct pt_regs *regs)
 {
 	struct task_struct *next = (void *)regs->regs[1];
+	this_cpu_write(next_current, next);
 	if (is_offset_enabled(next))
 		sysreg_clear_set(cntkctl_el1, ARCH_TIMER_USR_VCT_ACCESS_EN, 0);
 	else
