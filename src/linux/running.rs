@@ -661,12 +661,11 @@ impl SingleRun<'_> {
                     } else if word & 0xffffff == 0xf9010f {
                         // rdtscp = 0f 01 f9
                         regs.rip += 3;
-                        let mut aux = 0;
-                        let mut tsc = unsafe { core::arch::x86_64::__rdtscp(&mut aux) };
+                        let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
                         tsc += self.tsc_shift;
                         regs.rdx = tsc >> 32;
                         regs.rax = tsc & 0xffffffff;
-                        regs.rcx = aux as u64;
+                        regs.rcx = 1;
                         process.traced_process.set_registers(regs);
                         process.traced_process.resume()?;
                         return Ok(());
