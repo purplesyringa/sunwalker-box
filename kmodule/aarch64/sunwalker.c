@@ -163,6 +163,7 @@ static struct kprobe __switch_to_kp = {
 	.symbol_name = "__switch_to",
 	.pre_handler = __switch_to_pre_handler
 };
+// Intercepting these requires Linux 6.2+ (linux@b3a0c010e900a9f89dcd99f10bd8f7538d21b0a9)
 static struct kprobe do_el0_sys_kp = {
 	.symbol_name = "do_el0_sys",
 	.pre_handler = do_el0_sys_pre_handler

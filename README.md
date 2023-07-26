@@ -20,7 +20,7 @@ Finally, sandboxes seldom prioritize efficiency. We can do much better than recr
 
 ## Building
 
-sunwalker-box supports `x86-64` (AMD64) and `aarch64` (ARM64) architectures.
+sunwalker-box supports x86-64 (AMD64) and aarch64 (ARM64) architectures and requires Linux 5.19+ on x86-64 and Linux 6.2+ on aarch64.
 
 You will need to install the following dependencies:
 

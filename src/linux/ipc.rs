@@ -32,6 +32,7 @@ pub fn join_process_ipc_namespace(pid: pid_t) -> Result<()> {
     Ok(())
 }
 
+// Handling these in namespaces requires Linux 5.19+ (linux@1f5c135ee509e89e0cc274333a65f73c62cb16e5)
 pub fn get_next_id(name: &str) -> Result<isize> {
     std::fs::read_to_string(format!("/proc/sys/kernel/{name}_next_id"))
         .with_context(|| format!("Failed to get {name}_next_id"))?
