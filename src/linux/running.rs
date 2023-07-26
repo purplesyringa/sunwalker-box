@@ -629,7 +629,7 @@ impl SingleRun<'_> {
     fn handle_sigsegv(&mut self, pid: Pid) -> Result<()> {
         let process = self
             .processes
-            .get_mut(&pid)
+            .get(&pid)
             .with_context(|| format!("Unknown pid {pid}"))?;
 
         let info = process.traced_process.get_signal_info()?;
@@ -645,39 +645,64 @@ impl SingleRun<'_> {
         if info.si_code == SI_KERNEL {
             let fault_address = unsafe { info.si_addr() as usize };
             if fault_address == 0 {
-                // rdtsc fails with #GP(0)
-                let mut regs = process.traced_process.get_registers()?;
-                if let Ok(word) = process.traced_process.read_word(regs.rip as usize) {
-                    if word & 0xffff == 0x310f {
-                        // rdtsc = 0f 31
-                        regs.rip += 2;
-                        let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
-                        tsc += self.tsc_shift;
-                        regs.rdx = tsc >> 32;
-                        regs.rax = tsc & 0xffffffff;
-                        process.traced_process.set_registers(regs);
-                        process.traced_process.resume()?;
-                        return Ok(());
-                    } else if word & 0xffffff == 0xf9010f {
-                        // rdtscp = 0f 01 f9
-                        regs.rip += 3;
-                        let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
-                        tsc += self.tsc_shift;
-                        regs.rdx = tsc >> 32;
-                        regs.rax = tsc & 0xffffffff;
-                        regs.rcx = 1;
-                        process.traced_process.set_registers(regs);
-                        process.traced_process.resume()?;
-                        return Ok(());
-                    }
+                if self.emulate_insn(pid)? {
+                    return Ok(());
                 }
             }
         }
 
+        let process = self.processes.get_mut(&pid).unwrap();
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;
         Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn handle_sigill(&mut self, pid: Pid) -> Result<()> {
+        if !self.emulate_insn(pid)? {
+            let process = self.processes.get_mut(&pid).unwrap();
+            process
+                .traced_process
+                .resume_signal(signal::Signal::SIGILL)?;
+        }
+
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn emulate_insn(&mut self, pid: Pid) -> Result<bool> {
+        let process = self.processes.get_mut(&pid).unwrap();
+
+        let mut regs = process.traced_process.get_registers()?;
+        let Ok(word) = process.traced_process.read_word(regs.rip as usize) else {
+            return Ok(false);
+        };
+
+        if word & 0xffff == 0x310f {
+            // rdtsc = 0f 31
+            regs.rip += 2;
+            let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
+            tsc += self.tsc_shift;
+            regs.rdx = tsc >> 32;
+            regs.rax = tsc & 0xffffffff;
+            process.traced_process.set_registers(regs);
+            process.traced_process.resume()?;
+            Ok(true)
+        } else if word & 0xffffff == 0xf9010f {
+            // rdtscp = 0f 01 f9
+            regs.rip += 3;
+            let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
+            tsc += self.tsc_shift;
+            regs.rdx = tsc >> 32;
+            regs.rax = tsc & 0xffffffff;
+            regs.rcx = 1;
+            process.traced_process.set_registers(regs);
+            process.traced_process.resume()?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     #[cfg(target_arch = "aarch64")]
@@ -689,6 +714,18 @@ impl SingleRun<'_> {
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "aarch64")]
+    fn handle_sigill(&mut self, pid: Pid) -> Result<()> {
+        let process = self
+            .processes
+            .get_mut(&pid)
+            .with_context(|| format!("Unknown pid {pid}"))?;
+        process
+            .traced_process
+            .resume_signal(signal::Signal::SIGILL)?;
         Ok(())
     }
 
@@ -719,6 +756,10 @@ impl SingleRun<'_> {
                     }
                     signal::Signal::SIGSEGV => {
                         self.handle_sigsegv(pid)?;
+                        return Ok(false);
+                    }
+                    signal::Signal::SIGILL => {
+                        self.handle_sigill(pid)?;
                         return Ok(false);
                     }
                     _ => {}
