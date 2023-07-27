@@ -71,6 +71,29 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
+name = "crossmist"
+version = "0.1.0"
+source = "git+https://github.com/purplesyringa/crossmist#c1654b8ec1d99c1931ae8562d6f01f8f8499da77"
+dependencies = [
+ "crossmist-derive",
+ "ctor",
+ "lazy_static 1.4.0",
+ "nix 0.23.1",
+ "paste",
+ "windows",
+]
+
+[[package]]
+name = "crossmist-derive"
+version = "0.1.0"
+source = "git+https://github.com/purplesyringa/crossmist#c1654b8ec1d99c1931ae8562d6f01f8f8499da77"
+dependencies = [
+ "darling",
+ "quote",
+ "syn",
+]
+
+[[package]]
 name = "ctor"
 version = "0.1.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -245,30 +268,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5de893c32cde5f383baa4c04c5d6dbdd735cfd4a794b0debdb2bb1b421da5ff4"
 dependencies = [
  "autocfg",
-]
-
-[[package]]
-name = "multiprocessing"
-version = "0.1.0"
-source = "git+https://github.com/imachug/multiprocessing#b05e3c44f2645f2579f30d4e67e15af96bd273e8"
-dependencies = [
- "ctor",
- "lazy_static 1.4.0",
- "multiprocessing-derive",
- "nix 0.23.1",
- "openat",
- "paste",
- "windows",
-]
-
-[[package]]
-name = "multiprocessing-derive"
-version = "0.1.0"
-source = "git+https://github.com/imachug/multiprocessing#b05e3c44f2645f2579f30d4e67e15af96bd273e8"
-dependencies = [
- "darling",
- "quote",
- "syn",
 ]
 
 [[package]]
@@ -459,9 +458,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "argh",
+ "crossmist",
  "interfaces",
  "json",
- "multiprocessing",
  "nix 0.26.1",
  "openat",
  "rand",

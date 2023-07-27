@@ -1,5 +1,5 @@
 use argh::FromArgs;
-use multiprocessing::Object;
+use crossmist::Object;
 
 #[derive(FromArgs)]
 /// Sandbox for sunwalker judge system

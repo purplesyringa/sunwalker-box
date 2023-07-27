@@ -1,6 +1,6 @@
 use crate::linux::{cgroups, ipc, rootfs, timens, tracing, userns};
 use anyhow::{bail, Context, Result};
-use multiprocessing::Object;
+use crossmist::Object;
 use nix::{
     errno, libc,
     libc::pid_t,
@@ -203,7 +203,7 @@ impl SingleRun<'_> {
         let [stdin, stdout, stderr] = self.open_standard_streams()?;
 
         // Start process, redirecting standard streams and configuring ITIMER_PROF
-        let (theirs, mut ours) = multiprocessing::channel().context("Failed to create a pipe")?;
+        let (theirs, mut ours) = crossmist::channel().context("Failed to create a pipe")?;
         let user_process = executor_worker
             .spawn(
                 self.options.argv.clone(),
@@ -905,14 +905,14 @@ impl SingleRun<'_> {
     }
 }
 
-#[multiprocessing::func]
+#[crossmist::func]
 fn executor_worker(
     argv: Vec<String>,
     env: Option<HashMap<String, String>>,
     stdin: File,
     stdout: File,
     stderr: File,
-    mut pipe: multiprocessing::Sender<String>,
+    mut pipe: crossmist::Sender<String>,
     cpu_time_limit: Option<Duration>,
     exec_wrapper: File,
 ) {

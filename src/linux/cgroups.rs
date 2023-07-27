@@ -1,25 +1,25 @@
-use crate::linux::ids;
+use crate::linux::{ids, openat::OpenAtDir};
 use anyhow::{bail, Context, Result};
-use multiprocessing::Object;
+use crossmist::Object;
 use nix::libc::pid_t;
 use rand::Rng;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 
 #[derive(Object)]
 pub struct Cgroup {
-    core_cgroup_fd: openat::Dir,
+    core_cgroup_fd: OpenAtDir,
 }
 
 #[derive(Object)]
 pub struct ProcCgroup {
-    core_cgroup_fd: openat::Dir,
+    core_cgroup_fd: OpenAtDir,
     id: String,
 }
 
 pub struct BoxCgroup {
-    proc_cgroup_fd: openat::Dir,
+    proc_cgroup_fd: OpenAtDir,
     box_id: String,
     dropped: bool,
 }
@@ -43,7 +43,7 @@ impl Cgroup {
         .context("Failed to enable cgroup controllers")?;
 
         // sysfs is unavailable inside the box, so we have to acquire a file descriptor
-        let core_cgroup_fd = openat::Dir::open(&dir).context("Failed to open cgroup directory")?;
+        let core_cgroup_fd = OpenAtDir::open(&dir).context("Failed to open cgroup directory")?;
 
         chown_cgroup(
             &core_cgroup_fd,
@@ -109,7 +109,7 @@ impl Cgroup {
         .context("Failed to chown <cgroup>")?;
 
         Ok(ProcCgroup {
-            core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
+            core_cgroup_fd: self.core_cgroup_fd.try_clone()?,
             id,
         })
     }
@@ -144,7 +144,7 @@ impl ProcCgroup {
 
     pub fn try_clone(&self) -> Result<Self> {
         Ok(ProcCgroup {
-            core_cgroup_fd: try_clone_dirat(&self.core_cgroup_fd)?,
+            core_cgroup_fd: self.core_cgroup_fd.try_clone()?,
             id: self.id.clone(),
         })
     }
@@ -299,12 +299,12 @@ impl Drop for BoxCgroup {
 
 pub fn revert_core_isolation(core: u64) -> Result<()> {
     remove_cgroup(
-        &openat::Dir::open("/sys/fs/cgroup").context("Failed to open /sys/fs/cgroup")?,
+        &OpenAtDir::open("/sys/fs/cgroup").context("Failed to open /sys/fs/cgroup")?,
         format!("sunwalker-box-core-{core}").as_ref(),
     )
 }
 
-fn chown_cgroup(dir: &openat::Dir, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
+fn chown_cgroup(dir: &OpenAtDir, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
     let uid = uid.map(nix::unistd::Uid::from_raw);
     let gid = gid.map(nix::unistd::Gid::from_raw);
     nix::unistd::fchownat(
@@ -345,7 +345,7 @@ fn chown_cgroup(dir: &openat::Dir, uid: Option<u32>, gid: Option<u32>) -> Result
 
 // This function is subject to race conditions because one cgroup can be removed by several
 // processes simultaneously. Therefore, ENOENT is not considered an error.
-fn remove_cgroup(parent: &openat::Dir, dir_name: &str) -> Result<()> {
+fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
     kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
 
     let dir = match parent.sub_dir(dir_name) {
@@ -392,7 +392,7 @@ fn remove_cgroup(parent: &openat::Dir, dir_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn kill_cgroup(parent: &openat::Dir, dir_name: &str) -> Result<()> {
+fn kill_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
     // cgroup.kill is unavailable on older kernels
     match parent.write_file(format!("{dir_name}/cgroup.kill"), 0o700) {
         Ok(mut file) => {
@@ -442,13 +442,4 @@ pub struct CpuStats {
     pub user: Duration,
     pub system: Duration,
     pub total: Duration,
-}
-
-fn try_clone_dirat(fd: &openat::Dir) -> std::io::Result<openat::Dir> {
-    // Built-in try_clone erroneously does not set CLOEXEC
-    let fd2 = nix::fcntl::fcntl(fd.as_raw_fd(), nix::fcntl::FcntlArg::F_DUPFD_CLOEXEC(0))?;
-    if fd2 == -1 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(unsafe { openat::Dir::from_raw_fd(fd2) })
 }

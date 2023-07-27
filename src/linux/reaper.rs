@@ -3,7 +3,7 @@ use crate::{
     linux::{cgroups, ipc, manager, procs},
 };
 use anyhow::{Context, Result};
-use multiprocessing::Object;
+use crossmist::Object;
 use nix::{
     libc,
     libc::{c_int, pid_t, PR_SET_PDEATHSIG, SIGUSR1},
@@ -24,16 +24,13 @@ pub enum Command {
     Reset,
 }
 
-#[multiprocessing::func]
+#[crossmist::func]
 pub fn reaper(
     ppidfd: OwnedFd,
     cli_command: entry::CLIStartCommand,
     cgroup: cgroups::Cgroup,
-    mut reaper_channel: multiprocessing::Duplex<
-        std::result::Result<Option<String>, String>,
-        Command,
-    >,
-    manager_channel: multiprocessing::Duplex<
+    mut reaper_channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    manager_channel: crossmist::Duplex<
         std::result::Result<Option<String>, String>,
         manager::Command,
     >,

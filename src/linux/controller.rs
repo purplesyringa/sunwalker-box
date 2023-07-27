@@ -17,12 +17,10 @@ pub struct Controller {
     quotas: rootfs::DiskQuotas,
     cgroup: Option<cgroups::Cgroup>,
     reaper_pid: Option<Pid>,
-    reaper_channel: Option<
-        multiprocessing::Duplex<reaper::Command, std::result::Result<Option<String>, String>>,
-    >,
-    manager_channel: Option<
-        multiprocessing::Duplex<manager::Command, std::result::Result<Option<String>, String>>,
-    >,
+    reaper_channel:
+        Option<crossmist::Duplex<reaper::Command, std::result::Result<Option<String>, String>>>,
+    manager_channel:
+        Option<crossmist::Duplex<manager::Command, std::result::Result<Option<String>, String>>>,
     rootfs_state: Option<rootfs::RootfsState>,
 }
 
@@ -94,22 +92,18 @@ impl Controller {
         // pidns, so we create the thread beforehand.
         let (thread_tx, thread_rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let mut child: multiprocessing::Child<!> =
+            let mut child: crossmist::Child<!> =
                 thread_rx.recv().expect("Failed to receive child in thread");
             panic!("Child failed: {}", child.join().into_err());
         });
 
-        let (reaper_ours, reaper_theirs) = multiprocessing::duplex::<
-            reaper::Command,
-            std::result::Result<Option<String>, String>,
-        >()
-        .context("Failed to create channel")?;
+        let (reaper_ours, reaper_theirs) =
+            crossmist::duplex::<reaper::Command, std::result::Result<Option<String>, String>>()
+                .context("Failed to create channel")?;
 
-        let (mut manager_ours, manager_theirs) = multiprocessing::duplex::<
-            manager::Command,
-            std::result::Result<Option<String>, String>,
-        >()
-        .context("Failed to create channel")?;
+        let (mut manager_ours, manager_theirs) =
+            crossmist::duplex::<manager::Command, std::result::Result<Option<String>, String>>()
+                .context("Failed to create channel")?;
 
         // Run a child in a new PID namespace
         procs::unshare_pidns().context("Failed to unshare pid namespace")?;

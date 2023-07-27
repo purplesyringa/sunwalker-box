@@ -18,6 +18,7 @@ mod linux {
     mod kmodule;
     mod manager;
     mod mountns;
+    mod openat;
     mod procs;
     mod reaper;
     mod rootfs;

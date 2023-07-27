@@ -4,7 +4,7 @@ use nix::{libc, libc::CLONE_NEWUSER, unistd};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
-    let (mut tx, rx) = multiprocessing::channel::<()>().context("Failed to create channel")?;
+    let (mut tx, rx) = crossmist::channel::<()>().context("Failed to create channel")?;
     let mut child = configure_ns.spawn(rx).context("Failed to start child")?;
 
     if unsafe { libc::unshare(CLONE_NEWUSER) } != 0 {
@@ -24,8 +24,8 @@ pub fn enter_user_namespace() -> Result<()> {
     Ok(())
 }
 
-#[multiprocessing::func]
-fn configure_ns(mut rx: multiprocessing::Receiver<()>) {
+#[crossmist::func]
+fn configure_ns(mut rx: crossmist::Receiver<()>) {
     rx.recv()
         .expect("Failed to recv")
         .expect("Parent terminated");

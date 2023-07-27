@@ -1,6 +1,6 @@
 use crate::linux::{cgroups, running, system};
 use anyhow::{Context, Result};
-use multiprocessing::Object;
+use crossmist::Object;
 
 #[derive(Object)]
 pub enum Command {
@@ -8,10 +8,10 @@ pub enum Command {
     Run { options: running::Options },
 }
 
-#[multiprocessing::func]
+#[crossmist::func]
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
-    mut channel: multiprocessing::Duplex<std::result::Result<Option<String>, String>, Command>,
+    mut channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
 ) {
     let mut runner = running::Runner::new(proc_cgroup).expect("Failed to create runner");
 

@@ -2,7 +2,7 @@
 name = "sunwalker_box"
 version = "0.1.0"
 edition = "2021"
-authors = ["Ivanq <imachug@gmail.com>"]
+authors = ["Alisa Sireneva <imachug@gmail.com>"]
 license = "Apache-2.0"
 description = "Sandbox for sunwalker judge system"
 
@@ -13,7 +13,7 @@ anyhow = "1.0"
 argh = "0.1.9"
 interfaces = "0.0.8"
 json = "0.12.4"
-multiprocessing = { git = "https://github.com/imachug/multiprocessing" }
+crossmist = { git = "https://github.com/purplesyringa/crossmist" }
 nix = "0.26.1"
 openat = "0.1.21"
 rand = "0.8.5"
