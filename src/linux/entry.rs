@@ -2,9 +2,8 @@ use crate::{
     entry,
     linux::{cgroups, controller, ids, kmodule, manager, rootfs, running, sandbox},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use nix::libc::mode_t;
-use std::collections::HashMap;
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::time::Duration;
@@ -260,96 +259,67 @@ fn handle_command(
         }
         "run" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
-            if !arg["argv"].is_array() {
-                bail!("Invalid 'argv' argument");
-            }
 
-            let mut argv = Vec::with_capacity(arg["argv"].len());
-            for arg in arg["argv"].members_mut() {
-                argv.push(arg.take_string().context("Invalid 'argv' argument")?);
-            }
-            if argv.is_empty() {
-                bail!("'argv' is empty");
-            }
+            let argv = arg["argv"]
+                .members_mut()
+                .map(|arg| arg.take_string())
+                .collect::<Option<Vec<_>>>()
+                .context("Invalid 'argv' argument")?;
+            ensure!(!argv.is_empty(), "'argv' is empty");
 
-            let stdin = if arg["stdin"].is_null() {
-                "/dev/null".to_string()
-            } else {
-                arg["stdin"]
-                    .take_string()
-                    .context("Invalid 'stdin' argument")?
+            let mut parse_string = |name: &str| -> Result<Option<String>> {
+                Ok(if arg[name].is_null() {
+                    None
+                } else {
+                    Some(
+                        arg[name]
+                            .take_string()
+                            .with_context(|| format!("Invalid '{name}' argument"))?,
+                    )
+                })
             };
-            let stdout = if arg["stdout"].is_null() {
-                "/dev/null".to_string()
-            } else {
-                arg["stdout"]
-                    .take_string()
-                    .context("Invalid 'stdout' argument")?
-            };
-            let stderr = if arg["stderr"].is_null() {
-                "/dev/null".to_string()
-            } else {
-                arg["stderr"]
-                    .take_string()
-                    .context("Invalid 'stderr' argument")?
-            };
+            let stdin = parse_string("stdin")?.unwrap_or_else(|| "/dev/null".to_string());
+            let stdout = parse_string("stdout")?.unwrap_or_else(|| "/dev/null".to_string());
+            let stderr = parse_string("stderr")?.unwrap_or_else(|| "/dev/null".to_string());
 
-            let real_time_limit = if arg["real_time_limit"].is_null() {
-                None
-            } else {
-                Some(Duration::from_secs_f64(
-                    arg["real_time_limit"]
-                        .as_f64()
-                        .context("Invalid 'real_time_limit' argument")?,
-                ))
+            let parse_duration = |name: &str| -> Result<Option<Duration>> {
+                if arg[name].is_null() {
+                    Ok(None)
+                } else {
+                    Ok(Some(Duration::from_secs_f64(
+                        arg[name]
+                            .as_f64()
+                            .with_context(|| format!("Invalid '{name}' argument"))?,
+                    )))
+                }
             };
-            let cpu_time_limit = if arg["cpu_time_limit"].is_null() {
-                None
-            } else {
-                Some(Duration::from_secs_f64(
-                    arg["cpu_time_limit"]
-                        .as_f64()
-                        .context("Invalid 'cpu_time_limit' argument")?,
-                ))
+            let real_time_limit = parse_duration("real_time_limit")?;
+            let cpu_time_limit = parse_duration("cpu_time_limit")?;
+            let idleness_time_limit = parse_duration("idleness_time_limit")?;
+
+            let parse_usize = |name: &str| -> Result<Option<usize>> {
+                if arg[name].is_null() {
+                    Ok(None)
+                } else {
+                    Ok(Some(
+                        arg[name]
+                            .as_usize()
+                            .with_context(|| format!("Invalid '{name}' argument"))?,
+                    ))
+                }
             };
-            let idleness_time_limit = if arg["idleness_time_limit"].is_null() {
-                None
-            } else {
-                Some(Duration::from_secs_f64(
-                    arg["idleness_time_limit"]
-                        .as_f64()
-                        .context("Invalid 'idleness_time_limit' argument")?,
-                ))
-            };
-            let memory_limit = if arg["memory_limit"].is_null() {
-                None
-            } else {
-                Some(
-                    arg["memory_limit"]
-                        .as_usize()
-                        .context("Invalid 'memory_limit' argument")?,
-                )
-            };
-            let processes_limit = if arg["processes_limit"].is_null() {
-                None
-            } else {
-                Some(
-                    arg["processes_limit"]
-                        .as_usize()
-                        .context("Invalid 'processes_limit' argument")?,
-                )
-            };
+            let memory_limit = parse_usize("memory_limit")?;
+            let processes_limit = parse_usize("processes_limit")?;
 
             let mut env = None;
             if !arg["env"].is_null() {
-                let mut env1 = HashMap::with_capacity(arg["env"].len());
-                for (key, value) in arg["env"].entries_mut() {
-                    env1.insert(
-                        key.to_string(),
-                        value.take_string().context("Invalid 'env' argument")?,
-                    );
-                }
-                env = Some(env1);
+                env = Some(
+                    arg["env"]
+                        .entries_mut()
+                        .map(|(key, value)| Some((key.to_string(), value.take_string()?)))
+                        .collect::<Option<_>>()
+                        .context("Invalid 'env' argument")?,
+                );
             }
 
             controller.run_manager_command(manager::Command::Run {
