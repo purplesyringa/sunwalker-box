@@ -9,6 +9,10 @@ A == semget ? trace : next
 A == shmget ? trace : next
 A == memfd_create ? trace : next
 
+# Forbid x86-32 ABI in x86-64 mode
+A &= 0x40000000
+A == 0 ? next : kill
+
 allow:
 return ALLOW
 
