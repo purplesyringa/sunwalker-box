@@ -31,7 +31,7 @@ target/aarch64/exec_wrapper.o: src/linux/aarch64/exec_wrapper.asm
 	mkdir -p target/aarch64 && aarch64-linux-gnu-as $^ -o $@
 
 target/sunwalker.ko: kmodule/$(ARCH)/sunwalker.ko
-	cp $^ $@
+	mkdir -p target && cp $^ $@
 kmodule/x86_64/sunwalker.ko:
 	touch $@
 kmodule/aarch64/sunwalker.ko: kmodule/aarch64/sunwalker.c
