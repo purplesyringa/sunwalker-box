@@ -328,51 +328,26 @@ impl SingleRun<'_> {
         }
     }
 
+    fn is_exceeding<T: PartialOrd>(limit: Option<T>, value: T) -> bool {
+        limit.is_some_and(|limit| value > limit)
+    }
+
     fn is_exceeding_limits(&self) -> bool {
-        self.options
-            .cpu_time_limit
-            .is_some_and(|limit| self.results.cpu_time > limit)
-            || self
-                .options
-                .real_time_limit
-                .is_some_and(|limit| self.results.real_time > limit)
-            || self
-                .options
-                .idleness_time_limit
-                .is_some_and(|limit| self.results.idleness_time > limit)
-            || self
-                .options
-                .memory_limit
-                .is_some_and(|limit| self.results.memory > limit)
+        Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time)
+            || Self::is_exceeding(self.options.real_time_limit, self.results.real_time)
+            || Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time)
+            || Self::is_exceeding(self.options.memory_limit, self.results.memory)
     }
 
     fn compute_verdict(&self, wait_status: wait::WaitStatus) -> Result<Verdict> {
-        if self
-            .options
-            .cpu_time_limit
-            .is_some_and(|limit| self.results.cpu_time > limit)
-        {
+        if Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time) {
             return Ok(Verdict::CPUTimeLimitExceeded);
-        }
-        if self
-            .options
-            .real_time_limit
-            .is_some_and(|limit| self.results.real_time > limit)
-        {
+        } else if Self::is_exceeding(self.options.real_time_limit, self.results.real_time) {
             return Ok(Verdict::RealTimeLimitExceeded);
-        }
-        if self
-            .options
-            .idleness_time_limit
-            .is_some_and(|limit| self.results.idleness_time > limit)
-        {
+        } else if Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time) {
             return Ok(Verdict::IdlenessTimeLimitExceeded);
-        }
-        if self.box_cgroup.as_ref().unwrap().was_oom_killed()?
-            || self
-                .options
-                .memory_limit
-                .is_some_and(|limit| self.results.memory > limit)
+        } else if self.box_cgroup.as_ref().unwrap().was_oom_killed()?
+            || Self::is_exceeding(self.options.memory_limit, self.results.memory)
         {
             return Ok(Verdict::MemoryLimitExceeded);
         }
