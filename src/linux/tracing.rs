@@ -415,7 +415,7 @@ impl TracedProcess {
 }
 
 pub fn apply_seccomp_filter() -> Result<()> {
-    let filter = include_bytes!("../../target/seccomp_filter");
+    let filter = include_bytes!("../../target/filter.seccomp.out");
     let prog = libc::sock_fprog {
         len: (filter.len() / 8) as u16,
         filter: filter.as_ptr() as *mut libc::sock_filter,

@@ -1,6 +1,8 @@
 ARCH := $(shell musl-gcc -dumpmachine | cut -d- -f1)
 TARGET := $(ARCH)-unknown-linux-musl
 
+SECCOMP_FILTERS := filter
+
 RUSTFLAGS := --remap-path-prefix ${HOME}/.rustup=~/.rustup --remap-path-prefix ${HOME}/.cargo=~/.cargo --remap-path-prefix $(shell pwd)=.
 
 ifeq ($(ARCH),aarch64)
@@ -15,15 +17,11 @@ sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	cp $^ $@
-target/$(TARGET)/release/sunwalker_box: target/seccomp_filter target/exec_wrapper target/sunwalker.ko
+target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko
 	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target=$(TARGET) -Z build-std=std,panic_abort --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(ARCH)-linux-gnu-gcc\"
 
-target/seccomp_filter: target/$(ARCH)/seccomp_filter
-	cp $^ $@
-target/x86_64/seccomp_filter: src/linux/x86_64/seccomp_filter.asm
-	mkdir -p target/x86_64 && seccomp-tools asm $^ -o $@ -f raw
-target/aarch64/seccomp_filter: src/linux/aarch64/seccomp_filter.asm
-	mkdir -p target/aarch64 && seccomp-tools asm $^ -o $@ -f raw
+target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
+	mkdir -p target && seccomp-tools asm $^ -o $@ -f raw
 
 target/exec_wrapper: target/$(ARCH)/exec_wrapper.o
 	$(ARCH)-linux-gnu-gcc $^ -o $@ -static -nostartfiles -n -s
