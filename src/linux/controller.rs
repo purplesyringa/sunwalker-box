@@ -3,12 +3,7 @@ use crate::{
     linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
 };
 use anyhow::{anyhow, bail, Context, Result};
-use nix::{
-    libc,
-    libc::SYS_pidfd_open,
-    sys::{resource, signal},
-    unistd::Pid,
-};
+use nix::{libc, libc::SYS_pidfd_open, sys::resource};
 use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -16,7 +11,6 @@ use std::sync::mpsc;
 pub struct Controller {
     quotas: rootfs::DiskQuotas,
     cgroup: Option<cgroups::Cgroup>,
-    reaper_pid: Option<Pid>,
     reaper_channel:
         Option<crossmist::Duplex<reaper::Command, std::result::Result<Option<String>, String>>>,
     manager_channel:
@@ -38,7 +32,6 @@ impl Controller {
         Ok(Self {
             quotas,
             cgroup: None,
-            reaper_pid: None,
             reaper_channel: None,
             manager_channel: None,
             rootfs_state: None,
@@ -125,7 +118,6 @@ impl Controller {
         let child = reaper::reaper
             .spawn(pidfd, cli_command, cgroup, reaper_theirs, manager_theirs)
             .context("Failed to start child")?;
-        self.reaper_pid = Some(Pid::from_raw(child.id()));
         thread_tx
             .send(child)
             .context("Failed to send child to thread")?;
@@ -186,28 +178,20 @@ impl Controller {
     }
 
     pub fn run_reaper_command(&mut self, command: reaper::Command) -> Result<Option<String>> {
-        let channel = self.reaper_channel.as_mut().context("Not started")?;
-
-        channel.send(&command).context("Failed to send command")?;
-
-        signal::kill(self.reaper_pid.expect("Not started"), signal::Signal::SIGIO)?;
-
-        match channel.recv().context("Failed to recv reply")? {
-            None => bail!("No reply from child"),
-            Some(Ok(value)) => Ok(value),
-            Some(Err(e)) => bail!("{e}"),
-        }
+        self.reaper_channel
+            .as_mut()
+            .context("Not started")?
+            .request(&command)
+            .context("Failed to run command")?
+            .map_err(|e| anyhow!("{e}"))
     }
 
     pub fn run_manager_command(&mut self, command: manager::Command) -> Result<Option<String>> {
-        let channel = self.manager_channel.as_mut().context("Not started")?;
-
-        channel.send(&command).context("Failed to send command")?;
-
-        match channel.recv().context("Failed to recv reply")? {
-            None => bail!("No reply from child"),
-            Some(Ok(value)) => Ok(value),
-            Some(Err(e)) => bail!("{e}"),
-        }
+        self.manager_channel
+            .as_mut()
+            .context("Not started")?
+            .request(&command)
+            .context("Failed to run command")?
+            .map_err(|e| anyhow!("{e}"))
     }
 }

@@ -5,8 +5,8 @@ use crate::{
 use anyhow::{Context, Result};
 use crossmist::Object;
 use nix::{
-    libc,
-    libc::{c_int, pid_t, PR_SET_PDEATHSIG, SIGUSR1},
+    fcntl, libc,
+    libc::{c_int, pid_t, PR_SET_PDEATHSIG},
     sys::{signal, wait},
 };
 use std::os::unix::io::{AsRawFd, OwnedFd, RawFd};
@@ -39,7 +39,7 @@ pub fn reaper(
         panic!("Reaper must have PID 1");
     }
 
-    // We want to receive SIGUSR1 and SIGCHLD, but not handle them immediately
+    // We want to receive some signals, but not handle them immediately
     let mut mask = signal::SigSet::empty();
     mask.add(signal::Signal::SIGUSR1);
     mask.add(signal::Signal::SIGIO);
@@ -69,7 +69,7 @@ pub fn reaper(
     }
 
     // We want to terminate when parent dies
-    if unsafe { libc::prctl(PR_SET_PDEATHSIG, SIGUSR1) } == -1 {
+    if unsafe { libc::prctl(PR_SET_PDEATHSIG, signal::Signal::SIGUSR1) } == -1 {
         panic!(
             "Failed to prctl(PR_SET_PDEATHSIG): {}",
             std::io::Error::last_os_error()
@@ -105,11 +105,9 @@ pub fn reaper(
             if fd < 3 {
                 continue;
             }
-            let flags = nix::fcntl::fcntl(fd, nix::fcntl::FcntlArg::F_GETFD)
+            let flags = fcntl::fcntl(fd, fcntl::FcntlArg::F_GETFD)
                 .expect("Failed to fcntl a file descriptor");
-            if !nix::fcntl::FdFlag::from_bits_truncate(flags)
-                .intersects(nix::fcntl::FdFlag::FD_CLOEXEC)
-            {
+            if !fcntl::FdFlag::from_bits_truncate(flags).intersects(fcntl::FdFlag::FD_CLOEXEC) {
                 panic!("File descriptor {fd} is not CLOEXEC");
             }
         }
@@ -119,6 +117,33 @@ pub fn reaper(
     // but instead wait for the parent's termination and quit after that. This also prevents command
     // injection via ioctl(TIOCSTI).
     nix::unistd::setsid().expect("Failed to setsid");
+
+    // Send a signal whenever a new message appears on a channel
+    fn enable_async(channel: &impl AsRawFd, signal: signal::Signal) -> Result<()> {
+        // Send to pid 1 (i.e. self)
+        const F_SETOWN: i32 = 8;
+        if unsafe { libc::fcntl(channel.as_raw_fd(), F_SETOWN, 1) } == -1 {
+            return Err(std::io::Error::last_os_error()).context("Failed to F_SETOWN")?;
+        }
+
+        const F_SETSIG: i32 = 10;
+        if unsafe { libc::fcntl(channel.as_raw_fd(), F_SETSIG, signal as i32) } == -1 {
+            return Err(std::io::Error::last_os_error()).context("Failed to F_SETSIG")?;
+        }
+
+        let mut flags = fcntl::OFlag::from_bits_truncate(
+            fcntl::fcntl(channel.as_raw_fd(), fcntl::FcntlArg::F_GETFL)
+                .context("Failed to F_GETFL")?,
+        );
+        flags |= fcntl::OFlag::O_ASYNC;
+        fcntl::fcntl(channel.as_raw_fd(), fcntl::FcntlArg::F_SETFL(flags))
+            .context("Failed to F_SETFL")?;
+
+        Ok(())
+    }
+
+    enable_async(&reaper_channel, signal::Signal::SIGIO)
+        .expect("Failed to enable SIGIO on reaper channel");
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.
@@ -147,14 +172,13 @@ pub fn reaper(
             }
             signal::Signal::SIGIO => {
                 // Incoming command
-                let result = execute_command(
-                    reaper_channel
-                        .recv()
-                        .expect("Failed to read command")
-                        .expect("No command received"),
-                    child.id(),
-                );
-                let result = result.map_err(|e| format!("{e:?}"));
+                let Some(command) = reaper_channel.recv().expect("Failed to read command") else {
+                    // SIGIO is also sent when reaper_channel is dropped, which happens just before
+                    // the parent dies. However, if we terminate before SIGUSR1, the parent will
+                    // believe we crashed. Therefore, just wait for SIGUSR1.
+                    continue;
+                };
+                let result = execute_command(command, child.id()).map_err(|e| format!("{e:?}"));
                 reaper_channel
                     .send(&result)
                     .expect("Failed to report result");
