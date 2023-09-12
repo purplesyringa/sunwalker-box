@@ -516,13 +516,11 @@ impl SingleRun<'_> {
                         .write_memory(file_name_addr, &file_name)?;
 
                     Ok((
-                        libc::SYS_openat as i32,
-                        [
-                            libc::AT_FDCWD as usize,
-                            file_name_addr,
-                            open_flags as usize,
-                            0o700,
-                        ],
+                        libc::SYS_openat,
+                        libc::AT_FDCWD,
+                        file_name_addr,
+                        open_flags,
+                        0o700,
                     ))
                 });
             }
@@ -548,16 +546,16 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn emulate_syscall_redirect<const N: usize>(
+    fn emulate_syscall_redirect<Args: tracing::SyscallArgs>(
         process: &mut ProcessInfo,
-        redirect: impl FnOnce(&mut ProcessInfo) -> std::io::Result<(i32, [usize; N])>,
-    ) -> Result<()> {
+        redirect: impl FnOnce(&mut ProcessInfo) -> std::io::Result<Args>,
+    ) -> Result<()>
+    where
+        [(); Args::N]:,
+    {
         match redirect(process) {
-            Ok((syscall_no, args)) => {
-                process.traced_process.set_syscall_no(syscall_no)?;
-                for i in 0..N {
-                    process.traced_process.set_syscall_arg(i, args[i])?;
-                }
+            Ok(args) => {
+                process.traced_process.set_syscall(args)?;
             }
             Err(err) => {
                 process.traced_process.set_syscall_no(-1)?; // skip syscall

@@ -1,5 +1,6 @@
 #![feature(
     file_create_new,
+    generic_const_exprs,
     io_error_more,
     never_type,
     try_blocks,

@@ -7,6 +7,7 @@ use nix::{
     unistd::Pid,
 };
 use std::ffi::CString;
+use std::fmt::Write;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
@@ -89,6 +90,127 @@ pub struct user_pt_regs {
 pub type Registers = libc::user_regs_struct;
 #[cfg(target_arch = "aarch64")]
 pub type Registers = user_pt_regs;
+
+pub trait SyscallArgs {
+    const N: usize;
+    fn to_usize_slice(&self) -> [usize; Self::N];
+    fn debug(&self) -> String
+    where
+        [(); Self::N]:,
+    {
+        let mut s = String::new();
+        let slice = self.to_usize_slice();
+        write!(s, "syscall_0x{:x}(", slice[0]).unwrap();
+        for i in 1..slice.len() {
+            if i > 1 {
+                write!(s, ", ").unwrap();
+            }
+            write!(s, "{}", slice[i] as isize).unwrap();
+        }
+        write!(s, ")").unwrap();
+        s
+    }
+}
+
+trait AsUSize: Copy {
+    fn as_(self) -> usize;
+}
+
+macro_rules! impl_for {
+    () => {};
+    ($head:tt $($tail:tt)*) => {
+        impl AsUSize for $head {
+            fn as_(self) -> usize {
+                self as usize
+            }
+        }
+        impl_for!($($tail)*);
+    };
+}
+
+impl_for!(u8 u16 u32 u64 usize i8 i16 i32 i64 isize char bool);
+
+impl<T> AsUSize for *const T {
+    fn as_(self) -> usize {
+        self as usize
+    }
+}
+
+impl<T> AsUSize for *mut T {
+    fn as_(self) -> usize {
+        self as usize
+    }
+}
+
+impl<T1: AsUSize> SyscallArgs for (T1,) {
+    const N: usize = 1;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        [self.0.as_()]
+    }
+}
+impl<T1: AsUSize, T2: AsUSize> SyscallArgs for (T1, T2) {
+    const N: usize = 2;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        [self.0.as_(), self.1.as_()]
+    }
+}
+impl<T1: AsUSize, T2: AsUSize, T3: AsUSize> SyscallArgs for (T1, T2, T3) {
+    const N: usize = 3;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        [self.0.as_(), self.1.as_(), self.2.as_()]
+    }
+}
+impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize> SyscallArgs for (T1, T2, T3, T4) {
+    const N: usize = 4;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        [self.0.as_(), self.1.as_(), self.2.as_(), self.3.as_()]
+    }
+}
+impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize> SyscallArgs
+    for (T1, T2, T3, T4, T5)
+{
+    const N: usize = 5;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        [
+            self.0.as_(),
+            self.1.as_(),
+            self.2.as_(),
+            self.3.as_(),
+            self.4.as_(),
+        ]
+    }
+}
+impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize, T6: AsUSize> SyscallArgs
+    for (T1, T2, T3, T4, T5, T6)
+{
+    const N: usize = 6;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        [
+            self.0.as_(),
+            self.1.as_(),
+            self.2.as_(),
+            self.3.as_(),
+            self.4.as_(),
+            self.5.as_(),
+        ]
+    }
+}
+impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize, T6: AsUSize, T7: AsUSize>
+    SyscallArgs for (T1, T2, T3, T4, T5, T6, T7)
+{
+    const N: usize = 7;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        [
+            self.0.as_(),
+            self.1.as_(),
+            self.2.as_(),
+            self.3.as_(),
+            self.4.as_(),
+            self.5.as_(),
+            self.6.as_(),
+        ]
+    }
+}
 
 impl TracedProcess {
     pub fn new(pid: Pid) -> Result<Self> {
@@ -367,7 +489,7 @@ impl TracedProcess {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
+    fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
         self.registers_edited = true;
         let regs = self._load_registers()?;
         let arg = arg as u64;
@@ -383,12 +505,23 @@ impl TracedProcess {
         Ok(())
     }
     #[cfg(target_arch = "aarch64")]
-    pub fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
+    fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
         assert!(index < 6);
         self.registers_edited = true;
         let regs = self._load_registers()?;
         regs.regs[index] = arg as u64;
         Ok(())
+    }
+
+    pub fn set_syscall<Args: SyscallArgs>(&mut self, args: Args) -> io::Result<()>
+    where
+        [(); Args::N]:,
+    {
+        let slice = args.to_usize_slice();
+        for i in 1..slice.len() {
+            self.set_syscall_arg(i - 1, slice[i])?;
+        }
+        self.set_syscall_no(slice[0] as i32)
     }
 
     #[cfg(target_arch = "x86_64")]
