@@ -8,6 +8,7 @@ A == msgget ? trace : next
 A == semget ? trace : next
 A == shmget ? trace : next
 A == memfd_create ? trace : next
+A == 447 ? enosys : next  # memfd_secret -- as unsafe as memfd_create, but is behind a knob, so we don't have to emulate it
 
 allow:
 return ALLOW
@@ -17,3 +18,6 @@ return TRACE
 
 kill:
 return KILL
+
+enosys:
+return ERRNO(ENOSYS)
