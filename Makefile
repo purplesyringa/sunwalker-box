@@ -17,7 +17,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	cp $^ $@
-target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko
+target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko target/syscall_table.offsets
 	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target=$(TARGET) -Z build-std=std,panic_abort --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(ARCH)-linux-gnu-gcc\"
 
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
@@ -36,6 +36,10 @@ kmodule/x86_64/sunwalker.ko:
 	touch $@
 kmodule/aarch64/sunwalker.ko: kmodule/aarch64/sunwalker.c
 	$(MAKE) -C kmodule/aarch64
+
+# This actually generates more files; we list just one and depend on just one
+target/syscall_table.offsets: generate_string_tables.py
+	mkdir -p target && python3 generate_string_tables.py $(ARCH)
 
 
 test:

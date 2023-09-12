@@ -25,6 +25,7 @@ mod linux {
     mod rootfs;
     mod running;
     mod sandbox;
+    mod string_table;
     mod system;
     mod timens;
     mod tracing;

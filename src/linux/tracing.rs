@@ -1,3 +1,4 @@
+use crate::linux::string_table;
 use anyhow::{Context, Result};
 use nix::{
     errno::Errno,
@@ -100,7 +101,7 @@ pub trait SyscallArgs {
     {
         let mut s = String::new();
         let slice = self.to_usize_slice();
-        write!(s, "syscall_0x{:x}(", slice[0]).unwrap();
+        write!(s, "{}(", string_table::syscall_no_to_name(slice[0] as i32)).unwrap();
         for i in 1..slice.len() {
             if i > 1 {
                 write!(s, ", ").unwrap();
