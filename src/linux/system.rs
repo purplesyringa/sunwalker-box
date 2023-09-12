@@ -1,6 +1,7 @@
 use nix::{
     libc,
     libc::{c_int, c_ulong, c_void},
+    sys::memfd,
 };
 
 pub use nix::libc::{
@@ -11,7 +12,8 @@ pub use nix::libc::{
 };
 
 use std::ffi::CString;
-use std::io::{Error, ErrorKind, Result};
+use std::io::{Error, ErrorKind, Result, Write};
+use std::os::fd::FromRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::ptr::null;
@@ -110,4 +112,15 @@ pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
         break;
     }
     result
+}
+
+pub fn make_memfd(name: &str, contents: &[u8]) -> Result<std::fs::File> {
+    let mut file = unsafe {
+        std::fs::File::from_raw_fd(memfd::memfd_create(
+            &CString::new(name)?,
+            memfd::MemFdCreateFlag::MFD_CLOEXEC,
+        )?)
+    };
+    file.write_all(contents)?;
+    Ok(file)
 }

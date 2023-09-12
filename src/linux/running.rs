@@ -1,17 +1,16 @@
-use crate::linux::{cgroups, ipc, rootfs, timens, tracing, userns};
+use crate::linux::{cgroups, ipc, rootfs, system, timens, tracing, userns};
 use anyhow::{bail, Context, Result};
 use crossmist::Object;
 use nix::{
     errno, libc,
     libc::pid_t,
-    sys::{epoll, memfd, ptrace, signal, signalfd, wait},
+    sys::{epoll, ptrace, signal, signalfd, wait},
     unistd,
     unistd::Pid,
 };
 use std::collections::HashMap;
-use std::ffi::{CStr, CString};
+use std::ffi::CString;
 use std::fs::File;
-use std::io::Write;
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
 use std::time::{Duration, Instant};
 
@@ -113,18 +112,9 @@ impl Runner {
         )
         .context("Failed to configure epoll")?;
 
-        let mut exec_wrapper = unsafe {
-            File::from_raw_fd(
-                memfd::memfd_create(
-                    CStr::from_bytes_with_nul_unchecked(b"exec_wrapper\0"),
-                    memfd::MemFdCreateFlag::MFD_CLOEXEC,
-                )
-                .context("Failed to create memfd for exec_wrapper")?,
-            )
-        };
-        exec_wrapper
-            .write_all(include_bytes!("../../target/exec_wrapper"))
-            .context("Failed to fill exec_wrapper memfd")?;
+        let exec_wrapper =
+            system::make_memfd("exec_wrapper", include_bytes!("../../target/exec_wrapper"))
+                .context("Failed to create memfd for exec_wrapper")?;
 
         Ok(Runner {
             proc_cgroup,
