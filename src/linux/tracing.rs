@@ -102,11 +102,11 @@ pub trait SyscallArgs {
         let mut s = String::new();
         let slice = self.to_usize_slice();
         write!(s, "{}(", string_table::syscall_no_to_name(slice[0] as i32)).unwrap();
-        for i in 1..slice.len() {
-            if i > 1 {
+        for (i, value) in slice.iter().skip(1).enumerate() {
+            if i > 0 {
                 write!(s, ", ").unwrap();
             }
-            write!(s, "{}", slice[i] as isize).unwrap();
+            write!(s, "{}", *value as isize).unwrap();
         }
         write!(s, ")").unwrap();
         s
@@ -519,8 +519,8 @@ impl TracedProcess {
         [(); Args::N]:,
     {
         let slice = args.to_usize_slice();
-        for i in 1..slice.len() {
-            self.set_syscall_arg(i - 1, slice[i])?;
+        for (i, value) in slice.iter().skip(1).enumerate() {
+            self.set_syscall_arg(i, *value)?;
         }
         self.set_syscall_no(slice[0] as i32)
     }

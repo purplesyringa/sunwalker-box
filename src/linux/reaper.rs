@@ -123,12 +123,12 @@ pub fn reaper(
         // Send to pid 1 (i.e. self)
         const F_SETOWN: i32 = 8;
         if unsafe { libc::fcntl(channel.as_raw_fd(), F_SETOWN, 1) } == -1 {
-            return Err(std::io::Error::last_os_error()).context("Failed to F_SETOWN")?;
+            return Err(std::io::Error::last_os_error()).context("Failed to F_SETOWN");
         }
 
         const F_SETSIG: i32 = 10;
         if unsafe { libc::fcntl(channel.as_raw_fd(), F_SETSIG, signal as i32) } == -1 {
-            return Err(std::io::Error::last_os_error()).context("Failed to F_SETSIG")?;
+            return Err(std::io::Error::last_os_error()).context("Failed to F_SETSIG");
         }
 
         let mut flags = fcntl::OFlag::from_bits_truncate(

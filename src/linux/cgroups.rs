@@ -385,7 +385,7 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
             backoff *= 2;
             times += 1;
         } else {
-            return Err(e).with_context(|| format!("Failed to rmdir {dir_name:?}"))?;
+            return Err(e).with_context(|| format!("Failed to rmdir {dir_name:?}"));
         }
     }
 

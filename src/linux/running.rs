@@ -504,9 +504,8 @@ impl SingleRun<'_> {
                         format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
                     file_name.append(&mut name);
 
-                    let file_name_addr = (process.traced_process.get_stack_pointer()? - 128)
-                        as usize
-                        - file_name.len();
+                    let file_name_addr =
+                        (process.traced_process.get_stack_pointer()? - 128) - file_name.len();
 
                     process
                         .traced_process
@@ -585,10 +584,8 @@ impl SingleRun<'_> {
         const SI_KERNEL: i32 = 128;
         if info.si_code == SI_KERNEL {
             let fault_address = unsafe { info.si_addr() as usize };
-            if fault_address == 0 {
-                if self.emulate_insn(pid)? {
-                    return Ok(());
-                }
+            if fault_address == 0 && self.emulate_insn(pid)? {
+                return Ok(());
             }
         }
 

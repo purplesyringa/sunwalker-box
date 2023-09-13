@@ -208,7 +208,7 @@ pub fn commit(state: &mut RootfsState) -> Result<()> {
         "/newroot/space",
         "overlay",
         0,
-        Some(format!("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work").as_ref()),
+        Some("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work"),
     )
     .context("Failed to mount overlayfs on /newroot/space")?;
     std::os::unix::fs::chown(
@@ -249,7 +249,7 @@ fn save_space_mounts(state: &mut RootfsState, mounts: Vec<String>) -> Result<()>
     }
 
     for (_, path) in state.space_mounts_restore_actions.iter().rev() {
-        system::umount(&path).with_context(|| format!("Failed to unmount {path}"))?;
+        system::umount(path).with_context(|| format!("Failed to unmount {path}"))?;
     }
 
     Ok(())
@@ -350,7 +350,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
             "/newroot/space",
             "overlay",
             0,
-            Some(format!("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work").as_ref()),
+            Some("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work"),
         )
         .context("Failed to mount overlayfs on /newroot/space")?;
         std::os::unix::fs::chown(
