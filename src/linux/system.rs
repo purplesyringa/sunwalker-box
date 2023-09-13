@@ -1,7 +1,8 @@
 use nix::{
     libc,
-    libc::{c_int, c_ulong, c_void},
+    libc::{c_int, c_ulong, c_void, SYS_pidfd_open},
     sys::memfd,
+    unistd::Pid,
 };
 
 pub use nix::libc::{
@@ -12,8 +13,12 @@ pub use nix::libc::{
 };
 
 use std::ffi::CString;
+use std::fs::File;
 use std::io::{Error, ErrorKind, Result, Write};
-use std::os::unix::ffi::OsStrExt;
+use std::os::{
+    fd::{FromRawFd, OwnedFd, RawFd},
+    unix::ffi::OsStrExt,
+};
 use std::path::Path;
 use std::ptr::null;
 
@@ -113,11 +118,20 @@ pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
     result
 }
 
-pub fn make_memfd(name: &str, contents: &[u8]) -> Result<std::fs::File> {
-    let mut file = std::fs::File::from(memfd::memfd_create(
+pub fn make_memfd(name: &str, contents: &[u8]) -> Result<File> {
+    let mut file = File::from(memfd::memfd_create(
         &CString::new(name)?,
         memfd::MemFdCreateFlag::MFD_CLOEXEC,
     )?);
     file.write_all(contents)?;
     Ok(file)
+}
+
+pub fn open_pidfd(pid: Pid) -> Result<OwnedFd> {
+    let pidfd = unsafe { libc::syscall(SYS_pidfd_open, pid, 0) } as RawFd;
+    if pidfd >= 0 {
+        Ok(unsafe { OwnedFd::from_raw_fd(pidfd) })
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
 }

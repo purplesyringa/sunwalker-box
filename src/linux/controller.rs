@@ -3,8 +3,7 @@ use crate::{
     linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
 };
 use anyhow::{anyhow, bail, Context, Result};
-use nix::{libc, libc::SYS_pidfd_open, sys::resource};
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use nix::sys::resource;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -104,11 +103,8 @@ impl Controller {
         // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
         // communication doesn't work well, so we use pidfd. As a side note, pidfd_open sets O_CLOEXEC
         // automatically.
-        let pidfd = unsafe { libc::syscall(SYS_pidfd_open, nix::unistd::getpid(), 0) } as RawFd;
-        if pidfd == -1 {
-            return Err(std::io::Error::last_os_error()).context("Failed to get pidfd of self");
-        }
-        let pidfd = unsafe { OwnedFd::from_raw_fd(pidfd) };
+        let pidfd =
+            system::open_pidfd(nix::unistd::getpid()).context("Failed to get pidfd of self")?;
 
         let cgroup = self
             .cgroup
