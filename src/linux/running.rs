@@ -1,5 +1,5 @@
 use crate::linux::{cgroups, ipc, rootfs, system, timens, tracing, userns};
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use crossmist::Object;
 use nix::{
     errno, libc,
@@ -573,13 +573,11 @@ impl SingleRun<'_> {
             .with_context(|| format!("Unknown pid {pid}"))?;
 
         let info = process.traced_process.get_signal_info()?;
-        if info.si_signo != signal::Signal::SIGSEGV as i32 {
-            // Excuse me?
-            bail!(
-                "This shouldn't happen: signal number mismatch between waitpid and \
-                 PTRACE_GETSIGINFO"
-            );
-        }
+        // Excuse me?
+        ensure!(
+            info.si_signo == signal::Signal::SIGSEGV as i32,
+            "This shouldn't happen: signal number mismatch between waitpid and PTRACE_GETSIGINFO"
+        );
 
         const SI_KERNEL: i32 = 128;
         if info.si_code == SI_KERNEL {
@@ -816,9 +814,10 @@ impl SingleRun<'_> {
         // at least if the kernel is not patched. In practice, the minimal enforced limit is
         // slightly higher because of vdso, vvar, and other special pages.
         if let Some(memory_limit) = self.options.memory_limit {
-            if memory_limit < 43 * 4096 {
-                bail!("Memory limit lower than 172 KiB cannot be enforced");
-            }
+            ensure!(
+                memory_limit >= 43 * 4096,
+                "Memory limit lower than 172 KiB cannot be enforced"
+            );
         }
 
         self.runner

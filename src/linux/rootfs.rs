@@ -1,5 +1,5 @@
 use crate::linux::{ids, mountns, procs, system};
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, ErrorKind};
@@ -170,9 +170,7 @@ fn update_committed_mount_points(state: &mut RootfsState, mounts: &[String]) {
 }
 
 pub fn commit(state: &mut RootfsState) -> Result<()> {
-    if state.is_committed {
-        bail!("Cannot commit rootfs twice");
-    }
+    ensure!(!state.is_committed, "Cannot commit rootfs twice");
 
     let mounts = list_mounts()?;
     update_committed_mount_points(state, &mounts);

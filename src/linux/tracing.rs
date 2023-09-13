@@ -430,9 +430,10 @@ impl TracedProcess {
             return Err(std::io::Error::last_os_error())
                 .context("Failed to store registers of the child")?;
         }
-        if iovec.iov_len < std::mem::size_of_val(&regs) {
-            anyhow::bail!("Failed to store registers of the child: too short register set");
-        }
+        anyhow::ensure!(
+            iovec.iov_len >= std::mem::size_of_val(&regs),
+            "Failed to store registers of the child: too short register set"
+        );
         Ok(())
     }
 

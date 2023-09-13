@@ -1,5 +1,5 @@
 use crate::linux::{ids, openat::OpenAtDir};
-use anyhow::{bail, Context, Result};
+use anyhow::{ensure, Context, Result};
 use crossmist::Object;
 use nix::libc::pid_t;
 use rand::Rng;
@@ -424,9 +424,10 @@ fn kill_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
     {
         let line = line.context("Failed to enumerate cgroup processes")?;
         let pid: pid_t = line.parse().context("Invalid cgroup.procs format")?;
-        if pid == 0 {
-            bail!("Found process from another pid namespace in cgroup.procs");
-        }
+        ensure!(
+            pid > 0,
+            "Found process from another pid namespace in cgroup.procs"
+        );
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(pid),
             nix::sys::signal::Signal::SIGKILL,

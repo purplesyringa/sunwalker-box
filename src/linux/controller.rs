@@ -2,7 +2,7 @@ use crate::{
     entry,
     linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, ensure, Context, Result};
 use nix::sys::resource;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -137,10 +137,11 @@ impl Controller {
     }
 
     pub fn ensure_allowed_to_modify(&self, path: &Path) -> Result<()> {
-        if path.components().count() == 3 {
-            // /newroot/*
-            bail!("File {path:?} cannot be modified");
-        }
+        // /newroot/*
+        ensure!(
+            path.components().count() > 3,
+            "File {path:?} cannot be modified"
+        );
         Ok(())
     }
 

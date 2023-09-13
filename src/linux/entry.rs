@@ -2,7 +2,7 @@ use crate::{
     entry,
     linux::{cgroups, controller, ids, kmodule, manager, rootfs, running, sandbox},
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use nix::libc::mode_t;
 use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
@@ -102,7 +102,7 @@ fn handle_command(
                 let file_name = entry
                     .file_name()
                     .into_string()
-                    .or_else(|name| bail!("Invalid file name: {name:?}"))?;
+                    .map_err(|name| anyhow!("Invalid file name: {name:?}"))?;
                 let metadata = entry.metadata()?;
                 let file_type = metadata.file_type();
                 let permissions = metadata.permissions();
@@ -148,9 +148,10 @@ fn handle_command(
             let mut file = std::fs::File::open(rootfs::resolve_abs_box_root(path)?)
                 .context("Failed to open file")?;
             let metadata = file.metadata().context("Failed to read metadata")?;
-            if !metadata.is_file() {
-                bail!("The passed path does not refer to a regular file");
-            }
+            ensure!(
+                metadata.is_file(),
+                "The passed path does not refer to a regular file"
+            );
             let file_len = metadata.len().try_into().context("Too big file")?;
             if file_len == 0 && len == 0 && at == 0 {
                 // Might be a special file
@@ -158,9 +159,7 @@ fn handle_command(
                 file.read_to_end(&mut buf)?;
                 return Ok(Some(json::stringify(buf)));
             }
-            if at > file_len {
-                bail!("Offset after end of file");
-            }
+            ensure!(at <= file_len, "Offset after end of file");
             let mut read_len = file_len - at;
             if len != 0 {
                 read_len = read_len.min(len);

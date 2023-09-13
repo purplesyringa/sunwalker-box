@@ -1,5 +1,5 @@
 use crate::linux::system;
-use anyhow::{bail, Context, Result};
+use anyhow::{bail, ensure, Context, Result};
 use nix::{
     libc,
     libc::{c_char, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM},
@@ -10,9 +10,10 @@ pub fn sanity_checks() -> Result<()> {
     // an escape vector. suid_dumpable = 2 is somewhat vulnerable (though only with particular
     // userland) on some old kernel versions, but no one uses them anymore.
     let suid_dumpable = std::fs::read_to_string("/proc/sys/fs/suid_dumpable")?;
-    if suid_dumpable == "1\n" {
-        bail!("suid_dumpable is set to 1, unable to continue safely");
-    }
+    ensure!(
+        suid_dumpable != "1\n",
+        "suid_dumpable is set to 1, unable to continue safely"
+    );
 
     // Only cgroup v2 is supported. It's used by default on new distributions, so it shouldn't be a
     // problem. Cgroup v1 running in v2-compatibility mode could theoretically work, but we use
@@ -39,9 +40,10 @@ pub fn sanity_checks() -> Result<()> {
 
     // On aarch64, unprivileged PMCCNTR reads must be disabled
     if let Ok(perf_user_access) = std::fs::read_to_string("/proc/sys/kernel/perf_user_access") {
-        if perf_user_access != "0\n" {
-            bail!("perf_user_access is not set to 0, unable to continue safely");
-        }
+        ensure!(
+            perf_user_access == "0\n",
+            "perf_user_access is not set to 0, unable to continue safely"
+        );
     }
 
     Ok(())
