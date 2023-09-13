@@ -80,7 +80,7 @@ pub fn reaper(
     // case, anyway), so we have to resort to polling.
     if nix::poll::poll(
         &mut [nix::poll::PollFd::new(
-            ppidfd.as_raw_fd(),
+            &ppidfd,
             nix::poll::PollFlags::POLLIN,
         )],
         0,

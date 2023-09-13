@@ -7,7 +7,6 @@ use nix::{
 };
 use std::fs::File;
 use std::io::{BufRead, BufReader};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 
 pub fn unshare_ipc_namespace() -> Result<()> {
@@ -28,7 +27,7 @@ pub fn mount_mqueue(path: &str) -> Result<()> {
 
 pub fn join_process_ipc_namespace(pid: pid_t) -> Result<()> {
     let ipc = File::open(format!("/newroot/proc/{pid}/ns/ipc"))?;
-    sched::setns(ipc.as_raw_fd(), sched::CloneFlags::CLONE_NEWIPC)?;
+    sched::setns(ipc, sched::CloneFlags::CLONE_NEWIPC)?;
     Ok(())
 }
 

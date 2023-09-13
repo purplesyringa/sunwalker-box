@@ -11,14 +11,14 @@ use nix::{
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
-use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd};
+use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
 pub struct Runner {
     proc_cgroup: cgroups::ProcCgroup,
     timens_controller: timens::TimeNsController,
     sigfd: signalfd::SignalFd,
-    epollfd: OwnedFd,
+    epoll: epoll::Epoll,
     exec_wrapper: File,
 }
 
@@ -101,16 +101,14 @@ impl Runner {
         )
         .context("Failed to create signalfd")?;
 
-        let epollfd = epoll::epoll_create1(epoll::EpollCreateFlags::EPOLL_CLOEXEC)
-            .context("Failed to create epollfd")?;
-        let epollfd = unsafe { OwnedFd::from_raw_fd(epollfd) };
-        epoll::epoll_ctl(
-            epollfd.as_raw_fd(),
-            epoll::EpollOp::EpollCtlAdd,
-            sigfd.as_raw_fd(),
-            &mut epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, 0),
-        )
-        .context("Failed to configure epoll")?;
+        let epoll = epoll::Epoll::new(epoll::EpollCreateFlags::EPOLL_CLOEXEC)
+            .context("Failed to create epoll")?;
+        epoll
+            .add(
+                &sigfd,
+                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, 0),
+            )
+            .context("Failed to configure epoll")?;
 
         let exec_wrapper =
             system::make_memfd("exec_wrapper", include_bytes!("../../target/exec_wrapper"))
@@ -120,7 +118,7 @@ impl Runner {
             proc_cgroup,
             timens_controller,
             sigfd,
-            epollfd,
+            epoll,
             exec_wrapper,
         })
     }
@@ -368,12 +366,11 @@ impl SingleRun<'_> {
 
         let timeout_ms = self.compute_wait_timeout_ms();
         let mut events = [epoll::EpollEvent::empty()];
-        let n_events = epoll::epoll_wait(
-            self.runner.epollfd.as_raw_fd(),
-            &mut events,
-            timeout_ms as isize,
-        )
-        .context("epoll_wait failed")?;
+        let n_events = self
+            .runner
+            .epoll
+            .wait(&mut events, timeout_ms as isize)
+            .context("epoll_wait failed")?;
 
         match n_events {
             0 => Ok(wait::WaitStatus::StillAlive),
