@@ -182,6 +182,15 @@ pub fn reaper(
         match mask.wait().expect("Failed to wait for signal") {
             signal::Signal::SIGUSR1 => {
                 // Parent died
+                // NOTE: Every log from now on is being sent to stderr after the main process has
+                // died. If you are running sunwalker-box from terminal, this might mean your
+                // shell's prompt is interleaved with log messages. If you are running sunwalker-box
+                // under sudo, these logs might be hidden, because sudo redirects stdio, and when
+                // sudo dies, output is no longer piped to the user.
+                //
+                // The latter situation is worse than it sounds. Writing to a pipe that is no longer
+                // read by anyone yields EPIPE, and that's bad, because eprintln! panics in this
+                // case. For this reason, diagnostics that cannot be logged are silently dropped.
                 log!("SIGUSR1: Main process died");
                 break 'main;
             }

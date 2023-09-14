@@ -73,7 +73,15 @@ macro_rules! log {
                 let (prefix_formatting, prefix_text) = $crate::log_style!($style);
 
                 let text = $crate::log::word_wrap(&format!("{prefix_text}{}", format_args!($($args)*)));
-                eprintln!("\x1b[38;2;{r};{g};{b}m[{context:15}]\x1b[0m {prefix_formatting}{text}\x1b[0m");
+
+                // Failing to log is not considered a failure, because panicking in a critical
+                // section or a cleanup procedure might lead to worse results.
+                use ::std::io::Write;
+                let mut stderr = ::std::io::stderr();
+                let _ = writeln!(
+                    stderr,
+                    "\x1b[38;2;{r};{g};{b}m[{context:15}]\x1b[0m {prefix_formatting}{text}\x1b[0m"
+                );
             }
         }
     };
