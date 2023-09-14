@@ -11,6 +11,7 @@ use nix::{
     unistd,
     unistd::Pid,
 };
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
@@ -75,12 +76,12 @@ struct SingleRun<'a> {
     box_cgroup: Option<cgroups::BoxCgroup>,
     main_pid: Pid,
     start_time: Option<Instant>,
-    processes: HashMap<Pid, ProcessInfo>,
+    processes: HashMap<Pid, RefCell<ProcessInfo>>,
     #[cfg(target_arch = "x86_64")]
     tsc_shift: u64,
-    sem_next_id: isize,
-    msg_next_id: isize,
-    shm_next_id: isize,
+    sem_next_id: Cell<isize>,
+    msg_next_id: Cell<isize>,
+    shm_next_id: Cell<isize>,
 }
 
 impl Runner {
@@ -145,9 +146,9 @@ impl Runner {
             processes: HashMap::new(),
             #[cfg(target_arch = "x86_64")]
             tsc_shift: rand::random::<u64>(),
-            sem_next_id: 0,
-            msg_next_id: 0,
-            shm_next_id: 0,
+            sem_next_id: Cell::new(0),
+            msg_next_id: Cell::new(0),
+            shm_next_id: Cell::new(0),
         };
         single_run.run()?;
         Ok(single_run.results)
@@ -433,7 +434,7 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn on_after_fork(process: &ProcessInfo) -> Result<()> {
+    fn on_after_fork(&self, process: &ProcessInfo) -> Result<()> {
         log!(
             "Initializing process {} after fork",
             process.traced_process.get_pid()
@@ -442,7 +443,7 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn on_after_execve(process: &mut ProcessInfo) -> Result<()> {
+    fn on_after_execve(&self, process: &mut ProcessInfo) -> Result<()> {
         log!(
             "Initializing process {} after execve",
             process.traced_process.get_pid()
@@ -453,12 +454,7 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn on_seccomp(&mut self, pid: Pid) -> Result<()> {
-        let process = self
-            .processes
-            .get_mut(&pid)
-            .with_context(|| format!("Unknown pid {pid}"))?;
-
+    fn on_seccomp(&self, process: &mut ProcessInfo) -> Result<()> {
         let syscall_info = process
             .traced_process
             .get_syscall_info()
@@ -467,7 +463,8 @@ impl SingleRun<'_> {
 
         use tracing::SyscallArgs;
         log!(
-            "Emulating syscall <pid {pid}> {}",
+            "Emulating syscall <pid {}> {}",
+            process.traced_process.get_pid(),
             (
                 syscall_info.nr,
                 syscall_info.args[0],
@@ -479,6 +476,15 @@ impl SingleRun<'_> {
             )
                 .debug()
         );
+
+        let set_next_id = |name, cell: &Cell<isize>| -> Result<()> {
+            if ipc::get_next_id(name)? == -1 {
+                let id = cell.get();
+                ipc::set_next_id(name, id)?;
+                cell.set(id + 1);
+            }
+            Ok(())
+        };
 
         match syscall_info.nr as i64 {
             // We could theoretically let next_id stay 0 forever, but the present implementation
@@ -496,11 +502,8 @@ impl SingleRun<'_> {
             // - Process B SIGCONTs A
             // - Process A executes the msgget() syscall, but msg_next_id = -1 at the moment
             libc::SYS_semget => {
-                if ipc::get_next_id("sem")? == -1 {
-                    ipc::set_next_id("sem", self.sem_next_id)?;
-                    self.sem_next_id += 1;
-                }
-                return Self::emulate_syscall_result_errno(process, unsafe {
+                set_next_id("sem", &self.sem_next_id)?;
+                return self.emulate_syscall_result_errno(process, unsafe {
                     libc::semget(
                         syscall_info.args[0] as i32,
                         syscall_info.args[1] as i32,
@@ -509,20 +512,14 @@ impl SingleRun<'_> {
                 } as i64);
             }
             libc::SYS_msgget => {
-                if ipc::get_next_id("msg")? == -1 {
-                    ipc::set_next_id("msg", self.msg_next_id)?;
-                    self.msg_next_id += 1;
-                }
-                return Self::emulate_syscall_result_errno(process, unsafe {
+                set_next_id("msg", &self.msg_next_id)?;
+                return self.emulate_syscall_result_errno(process, unsafe {
                     libc::msgget(syscall_info.args[0] as i32, syscall_info.args[1] as i32)
                 } as i64);
             }
             libc::SYS_shmget => {
-                if ipc::get_next_id("shm")? == -1 {
-                    ipc::set_next_id("shm", self.shm_next_id)?;
-                    self.shm_next_id += 1;
-                }
-                return Self::emulate_syscall_result_errno(process, unsafe {
+                set_next_id("shm", &self.shm_next_id)?;
+                return self.emulate_syscall_result_errno(process, unsafe {
                     libc::shmget(
                         syscall_info.args[0] as i32,
                         syscall_info.args[1] as usize,
@@ -531,7 +528,7 @@ impl SingleRun<'_> {
                 } as i64);
             }
             libc::SYS_memfd_create => {
-                return Self::emulate_syscall_redirect(process, |process| {
+                return self.emulate_syscall_redirect(process, |process| {
                     let mut name = process
                         .traced_process
                         .read_cstring(syscall_info.args[0] as usize, 249)?
@@ -559,6 +556,7 @@ impl SingleRun<'_> {
                         format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
                     file_name.append(&mut name);
 
+                    // Account for red zone
                     let file_name_addr =
                         (process.traced_process.get_stack_pointer()? - 128) - file_name.len();
 
@@ -582,14 +580,18 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn emulate_syscall_result_errno(process: &mut ProcessInfo, mut result: i64) -> Result<()> {
+    fn emulate_syscall_result_errno(
+        &self,
+        process: &mut ProcessInfo,
+        mut result: i64,
+    ) -> Result<()> {
         if result == -1 {
             result = -errno::errno() as i64;
         }
-        Self::emulate_syscall_result(process, result)
+        self.emulate_syscall_result(process, result)
     }
 
-    fn emulate_syscall_result(process: &mut ProcessInfo, result: i64) -> Result<()> {
+    fn emulate_syscall_result(&self, process: &mut ProcessInfo, result: i64) -> Result<()> {
         process.traced_process.set_syscall_result(result as usize)?;
         process.traced_process.set_syscall_no(-1)?; // skip syscall
         process.state = ProcessState::Alive;
@@ -598,6 +600,7 @@ impl SingleRun<'_> {
     }
 
     fn emulate_syscall_redirect<Args: tracing::SyscallArgs>(
+        &self,
         process: &mut ProcessInfo,
         redirect: impl FnOnce(&mut ProcessInfo) -> std::io::Result<Args>,
     ) -> Result<()>
@@ -621,12 +624,7 @@ impl SingleRun<'_> {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn handle_sigsegv(&mut self, pid: Pid) -> Result<()> {
-        let process = self
-            .processes
-            .get(&pid)
-            .with_context(|| format!("Unknown pid {pid}"))?;
-
+    fn handle_sigsegv(&self, process: &mut ProcessInfo) -> Result<()> {
         let info = process.traced_process.get_signal_info()?;
         // Excuse me?
         ensure!(
@@ -637,12 +635,11 @@ impl SingleRun<'_> {
         const SI_KERNEL: i32 = 128;
         if info.si_code == SI_KERNEL {
             let fault_address = unsafe { info.si_addr() as usize };
-            if fault_address == 0 && self.emulate_insn(pid)? {
+            if fault_address == 0 && self.emulate_insn(process)? {
                 return Ok(());
             }
         }
 
-        let process = self.processes.get_mut(&pid).unwrap();
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;
@@ -650,9 +647,8 @@ impl SingleRun<'_> {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn handle_sigill(&mut self, pid: Pid) -> Result<()> {
-        if !self.emulate_insn(pid)? {
-            let process = self.processes.get_mut(&pid).unwrap();
+    fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
+        if !self.emulate_insn(process)? {
             process
                 .traced_process
                 .resume_signal(signal::Signal::SIGILL)?;
@@ -662,9 +658,7 @@ impl SingleRun<'_> {
     }
 
     #[cfg(target_arch = "x86_64")]
-    fn emulate_insn(&mut self, pid: Pid) -> Result<bool> {
-        let process = self.processes.get_mut(&pid).unwrap();
-
+    fn emulate_insn(&self, process: &mut ProcessInfo) -> Result<bool> {
         let mut regs = process.traced_process.get_registers()?;
         let Ok(word) = process.traced_process.read_word(regs.rip as usize) else {
             return Ok(false);
@@ -697,11 +691,7 @@ impl SingleRun<'_> {
     }
 
     #[cfg(target_arch = "aarch64")]
-    fn handle_sigsegv(&mut self, pid: Pid) -> Result<()> {
-        let process = self
-            .processes
-            .get_mut(&pid)
-            .with_context(|| format!("Unknown pid {pid}"))?;
+    fn handle_sigsegv(&self, process: &mut ProcessInfo) -> Result<()> {
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;
@@ -709,11 +699,7 @@ impl SingleRun<'_> {
     }
 
     #[cfg(target_arch = "aarch64")]
-    fn handle_sigill(&mut self, pid: Pid) -> Result<()> {
-        let process = self
-            .processes
-            .get_mut(&pid)
-            .with_context(|| format!("Unknown pid {pid}"))?;
+    fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
         process
             .traced_process
             .resume_signal(signal::Signal::SIGILL)?;
@@ -732,26 +718,27 @@ impl SingleRun<'_> {
             }
 
             wait::WaitStatus::Stopped(pid, signal) => {
-                let process = self
+                let mut process = self
                     .processes
-                    .get_mut(&pid)
-                    .with_context(|| format!("Unknown pid {pid}"))?;
+                    .get(&pid)
+                    .with_context(|| format!("Unknown pid {pid}"))?
+                    .borrow_mut();
 
                 match signal {
                     signal::Signal::SIGSTOP => {
                         if process.state == ProcessState::JustStarted {
                             process.state = ProcessState::Alive;
-                            Self::on_after_fork(process)?;
+                            self.on_after_fork(&process)?;
                             process.traced_process.resume()?;
                             return Ok(false);
                         }
                     }
                     signal::Signal::SIGSEGV => {
-                        self.handle_sigsegv(pid)?;
+                        self.handle_sigsegv(&mut process)?;
                         return Ok(false);
                     }
                     signal::Signal::SIGILL => {
-                        self.handle_sigill(pid)?;
+                        self.handle_sigill(&mut process)?;
                         return Ok(false);
                     }
                     _ => {}
@@ -761,31 +748,38 @@ impl SingleRun<'_> {
             }
 
             wait::WaitStatus::PtraceEvent(pid, _, event) => {
+                if event == libc::PTRACE_EVENT_EXEC {
+                    // We might not be aware of the given a pid. Consider the following situation:
+                    // - Process with PID 2 starts a thread with PID 3
+                    // - Process with PID 2 dies, leaving PID 3 the only running thread, but still
+                    //   attached to PGID 2
+                    // - Process with PID 3 executes execve, resulting in a new process with PID 2
+                    //   appearing seemingly from nowhere
+                    let mut process = ProcessInfo {
+                        state: ProcessState::Alive,
+                        traced_process: tracing::TracedProcess::new(pid)?,
+                    };
+                    let old_pid = Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
+                    self.processes.remove(&old_pid);
+                    self.on_after_execve(&mut process)?;
+                    process.traced_process.resume()?;
+                    self.processes.insert(pid, RefCell::new(process));
+                    return Ok(false);
+                }
+
+                let mut process = self
+                    .processes
+                    .get(&pid)
+                    .with_context(|| format!("Unknown pid {pid}"))?
+                    .borrow_mut();
+
                 match event {
-                    libc::PTRACE_EVENT_EXEC => {
-                        let mut process = ProcessInfo {
-                            state: ProcessState::Alive,
-                            traced_process: tracing::TracedProcess::new(pid)?,
-                        };
-                        let old_pid =
-                            Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
-                        self.processes.remove(&old_pid);
-                        Self::on_after_execve(&mut process)?;
-                        process.traced_process.resume()?;
-                        self.processes.insert(pid, process);
-                        return Ok(false);
-                    }
                     libc::PTRACE_EVENT_SECCOMP => {
-                        self.on_seccomp(pid)?;
+                        self.on_seccomp(&mut process)?;
                         return Ok(false);
                     }
                     _ => {}
                 }
-
-                let process = self
-                    .processes
-                    .get_mut(&pid)
-                    .with_context(|| format!("Unknown pid {pid}"))?;
 
                 match event {
                     libc::PTRACE_EVENT_FORK
@@ -794,16 +788,18 @@ impl SingleRun<'_> {
                         let child_pid =
                             Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
                         process.traced_process.resume()?;
+                        drop(process);
                         self.processes.insert(
                             child_pid,
-                            ProcessInfo {
+                            RefCell::new(ProcessInfo {
                                 state: ProcessState::JustStarted,
                                 traced_process: tracing::TracedProcess::new(child_pid)?,
-                            },
+                            }),
                         );
                     }
                     libc::PTRACE_EVENT_EXIT => {
                         process.traced_process.resume()?;
+                        drop(process);
                         self.processes.remove(&pid);
                     }
                     _ => process.traced_process.resume()?,
@@ -811,7 +807,7 @@ impl SingleRun<'_> {
             }
 
             wait::WaitStatus::PtraceSyscall(pid) => {
-                let process = self.processes.get_mut(&pid).unwrap();
+                let process = self.processes.get_mut(&pid).unwrap().get_mut();
                 process.state = ProcessState::Alive;
                 process.traced_process.resume()?;
             }
@@ -895,18 +891,15 @@ impl SingleRun<'_> {
         // execve has just happened
         self.start_time = Some(Instant::now());
 
-        self.processes.insert(
-            self.main_pid,
-            ProcessInfo {
-                state: ProcessState::Alive,
-                traced_process,
-            },
-        );
-        let main_process = self.processes.get_mut(&self.main_pid).unwrap();
-
-        Self::on_after_fork(main_process)?;
-        Self::on_after_execve(main_process)?;
+        let mut main_process = ProcessInfo {
+            state: ProcessState::Alive,
+            traced_process,
+        };
+        self.on_after_fork(&main_process)?;
+        self.on_after_execve(&mut main_process)?;
         main_process.traced_process.resume()?;
+        self.processes
+            .insert(self.main_pid, RefCell::new(main_process));
 
         // If SIGPROF fires because of our actions, we capture Stopped(SIGPROF), continue the
         // process with the signal, immediately recognize that the limit has been exceeded on the
