@@ -1,6 +1,7 @@
 use crate::{
-    entry,
+    enable_diagnostics, entry,
     linux::{cgroups, controller, ids, kmodule, manager, rootfs, running, sandbox},
+    log,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use nix::libc::mode_t;
@@ -9,6 +10,10 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::time::Duration;
 
 pub fn main(cli_args: entry::CLIArgs) {
+    if cli_args.logs {
+        enable_diagnostics!("main");
+    }
+
     sandbox::sanity_checks().expect("Sanity checks failed");
 
     match cli_args.command {
@@ -54,6 +59,7 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
         }
     }
 
+    log!("Terminating");
     Ok(())
 }
 

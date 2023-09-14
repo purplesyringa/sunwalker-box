@@ -1,4 +1,8 @@
-use crate::linux::{cgroups, running, system};
+use crate::{
+    enable_diagnostics,
+    linux::{cgroups, running, system},
+    log,
+};
 use anyhow::{Context, Result};
 use crossmist::Object;
 
@@ -12,9 +16,17 @@ pub enum Command {
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
     mut channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    diagnostics_enabled: bool,
 ) {
+    if diagnostics_enabled {
+        enable_diagnostics!("manager");
+    }
+
+    log!("Manager started");
+
     let mut runner = running::Runner::new(proc_cgroup).expect("Failed to create runner");
 
+    log!("Ready to receive commands");
     channel
         .send(&Ok(None))
         .expect("Failed to notify parent about readiness");

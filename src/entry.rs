@@ -4,6 +4,10 @@ use crossmist::Object;
 #[derive(FromArgs)]
 /// Sandbox for sunwalker judge system
 pub struct CLIArgs {
+    /// enable diagnostic logs
+    #[argh(switch, long = "logs")]
+    pub logs: bool,
+
     #[argh(subcommand)]
     pub command: CLICommand,
 }

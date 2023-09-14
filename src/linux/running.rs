@@ -1,4 +1,7 @@
-use crate::linux::{cgroups, ipc, rootfs, system, timens, tracing, userns};
+use crate::{
+    linux::{cgroups, ipc, rootfs, system, timens, tracing, userns},
+    log,
+};
 use anyhow::{bail, ensure, Context, Result};
 use crossmist::Object;
 use nix::{
@@ -424,6 +427,21 @@ impl SingleRun<'_> {
             .get_syscall_info()
             .context("Failed to get syscall info")?;
         let syscall_info = unsafe { syscall_info.u.seccomp };
+
+        use tracing::SyscallArgs;
+        log!(
+            "Emulated syscall <pid {pid}> {}",
+            (
+                syscall_info.nr,
+                syscall_info.args[0],
+                syscall_info.args[1],
+                syscall_info.args[2],
+                syscall_info.args[3],
+                syscall_info.args[4],
+                syscall_info.args[5],
+            )
+                .debug()
+        );
 
         match syscall_info.nr as i64 {
             // We could theoretically let next_id stay 0 forever, but the present implementation

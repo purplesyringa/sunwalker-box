@@ -1,6 +1,7 @@
 use crate::{
     entry,
     linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
+    log,
 };
 use anyhow::{anyhow, ensure, Context, Result};
 use nix::sys::resource;
@@ -48,6 +49,8 @@ impl Controller {
             .add_self_as_manager()
             .context("Failed to add self to manager cgroup")?;
 
+        log!("sunwalker is now running on core {core}");
+
         self.cgroup = Some(cgroup);
 
         Ok(())
@@ -66,6 +69,8 @@ impl Controller {
         sandbox::enter_working_area().context("Failed to enter working area")?;
         // Create a copy of /dev
         sandbox::create_dev_copy().context("Failed to create /dev copy")?;
+
+        log!("sunwalker is now running in an isolated mount namespace");
 
         // Setup rootfs
         let mut root_cur = PathBuf::from("/oldroot");
@@ -98,6 +103,7 @@ impl Controller {
                 .context("Failed to create channel")?;
 
         // Run a child in a new PID namespace
+        log!("Unsharing pidns");
         procs::unshare_pidns().context("Failed to unshare pid namespace")?;
 
         // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
@@ -112,12 +118,20 @@ impl Controller {
             .context("The controller has not joined a core cgroup yet")?;
 
         let child = reaper::reaper
-            .spawn(pidfd, cli_command, cgroup, reaper_theirs, manager_theirs)
-            .context("Failed to start child")?;
+            .spawn(
+                pidfd,
+                cli_command,
+                cgroup,
+                reaper_theirs,
+                manager_theirs,
+                log::diagnostics_enabled(),
+            )
+            .context("Failed to start reaper")?;
         thread_tx
             .send(child)
-            .context("Failed to send child to thread")?;
+            .context("Failed to send reaper to thread")?;
 
+        log!("Waiting for reaper");
         manager_ours
             .recv()
             .context("Failed to recv readiness signal")?
@@ -133,6 +147,7 @@ impl Controller {
         // pidns in an uncertain state or (more importantly) non-existent rootfs.
         self.reset()?;
 
+        log!("Controller is ready");
         Ok(())
     }
 

@@ -1,6 +1,7 @@
 use crate::{
-    entry,
+    enable_diagnostics, entry,
     linux::{cgroups, ipc, manager, procs},
+    log,
 };
 use anyhow::{Context, Result};
 use crossmist::Object;
@@ -18,7 +19,7 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
     }
 }
 
-#[derive(Object)]
+#[derive(Debug, Object)]
 pub enum Command {
     Init,
     Reset,
@@ -34,7 +35,14 @@ pub fn reaper(
         std::result::Result<Option<String>, String>,
         manager::Command,
     >,
+    diagnostics_enabled: bool,
 ) -> ! {
+    if diagnostics_enabled {
+        enable_diagnostics!("reaper");
+    }
+
+    log!("Reaper started");
+
     if nix::unistd::getpid().as_raw() != 1 {
         panic!("Reaper must have PID 1");
     }
@@ -88,6 +96,7 @@ pub fn reaper(
     .expect("Failed to poll parent pidfd")
         != 0
     {
+        log!("Parent already dead");
         std::process::exit(0);
     }
 
@@ -108,6 +117,13 @@ pub fn reaper(
             let flags = fcntl::fcntl(fd, fcntl::FcntlArg::F_GETFD)
                 .expect("Failed to fcntl a file descriptor");
             if !fcntl::FdFlag::from_bits_truncate(flags).intersects(fcntl::FdFlag::FD_CLOEXEC) {
+                log!(
+                    warn,
+                    "Found a non-CLOEXEC file descriptor. This could be due to 'strace', 'perf \
+                     trace', or other debugging tools. IF YOU ARE DEBUGGING SUNWALKER, disable \
+                     this check with --ignore-non-cloexec. THERE IS SECURITY RISK ATTACHED TO \
+                     THIS OPTION -- ONLY USE IT IF YOU ARE SPECIFICALLY DEBUGGING SUNWALKER-BOX."
+                );
                 panic!("File descriptor {fd} is not CLOEXEC");
             }
         }
@@ -117,6 +133,7 @@ pub fn reaper(
     // but instead wait for the parent's termination and quit after that. This also prevents command
     // injection via ioctl(TIOCSTI).
     nix::unistd::setsid().expect("Failed to setsid");
+    log!("Reaper is now running in a detached controlling terminal");
 
     // Send a signal whenever a new message appears on a channel
     fn enable_async(channel: &impl AsRawFd, signal: signal::Signal) -> Result<()> {
@@ -156,18 +173,16 @@ pub fn reaper(
                 .try_clone()
                 .expect("Failed to clone box cgroup reference"),
             manager_channel,
+            diagnostics_enabled,
         )
         .expect("Failed to start child");
     // We purposefully don't join manager here, as it may die unexpectedly
 
     'main: loop {
-        let mut sigset = signal::SigSet::empty();
-        sigset.add(signal::Signal::SIGUSR1);
-        sigset.add(signal::Signal::SIGIO);
-        sigset.add(signal::Signal::SIGCHLD);
-        match sigset.wait().expect("Failed to wait for signal") {
+        match mask.wait().expect("Failed to wait for signal") {
             signal::Signal::SIGUSR1 => {
                 // Parent died
+                log!("SIGUSR1: Main process died");
                 break 'main;
             }
             signal::Signal::SIGIO => {
@@ -176,6 +191,10 @@ pub fn reaper(
                     // SIGIO is also sent when reaper_channel is dropped, which happens just before
                     // the parent dies. However, if we terminate before SIGUSR1, the parent will
                     // believe we crashed. Therefore, just wait for SIGUSR1.
+                    log!(
+                        "Reaper channel is empty; SIGUSR1 should appear soon or something has \
+                         gone wrong"
+                    );
                     continue;
                 };
                 let result = execute_command(command, child.id()).map_err(|e| format!("{e:?}"));
@@ -190,6 +209,7 @@ pub fn reaper(
                         Ok(res) => {
                             if res.pid() == Some(nix::unistd::Pid::from_raw(child.id())) {
                                 // Manager died
+                                log!("Manager has died");
                                 break;
                             }
                             if res == wait::WaitStatus::StillAlive {
@@ -199,6 +219,11 @@ pub fn reaper(
                         Err(e) => {
                             if e == nix::errno::Errno::ECHILD {
                                 // Manager terminated
+                                log!(
+                                    impossible,
+                                    "No children found but SIGCHLD was sent (or manager death has \
+                                     not been handled correctly)"
+                                );
                                 break 'main;
                             } else {
                                 panic!("Failed to waitpid: {e:?}");
@@ -214,15 +239,19 @@ pub fn reaper(
     }
 
     // If parent is dead by now, we don't have anyone to report the error to
+    log!("Destroying per-sandbox cgroup");
     if let Err(e) = proc_cgroup.destroy() {
         eprintln!("Failed to destroy box cgroup: {e:?}");
     }
 
     // Don't send the result to the parent
+    log!("Reaper is terminating");
     std::process::exit(0)
 }
 
 fn execute_command(command: Command, child_pid: pid_t) -> Result<Option<String>> {
+    log!("Running command {command:?}");
+
     match command {
         Command::Init => {
             ipc::join_process_ipc_namespace(child_pid).context("Failed to join manager's ipcns")?;

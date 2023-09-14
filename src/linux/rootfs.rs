@@ -1,4 +1,7 @@
-use crate::linux::{ids, mountns, procs, system};
+use crate::{
+    linux::{ids, mountns, procs, system},
+    log,
+};
 use anyhow::{anyhow, ensure, Context, Result};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -42,6 +45,8 @@ pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<Rootf
         // Don't clone directories we're going to mount over anyway, and also /sys, because it's too
         // dangerous
         if name != "space" && name != "dev" && name != "proc" && name != "tmp" && name != "sys" {
+            log!("Mirroring /{name}");
+
             let source_path = entry
                 .path()
                 .into_os_string()
