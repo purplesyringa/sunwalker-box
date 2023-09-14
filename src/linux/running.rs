@@ -25,7 +25,7 @@ pub struct Runner {
     exec_wrapper: File,
 }
 
-#[derive(Object)]
+#[derive(Debug, Object)]
 pub struct Options {
     pub argv: Vec<String>,
     pub stdin: String,
@@ -85,6 +85,8 @@ struct SingleRun<'a> {
 
 impl Runner {
     pub fn new(proc_cgroup: cgroups::ProcCgroup) -> Result<Self> {
+        log!("Initializing runner");
+
         // Mount procfs and enter the sandboxed root
         let timens_controller = timens::TimeNsController::new().context("Failed to adjust time")?;
         rootfs::configure_rootfs().context("Failed to configure rootfs")?;
@@ -154,6 +156,8 @@ impl Runner {
 
 impl SingleRun<'_> {
     fn open_standard_streams(&self) -> Result<[File; 3]> {
+        log!("Opening standard streams");
+
         let stdin = File::open(&self.options.stdin).context("Failed to open stdin file")?;
         let stdout = File::options()
             .write(true)
@@ -171,6 +175,7 @@ impl SingleRun<'_> {
     }
 
     fn create_box_cgroup(&mut self) -> Result<()> {
+        log!("Creating a per-run cgroup");
         let box_cgroup = self
             .runner
             .proc_cgroup
@@ -194,6 +199,7 @@ impl SingleRun<'_> {
         let [stdin, stdout, stderr] = self.open_standard_streams()?;
 
         // Start process, redirecting standard streams and configuring ITIMER_PROF
+        log!("Starting executor worker");
         let (theirs, mut ours) = crossmist::channel().context("Failed to create a pipe")?;
         let user_process = executor_worker
             .spawn(
@@ -215,6 +221,7 @@ impl SingleRun<'_> {
         // The child will either exit or trigger SIGTRAP on execve() to exec_wrapper due to ptrace
         let wait_status =
             wait::waitpid(self.main_pid, None).context("Failed to waitpid for process")?;
+        log!("Worker has stopped on launch with {wait_status:?}");
 
         match wait_status {
             wait::WaitStatus::Exited(_, _) => {
@@ -233,6 +240,7 @@ impl SingleRun<'_> {
 
         // Apply cgroup limits
         self.create_box_cgroup()?;
+        log!("Moving worker to cgroup");
         self.box_cgroup
             .as_mut()
             .unwrap()
@@ -241,11 +249,13 @@ impl SingleRun<'_> {
 
         // execve() the real program
         let mut traced_process = tracing::TracedProcess::new(self.main_pid)?;
+        log!("Starting user process");
         traced_process.resume()?;
 
         // The child will either exit or trigger SIGTRAP on execve() to the real program
         let wait_status =
             wait::waitpid(self.main_pid, None).context("Failed to waitpid for process")?;
+        log!("Worker has stopped on execve with {wait_status:?}");
 
         match wait_status {
             wait::WaitStatus::Exited(_, exit_code) => {
@@ -332,14 +342,40 @@ impl SingleRun<'_> {
 
     fn compute_verdict(&self, wait_status: wait::WaitStatus) -> Result<Verdict> {
         if Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time) {
+            if let wait::WaitStatus::Stopped(_, signal::Signal::SIGPROF) = wait_status {
+            } else {
+                log!(
+                    warn,
+                    "The user process has exceeded CPU time limit without triggering SIGPROF. \
+                     This may be due to the process using itimers for something else -- if that \
+                     is unexpected, consider reporting an inefficiency."
+                );
+            }
             return Ok(Verdict::CPUTimeLimitExceeded);
         } else if Self::is_exceeding(self.options.real_time_limit, self.results.real_time) {
             return Ok(Verdict::RealTimeLimitExceeded);
         } else if Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time) {
             return Ok(Verdict::IdlenessTimeLimitExceeded);
-        } else if self.box_cgroup.as_ref().unwrap().was_oom_killed()?
-            || Self::is_exceeding(self.options.memory_limit, self.results.memory)
-        {
+        } else if self.box_cgroup.as_ref().unwrap().was_oom_killed()? {
+            if !Self::is_exceeding(self.options.memory_limit, self.results.memory) {
+                log!(
+                    impossible,
+                    "The user process has triggering OOM killer without exceeding memory limits. \
+                     This is either indicates too high memory pressure, making the verdict \
+                     horribly wrong by blaming the participant instead of the invoker, or means \
+                     that the user attempted to allocate too much in one shot. Whether the latter
+                     case is possible is up in the air: it seems like you can only populate one \
+                     page at a time -- but if it is, please notify us."
+                );
+            }
+            return Ok(Verdict::MemoryLimitExceeded);
+        } else if Self::is_exceeding(self.options.memory_limit, self.results.memory) {
+            log!(
+                impossible,
+                "The user process has exceeded memory limit without triggering OOM killer. This \
+                 might indicate something has gone horribly wrong with cgroups, or a race \
+                 condition. Either way, you need to figure this out."
+            );
             return Ok(Verdict::MemoryLimitExceeded);
         }
         match wait_status {
@@ -398,12 +434,21 @@ impl SingleRun<'_> {
     }
 
     fn on_after_fork(process: &ProcessInfo) -> Result<()> {
+        log!(
+            "Initializing process {} after fork",
+            process.traced_process.get_pid()
+        );
         process.traced_process.init()?;
         Ok(())
     }
 
     fn on_after_execve(process: &mut ProcessInfo) -> Result<()> {
-        // Required to make clock_gettime work
+        log!(
+            "Initializing process {} after execve",
+            process.traced_process.get_pid()
+        );
+        // Required to make clock_gettime work, because it would otherwise rely on processor
+        // features we disabled -- and we can't emulate them when IP is in vDSO
         process.traced_process.disable_vdso()?;
         Ok(())
     }
@@ -422,7 +467,7 @@ impl SingleRun<'_> {
 
         use tracing::SyscallArgs;
         log!(
-            "Emulated syscall <pid {pid}> {}",
+            "Emulating syscall <pid {pid}> {}",
             (
                 syscall_info.nr,
                 syscall_info.args[0],
@@ -681,6 +726,7 @@ impl SingleRun<'_> {
 
             wait::WaitStatus::Exited(pid, _) | wait::WaitStatus::Signaled(pid, _, _) => {
                 if pid == self.main_pid {
+                    log!("Main process exitted");
                     return Ok(true);
                 }
             }
@@ -779,11 +825,20 @@ impl SingleRun<'_> {
     }
 
     fn handle_event(&mut self, wait_status: wait::WaitStatus) -> Result<bool> {
+        log!("Event {wait_status:?}");
+
         // ptrace often reports ESRCH if the process is killed before we notice that
         let res = self._handle_event(wait_status);
         if let Err(ref e) = res {
             // Not the nicest solution, certainly
             if let Some(errno::Errno::ESRCH) = e.root_cause().downcast_ref::<errno::Errno>() {
+                log!(
+                    warn,
+                    "Got ESRCH during event handling. This indicates either a race condition when \
+                     a process is killed by OOM killer or an external actor while sunwalker is \
+                     working on it, or a mishandling of PIDs. If this happens more than \
+                     occasionally, report this as a bug."
+                );
                 return Ok(false);
             }
         }

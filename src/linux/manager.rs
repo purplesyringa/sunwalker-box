@@ -6,7 +6,7 @@ use crate::{
 use anyhow::{Context, Result};
 use crossmist::Object;
 
-#[derive(Object)]
+#[derive(Debug, Object)]
 pub enum Command {
     RemountReadonly { path: String },
     Run { options: running::Options },
@@ -45,6 +45,8 @@ pub fn manager(
 }
 
 fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Option<String>> {
+    log!("Running command {command:?}");
+
     match command {
         Command::RemountReadonly { path } => {
             system::remount_readonly(&path)

@@ -254,7 +254,7 @@ pub fn reaper(
     }
 
     // Don't send the result to the parent
-    log!("Reaper is terminating");
+    log!("Terminating");
     std::process::exit(0)
 }
 

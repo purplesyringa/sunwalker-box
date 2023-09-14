@@ -223,6 +223,10 @@ impl TracedProcess {
         })
     }
 
+    pub fn get_pid(&self) -> Pid {
+        self.pid
+    }
+
     pub fn reload_mm(&mut self) -> Result<()> {
         self.mem = Self::open_mem(self.pid)?;
         Ok(())

@@ -388,6 +388,7 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
         if e == nix::errno::Errno::ENOENT {
             break;
         } else if e == nix::errno::Errno::EBUSY && times < 5 {
+            log!("Could not delete {dir_name} immediately, sleeping for {backoff:?}");
             std::thread::sleep(backoff);
             backoff *= 2;
             times += 1;
@@ -396,6 +397,7 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
         }
     }
 
+    log!("Deleted {dir_name} successfully");
     Ok(())
 }
 

@@ -177,6 +177,8 @@ fn update_committed_mount_points(state: &mut RootfsState, mounts: &[String]) {
 pub fn commit(state: &mut RootfsState) -> Result<()> {
     ensure!(!state.is_committed, "Cannot commit rootfs twice");
 
+    log!("Committing changes");
+
     let mounts = list_mounts()?;
     update_committed_mount_points(state, &mounts);
     state.is_committed = true;
@@ -235,6 +237,7 @@ fn save_space_mounts(state: &mut RootfsState, mounts: Vec<String>) -> Result<()>
         }
 
         let saved_path = format!("/saved/saved{i}");
+        log!("Saving mount {path} -> {saved_path}");
 
         let metadata = std::fs::metadata(&path)
             .with_context(|| format!("Failed to get metadata of {path}"))?;
@@ -260,6 +263,7 @@ fn save_space_mounts(state: &mut RootfsState, mounts: Vec<String>) -> Result<()>
 
 fn restore_space_mounts(state: &RootfsState) -> Result<()> {
     for (saved_path, path) in &state.space_mounts_restore_actions {
+        log!("Restoring mount {saved_path} -> {path}");
         system::bind_mount(saved_path, path)
             .with_context(|| format!("Failed to bind-mount {saved_path} to {path}"))?;
     }
@@ -322,6 +326,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
         current_mounts.push(path);
     }
     for path in paths_to_umount.into_iter().rev() {
+        log!("Unmounting {path}");
         system::umount(&path).with_context(|| format!("Failed to unmount {path}"))?;
     }
 
@@ -341,6 +346,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
     )
     .context("Failed to mount tmpfs on /staging")?;
 
+    log!("Mounting /space");
     if state.is_committed {
         std::fs::create_dir("/staging/upper").context("Failed to mkdir /staging/upper")?;
         std::fs::create_dir("/staging/work").context("Failed to mkdir /staging/work")?;
@@ -397,6 +403,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
         let entry = entry.context("Failed to readdir /newroot/dev/pts")?;
         if let Ok(file_name) = entry.file_name().into_string() {
             if file_name.parse::<u64>().is_ok() {
+                log!("Removing pty #{file_name}");
                 std::fs::remove_file(entry.path())
                     .with_context(|| format!("Failed to rm {:?}", entry.path()))?;
             }
