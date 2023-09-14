@@ -43,7 +43,7 @@ target/syscall_table.offsets: generate_string_tables.py
 
 
 test:
-	cd sandbox_tests && ./test.py $(ARCH)
+	cd sandbox_tests && ./test.py $(ARCH) $(TESTS)
 
 clean:
 	rm -r target sunwalker_box *-sunwalker_box kmodule/*/Module.symvers kmodule/*/modules.order kmodule/*/sunwalker.ko kmodule/*/sunwalker.mod* kmodule/*/sunwalker.o || true

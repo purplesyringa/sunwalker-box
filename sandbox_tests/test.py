@@ -432,9 +432,10 @@ class PyTest(SimpleTest):
 
 
 class Tester:
-    def __init__(self, f_makefile: io.TextIOBase, arch: str):
+    def __init__(self, f_makefile: io.TextIOBase, arch: str, test_whitelist: Optional[list[str]]=None):
         self.f_makefile = f_makefile
         self.arch = arch
+        self.test_whitelist = test_whitelist
         self.make_targets: list[str] = []
         self.tests: list[Test] = []
 
@@ -475,7 +476,10 @@ class Tester:
         crashes = 0
 
         for test in self.tests:
-            if test.arch is not None and self.arch not in test.arch:
+            if (
+                (test.arch is not None and self.arch not in test.arch)
+                or (self.test_whitelist and test.slug not in self.test_whitelist)
+            ):
                 skips += 1
                 print(f"     \x1b[93mSKIP\x1b[0m [{test.slug}]", flush=True)
                 continue
@@ -549,7 +553,12 @@ def main():
                    "--core", str(CORE)], check=True)
 
     try:
-        tester = Tester(f_makefile, sys.argv[1])
+        if len(sys.argv) >= 3:
+            test_whitelist = sys.argv[2].split(",")
+        else:
+            test_whitelist = None
+
+        tester = Tester(f_makefile, sys.argv[1], test_whitelist)
 
         # with Box() as box:
             # box.commit()
@@ -564,6 +573,7 @@ def main():
         # box.cat("/space/stdout")
 
         for test_file in sorted(os.listdir("tests")):
+            name = test_file.rpartition(".")[0]
             if test_file.endswith(".c"):
                 tester.register_c_test(os.path.join("tests", test_file))
             elif test_file.endswith(".py"):
