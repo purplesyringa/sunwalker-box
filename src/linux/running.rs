@@ -774,14 +774,7 @@ impl SingleRun<'_> {
                     .borrow_mut();
 
                 match event {
-                    libc::PTRACE_EVENT_SECCOMP => {
-                        self.on_seccomp(&mut process)?;
-                        return Ok(false);
-                    }
-                    _ => {}
-                }
-
-                match event {
+                    libc::PTRACE_EVENT_SECCOMP => self.on_seccomp(&mut process)?,
                     libc::PTRACE_EVENT_FORK
                     | libc::PTRACE_EVENT_VFORK
                     | libc::PTRACE_EVENT_CLONE => {
