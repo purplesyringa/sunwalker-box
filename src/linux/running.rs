@@ -344,16 +344,8 @@ impl SingleRun<'_> {
         }
         match wait_status {
             wait::WaitStatus::Exited(_, exit_code) => Ok(Verdict::ExitCode(exit_code)),
-            wait::WaitStatus::Signaled(_, signal, _) => {
-                if signal == signal::Signal::SIGPROF {
-                    Ok(Verdict::CPUTimeLimitExceeded)
-                } else {
-                    Ok(Verdict::Signaled(signal as i32))
-                }
-            }
-            _ => {
-                bail!("waitpid returned unexpected status: {wait_status:?}");
-            }
+            wait::WaitStatus::Signaled(_, signal, _) => Ok(Verdict::Signaled(signal as i32)),
+            _ => bail!("waitpid returned unexpected status: {wait_status:?}"),
         }
     }
 
@@ -861,6 +853,15 @@ impl SingleRun<'_> {
         Self::on_after_execve(main_process)?;
         main_process.traced_process.resume()?;
 
+        // If SIGPROF fires because of our actions, we capture Stopped(SIGPROF), continue the
+        // process with the signal, immediately recognize that the limit has been exceeded on the
+        // next iteration of the while loop and compute the verdict as CPUTimeLimitExceeded. This is
+        // all regardless of how the process reacts to SIGPROF.
+        //
+        // If SIGPROF fires because the process wants to use it for whatever reason, we deliver the
+        // signal and keep going.
+        //
+        // Either way, we're doing the right thing without handling SIGPROF in a special way.
         let mut wait_status = wait::WaitStatus::StillAlive;
         while !self.is_exceeding_limits() {
             wait_status = self.wait_for_event()?;
