@@ -15,6 +15,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
+use std::io;
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
@@ -82,6 +83,44 @@ struct SingleRun<'a> {
     sem_next_id: Cell<isize>,
     msg_next_id: Cell<isize>,
     shm_next_id: Cell<isize>,
+}
+
+enum EmulatedSyscall {
+    Result(usize),
+    Redirect([usize; 7]),
+}
+
+impl EmulatedSyscall {
+    fn result(result: impl tracing::AsUSize) -> Self {
+        Self::Result(result.as_usize())
+    }
+
+    fn result_or_errno(result: impl tracing::AsUSize) -> Self {
+        let mut result = result.as_usize();
+        if result == usize::MAX {
+            result = -errno::errno() as usize;
+        }
+        Self::result(result)
+    }
+
+    fn redirect<Args: tracing::SyscallArgs>(args: Args) -> Self
+    where
+        [(); Args::N]:,
+    {
+        let mut ext_args = [0; 7];
+        ext_args[..Args::N].copy_from_slice(&args.to_usize_slice());
+        Self::Redirect(ext_args)
+    }
+
+    fn redirect_with_errno<Args: tracing::SyscallArgs>(args: io::Result<Args>) -> Self
+    where
+        [(); Args::N]:,
+    {
+        match args {
+            Ok(args) => Self::redirect(args),
+            Err(err) => Self::result(-err.raw_os_error().unwrap_or(libc::EINVAL)),
+        }
+    }
 }
 
 impl Runner {
@@ -461,22 +500,26 @@ impl SingleRun<'_> {
             .context("Failed to get syscall info")?;
         let syscall_info = unsafe { syscall_info.u.seccomp };
 
-        use tracing::SyscallArgs;
-        log!(
-            "Emulating syscall <pid {}> {}",
-            process.traced_process.get_pid(),
-            (
-                syscall_info.nr,
-                syscall_info.args[0],
-                syscall_info.args[1],
-                syscall_info.args[2],
-                syscall_info.args[3],
-                syscall_info.args[4],
-                syscall_info.args[5],
-            )
-                .debug()
-        );
+        match self.emulate_syscall(process, syscall_info)? {
+            EmulatedSyscall::Result(result) => {
+                process.traced_process.set_syscall_result(result)?;
+                process.traced_process.set_syscall_no(-1)?; // skip syscall
+            }
+            EmulatedSyscall::Redirect(args) => {
+                process.traced_process.set_syscall(args)?;
+            }
+        }
 
+        process.state = ProcessState::Alive;
+        process.traced_process.resume()?;
+        Ok(())
+    }
+
+    fn emulate_syscall(
+        &self,
+        process: &mut ProcessInfo,
+        syscall_info: tracing::ptrace_syscall_info_seccomp,
+    ) -> Result<EmulatedSyscall> {
         let set_next_id = |name, cell: &Cell<isize>| -> Result<()> {
             if ipc::get_next_id(name)? == -1 {
                 let id = cell.get();
@@ -503,124 +546,92 @@ impl SingleRun<'_> {
             // - Process A executes the msgget() syscall, but msg_next_id = -1 at the moment
             libc::SYS_semget => {
                 set_next_id("sem", &self.sem_next_id)?;
-                return self.emulate_syscall_result_errno(process, unsafe {
+                Ok(EmulatedSyscall::result_or_errno(unsafe {
                     libc::semget(
                         syscall_info.args[0] as i32,
                         syscall_info.args[1] as i32,
                         syscall_info.args[2] as i32,
                     )
-                } as i64);
+                }))
             }
             libc::SYS_msgget => {
                 set_next_id("msg", &self.msg_next_id)?;
-                return self.emulate_syscall_result_errno(process, unsafe {
+                Ok(EmulatedSyscall::result_or_errno(unsafe {
                     libc::msgget(syscall_info.args[0] as i32, syscall_info.args[1] as i32)
-                } as i64);
+                }))
             }
             libc::SYS_shmget => {
                 set_next_id("shm", &self.shm_next_id)?;
-                return self.emulate_syscall_result_errno(process, unsafe {
+                Ok(EmulatedSyscall::result_or_errno(unsafe {
                     libc::shmget(
                         syscall_info.args[0] as i32,
                         syscall_info.args[1] as usize,
                         syscall_info.args[2] as i32,
                     )
-                } as i64);
+                }))
             }
             libc::SYS_memfd_create => {
-                return self.emulate_syscall_redirect(process, |process| {
-                    let mut name = process
-                        .traced_process
-                        .read_cstring(syscall_info.args[0] as usize, 249)?
-                        .into_bytes_with_nul();
+                Ok(EmulatedSyscall::redirect_with_errno(
+                    try {
+                        let mut name = process
+                            .traced_process
+                            .read_cstring(syscall_info.args[0] as usize, 249)?
+                            .into_bytes_with_nul();
 
-                    let mut open_flags = libc::O_RDWR | libc::O_CREAT;
-                    if syscall_info.args[1] & (libc::MFD_CLOEXEC as u64) != 0 {
-                        open_flags |= libc::O_CLOEXEC;
-                    }
-                    // TODO: sealing
-                    if syscall_info.args[1]
-                        & !(libc::MFD_CLOEXEC
-                            | libc::MFD_HUGETLB
-                            | (libc::MFD_HUGE_MASK << libc::MFD_HUGE_SHIFT))
-                            as u64
-                        != 0
-                    {
-                        Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
-                    }
+                        let mut open_flags = libc::O_RDWR | libc::O_CREAT;
+                        if syscall_info.args[1] & (libc::MFD_CLOEXEC as u64) != 0 {
+                            open_flags |= libc::O_CLOEXEC;
+                        }
+                        // TODO: sealing
+                        if syscall_info.args[1]
+                            & !(libc::MFD_CLOEXEC
+                                | libc::MFD_HUGETLB
+                                | (libc::MFD_HUGE_MASK << libc::MFD_HUGE_SHIFT))
+                                as u64
+                            != 0
+                        {
+                            Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+                        }
 
-                    // We don't care about .. in this context because open(2) is executed in the
-                    // context of the unprivileged process, and no sane person is going to use ..
-                    // in the name for benign reasons.
-                    let mut file_name =
-                        format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
-                    file_name.append(&mut name);
+                        // We don't care about .. in this context because open(2) is executed in the
+                        // context of the unprivileged process, and no sane person is going to use ..
+                        // in the name for benign reasons.
+                        let mut file_name =
+                            format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
+                        file_name.append(&mut name);
 
-                    // Account for red zone
-                    let file_name_addr =
-                        (process.traced_process.get_stack_pointer()? - 128) - file_name.len();
+                        // Account for red zone
+                        let file_name_addr =
+                            (process.traced_process.get_stack_pointer()? - 128) - file_name.len();
 
-                    process
-                        .traced_process
-                        .write_memory(file_name_addr, &file_name)?;
+                        process
+                            .traced_process
+                            .write_memory(file_name_addr, &file_name)?;
 
-                    Ok((
-                        libc::SYS_openat,
-                        libc::AT_FDCWD,
-                        file_name_addr,
-                        open_flags,
-                        0o700,
-                    ))
-                });
+                        (
+                            libc::SYS_openat,
+                            libc::AT_FDCWD,
+                            file_name_addr,
+                            open_flags,
+                            0o700,
+                        )
+                    },
+                ))
             }
-            _ => {}
-        }
-
-        process.traced_process.resume()?;
-        Ok(())
-    }
-
-    fn emulate_syscall_result_errno(
-        &self,
-        process: &mut ProcessInfo,
-        mut result: i64,
-    ) -> Result<()> {
-        if result == -1 {
-            result = -errno::errno() as i64;
-        }
-        self.emulate_syscall_result(process, result)
-    }
-
-    fn emulate_syscall_result(&self, process: &mut ProcessInfo, result: i64) -> Result<()> {
-        process.traced_process.set_syscall_result(result as usize)?;
-        process.traced_process.set_syscall_no(-1)?; // skip syscall
-        process.state = ProcessState::Alive;
-        process.traced_process.resume()?;
-        Ok(())
-    }
-
-    fn emulate_syscall_redirect<Args: tracing::SyscallArgs>(
-        &self,
-        process: &mut ProcessInfo,
-        redirect: impl FnOnce(&mut ProcessInfo) -> std::io::Result<Args>,
-    ) -> Result<()>
-    where
-        [(); Args::N]:,
-    {
-        match redirect(process) {
-            Ok(args) => {
-                process.traced_process.set_syscall(args)?;
-            }
-            Err(err) => {
-                process.traced_process.set_syscall_no(-1)?; // skip syscall
-                process
-                    .traced_process
-                    .set_syscall_result(-err.raw_os_error().unwrap_or(libc::EINVAL) as usize)?;
+            _ => {
+                log!(
+                    impossible,
+                    "An unexpected syscall was encountered. It was redirected to us via seccomp, \
+                     which means that either we fucked up the politics, or the child process has \
+                     set up its own seccomp rules with trace semantics. In the latter case, the \
+                     program is utterly broken: if you set up seccomp and then trigger a syscall \
+                     requiring tracing without checking that ptrace has returned an expected \
+                     result, you're a basically asking for -ENOSYS. In the former case, well -- \
+                     you need to report that."
+                );
+                Ok(EmulatedSyscall::result(-libc::ENOSYS))
             }
         }
-        process.state = ProcessState::Alive;
-        process.traced_process.resume()?;
-        Ok(())
     }
 
     #[cfg(target_arch = "x86_64")]
