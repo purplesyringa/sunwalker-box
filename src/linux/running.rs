@@ -1,5 +1,5 @@
 use crate::{
-    linux::{cgroups, ipc, rootfs, system, timens, tracing, userns},
+    linux::{cgroups, ipc, rootfs, string_table, system, timens, tracing, userns},
     log,
 };
 use anyhow::{bail, ensure, Context, Result};
@@ -494,18 +494,45 @@ impl SingleRun<'_> {
     }
 
     fn on_seccomp(&self, process: &mut ProcessInfo) -> Result<()> {
+        use tracing::SyscallArgs;
+
+        let pid = process.traced_process.get_pid();
+
         let syscall_info = process
             .traced_process
             .get_syscall_info()
             .context("Failed to get syscall info")?;
         let syscall_info = unsafe { syscall_info.u.seccomp };
 
+        let syscall_text = (
+            syscall_info.nr,
+            syscall_info.args[0],
+            syscall_info.args[1],
+            syscall_info.args[2],
+            syscall_info.args[3],
+            syscall_info.args[4],
+            syscall_info.args[5],
+        )
+            .debug();
+
         match self.emulate_syscall(process, syscall_info)? {
             EmulatedSyscall::Result(result) => {
+                if result as isize >= 0 {
+                    log!("Emulate <pid {pid}> {syscall_text} = {result}");
+                } else {
+                    log!(
+                        "Emulate <pid {pid}> {syscall_text} = -{}",
+                        string_table::errno_to_name(-(result as i32))
+                    );
+                }
                 process.traced_process.set_syscall_result(result)?;
                 process.traced_process.set_syscall_no(-1)?; // skip syscall
             }
             EmulatedSyscall::Redirect(args) => {
+                log!(
+                    "Emulate <pid {pid}> {syscall_text} -> {} (redirect)",
+                    args.debug()
+                );
                 process.traced_process.set_syscall(args)?;
             }
         }

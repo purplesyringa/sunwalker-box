@@ -37,3 +37,4 @@ macro_rules! table {
 }
 
 table!(syscall_no_to_name, "syscall_table", "{}", "syscall_0x{:x}");
+table!(errno_to_name, "errno_table", "E{}", "E?? ({})");
