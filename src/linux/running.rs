@@ -400,7 +400,7 @@ impl SingleRun<'_> {
             if !Self::is_exceeding(self.options.memory_limit, self.results.memory) {
                 log!(
                     impossible,
-                    "The user process has triggering OOM killer without exceeding memory limits. \
+                    "The user process has triggered OOM killer without exceeding memory limits. \
                      This is either indicates too high memory pressure, making the verdict \
                      horribly wrong by blaming the participant instead of the invoker, or means \
                      that the user attempted to allocate too much in one shot. Whether the latter
