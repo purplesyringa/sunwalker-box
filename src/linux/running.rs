@@ -991,7 +991,8 @@ fn executor_worker(
 
         // We want to disable rdtsc. Turns out, ld.so always calls rdtsc when it starts and keeps
         // using it as if it's always available. Bummer. This means we'll have to simulate rdtsc.
-        timens::disable_rdtsc().context("Failed to disable rdtsc")?;
+        timens::disable_native_instructions()
+            .context("Failed to disable native timens instructions")?;
 
         std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
 

@@ -1,3 +1,4 @@
+use crate::log;
 use anyhow::{Context, Result};
 use nix::{libc, libc::c_int, time::ClockId};
 use std::fs::File;
@@ -21,6 +22,9 @@ impl TimeNsController {
     }
 
     pub fn reset_system_time_for_children(&mut self) -> Result<()> {
+        log!("Rewinding clocks");
+
+        // timens_offsets can only be set if no process has entered the timens before
         if unsafe { libc::unshare(CLONE_NEWTIME) } != 0 {
             return Err(std::io::Error::last_os_error()).context("unshare() failed");
         }
@@ -70,7 +74,7 @@ impl TimeNsController {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub fn disable_rdtsc() -> Result<()> {
+pub fn disable_native_instructions() -> Result<()> {
     // TSC is (who would guess?) monotonic
     if unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) } != 0 {
         Err(std::io::Error::last_os_error()).context("prctl(PR_SET_TSC) failed")?;
@@ -79,7 +83,7 @@ pub fn disable_rdtsc() -> Result<()> {
 }
 
 #[cfg(target_arch = "aarch64")]
-pub fn disable_rdtsc() -> Result<()> {
+pub fn disable_native_instructions() -> Result<()> {
     Ok(())
 }
 
