@@ -518,10 +518,10 @@ impl SingleRun<'_> {
         match self.emulate_syscall(process, syscall_info)? {
             EmulatedSyscall::Result(result) => {
                 if result as isize >= 0 {
-                    log!("Emulate <pid {pid}> {syscall_text} = {result}");
+                    log!("Emulating <pid {pid}> {syscall_text} = {result}");
                 } else {
                     log!(
-                        "Emulate <pid {pid}> {syscall_text} = -{}",
+                        "Emulating <pid {pid}> {syscall_text} = -{}",
                         string_table::errno_to_name(-(result as i32))
                     );
                 }
@@ -530,7 +530,7 @@ impl SingleRun<'_> {
             }
             EmulatedSyscall::Redirect(args) => {
                 log!(
-                    "Emulate <pid {pid}> {syscall_text} -> {} (redirect)",
+                    "Emulating <pid {pid}> {syscall_text} -> {} (redirect)",
                     args.debug()
                 );
                 process.traced_process.set_syscall(args)?;
@@ -678,6 +678,7 @@ impl SingleRun<'_> {
             }
         }
 
+        log!("Delivering SIGSEGV");
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;
@@ -687,6 +688,7 @@ impl SingleRun<'_> {
     #[cfg(target_arch = "x86_64")]
     fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
         if !self.emulate_insn(process)? {
+            log!("Delivering SIGILL");
             process
                 .traced_process
                 .resume_signal(signal::Signal::SIGILL)?;
@@ -699,11 +701,16 @@ impl SingleRun<'_> {
     fn emulate_insn(&self, process: &mut ProcessInfo) -> Result<bool> {
         let mut regs = process.traced_process.get_registers()?;
         let Ok(word) = process.traced_process.read_word(regs.rip as usize) else {
+            log!(
+                "Not emulating instruction at {:x} -- failed to read word",
+                regs.rip
+            );
             return Ok(false);
         };
 
         if word & 0xffff == 0x310f {
             // rdtsc = 0f 31
+            log!("Emulating rdtsc");
             regs.rip += 2;
             let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
             tsc += self.tsc_shift;
@@ -714,6 +721,7 @@ impl SingleRun<'_> {
             Ok(true)
         } else if word & 0xffffff == 0xf9010f {
             // rdtscp = 0f 01 f9
+            log!("Emulating rdtscp");
             regs.rip += 3;
             let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
             tsc += self.tsc_shift;
@@ -730,6 +738,7 @@ impl SingleRun<'_> {
 
     #[cfg(target_arch = "aarch64")]
     fn handle_sigsegv(&self, process: &mut ProcessInfo) -> Result<()> {
+        log!("Delivering SIGSEGV");
         process
             .traced_process
             .resume_signal(signal::Signal::SIGSEGV)?;
@@ -738,6 +747,7 @@ impl SingleRun<'_> {
 
     #[cfg(target_arch = "aarch64")]
     fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
+        log!("Delivering SIGILL");
         process
             .traced_process
             .resume_signal(signal::Signal::SIGILL)?;
@@ -873,6 +883,8 @@ impl SingleRun<'_> {
     }
 
     fn cleanup(&mut self) -> Result<()> {
+        log!("Cleaning up");
+
         self.box_cgroup
             .as_mut()
             .unwrap()
