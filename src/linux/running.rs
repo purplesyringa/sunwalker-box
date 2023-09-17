@@ -941,21 +941,23 @@ impl SingleRun<'_> {
         // signal and keep going.
         //
         // Either way, we're doing the right thing without handling SIGPROF in a special way.
-        let mut wait_status = wait::WaitStatus::StillAlive;
-        while !self.is_exceeding_limits() {
-            wait_status = self.wait_for_event()?;
-            if self.handle_event(wait_status)? {
-                break;
+        let result = try {
+            let mut wait_status = wait::WaitStatus::StillAlive;
+            while !self.is_exceeding_limits() {
+                wait_status = self.wait_for_event()?;
+                if self.handle_event(wait_status)? {
+                    break;
+                }
+                self.update_metrics()?;
             }
-            self.update_metrics()?;
-        }
 
-        self.results.memory = self.box_cgroup.as_mut().unwrap().get_memory_peak()?;
-        self.results.verdict = self.compute_verdict(wait_status)?;
+            self.results.memory = self.box_cgroup.as_mut().unwrap().get_memory_peak()?;
+            self.results.verdict = self.compute_verdict(wait_status)?;
+        };
 
         self.cleanup()?;
 
-        Ok(())
+        result
     }
 }
 
