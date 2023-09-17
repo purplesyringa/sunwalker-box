@@ -1,5 +1,4 @@
 use crate::{
-    enable_diagnostics,
     linux::{cgroups, running, system},
     log,
 };
@@ -16,11 +15,9 @@ pub enum Command {
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
     mut channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
-    diagnostics_enabled: bool,
+    log_level: log::LogLevel,
 ) {
-    if diagnostics_enabled {
-        enable_diagnostics!("manager");
-    }
+    log::enable_diagnostics("manager", log_level);
 
     log!("Manager started");
 

@@ -1,5 +1,5 @@
 use crate::{
-    enable_diagnostics, entry,
+    entry,
     linux::{cgroups, ipc, manager, procs},
     log,
 };
@@ -35,11 +35,9 @@ pub fn reaper(
         std::result::Result<Option<String>, String>,
         manager::Command,
     >,
-    diagnostics_enabled: bool,
+    log_level: log::LogLevel,
 ) -> ! {
-    if diagnostics_enabled {
-        enable_diagnostics!("reaper");
-    }
+    log::enable_diagnostics("reaper", log_level);
 
     log!("Reaper started");
 
@@ -173,7 +171,7 @@ pub fn reaper(
                 .try_clone()
                 .expect("Failed to clone box cgroup reference"),
             manager_channel,
-            diagnostics_enabled,
+            log_level,
         )
         .expect("Failed to start child");
     // We purposefully don't join manager here, as it may die unexpectedly

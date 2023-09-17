@@ -124,7 +124,7 @@ impl Controller {
                 cgroup,
                 reaper_theirs,
                 manager_theirs,
-                log::diagnostics_enabled(),
+                log::get_diagnostics_config().level,
             )
             .context("Failed to start reaper")?;
         thread_tx
