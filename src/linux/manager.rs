@@ -1,8 +1,11 @@
-use crate::linux::{cgroups, running, system};
+use crate::{
+    linux::{cgroups, running, system},
+    log,
+};
 use anyhow::{Context, Result};
 use crossmist::Object;
 
-#[derive(Object)]
+#[derive(Debug, Object)]
 pub enum Command {
     RemountReadonly { path: String },
     Run { options: running::Options },
@@ -12,9 +15,15 @@ pub enum Command {
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
     mut channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    log_level: log::LogLevel,
 ) {
+    log::enable_diagnostics("manager", log_level);
+
+    log!("Manager started");
+
     let mut runner = running::Runner::new(proc_cgroup).expect("Failed to create runner");
 
+    log!("Ready to receive commands");
     channel
         .send(&Ok(None))
         .expect("Failed to notify parent about readiness");
@@ -33,6 +42,8 @@ pub fn manager(
 }
 
 fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Option<String>> {
+    log!("Running command {command:?}");
+
     match command {
         Command::RemountReadonly { path } => {
             system::remount_readonly(&path)

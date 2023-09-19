@@ -1,6 +1,8 @@
 use crate::{
     entry,
     linux::{cgroups, controller, ids, kmodule, manager, rootfs, running, sandbox},
+    log,
+    log::LogLevel,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use nix::libc::mode_t;
@@ -9,6 +11,19 @@ use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::time::Duration;
 
 pub fn main(cli_args: entry::CLIArgs) {
+    let log_level = cli_args
+        .log_level
+        .or_else(|| std::env::var("SUNWALKER_BOX_LOG").ok());
+    let log_level = log_level.as_deref().unwrap_or("none");
+    let log_level = match log_level {
+        "notice" => LogLevel::Notice,
+        "warn" => LogLevel::Warn,
+        "impossible" => LogLevel::Impossible,
+        "none" => LogLevel::None,
+        _ => panic!("Unknown log level {log_level}"),
+    };
+    log::enable_diagnostics("main", log_level);
+
     sandbox::sanity_checks().expect("Sanity checks failed");
 
     match cli_args.command {
@@ -54,6 +69,7 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
         }
     }
 
+    log!("Terminating");
     Ok(())
 }
 

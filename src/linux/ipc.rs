@@ -1,4 +1,4 @@
-use crate::linux::system;
+use crate::{linux::system, log};
 use anyhow::{Context, Result};
 use nix::{
     libc,
@@ -59,6 +59,7 @@ pub fn reset() -> Result<()> {
         std::fs::read_dir("/newroot/dev/mqueue").context("Failed to readdir /newroot/dev/mqueue")?
     {
         let entry = entry.context("Failed to readdir /newroot/dev/mqueue")?;
+        log!("Removing mqueue {:?}", entry.file_name());
         std::fs::remove_file(entry.path())
             .with_context(|| format!("Failed to rm {:?}", entry.path()))?;
     }
@@ -103,6 +104,7 @@ fn reset_sysv_set(name: &str, long_name: &str, remover: fn(c_int) -> c_int) -> R
     }
 
     for id in ids {
+        log!("Removing {long_name} #{id}");
         if remover(id) == -1 {
             return Err(std::io::Error::last_os_error())
                 .with_context(|| format!("Failed to delete System V {long_name} #{id}"));

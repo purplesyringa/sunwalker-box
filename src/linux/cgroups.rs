@@ -1,4 +1,7 @@
-use crate::linux::{ids, openat::OpenAtDir};
+use crate::{
+    linux::{ids, openat::OpenAtDir},
+    log,
+};
 use anyhow::{ensure, Context, Result};
 use crossmist::Object;
 use nix::libc::pid_t;
@@ -26,6 +29,8 @@ pub struct BoxCgroup {
 
 impl Cgroup {
     pub fn new(core: u64) -> Result<Self> {
+        log!("Creating cgroup");
+
         // Enabling controllers globally is necessary on some systems, e.g. WSL
         std::fs::write(
             "/sys/fs/cgroup/cgroup.subtree_control",
@@ -86,6 +91,8 @@ impl Cgroup {
         let id: String = (0..10)
             .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
             .collect();
+
+        log!("Creating per-sandbox cgroup #{id}");
 
         self.core_cgroup_fd
             .create_dir(format!("proc-{id}"), 0o700)
@@ -381,6 +388,7 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
         if e == nix::errno::Errno::ENOENT {
             break;
         } else if e == nix::errno::Errno::EBUSY && times < 5 {
+            log!("Could not delete {dir_name} immediately, sleeping for {backoff:?}");
             std::thread::sleep(backoff);
             backoff *= 2;
             times += 1;
@@ -389,6 +397,7 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
         }
     }
 
+    log!("Deleted {dir_name} successfully");
     Ok(())
 }
 

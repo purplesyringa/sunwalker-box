@@ -113,15 +113,15 @@ pub trait SyscallArgs {
     }
 }
 
-trait AsUSize: Copy {
-    fn as_(self) -> usize;
+pub trait AsUSize: Copy {
+    fn as_usize(self) -> usize;
 }
 
 macro_rules! impl_for {
     () => {};
     ($head:tt $($tail:tt)*) => {
         impl AsUSize for $head {
-            fn as_(self) -> usize {
+            fn as_usize(self) -> usize {
                 self as usize
             }
         }
@@ -132,13 +132,13 @@ macro_rules! impl_for {
 impl_for!(u8 u16 u32 u64 usize i8 i16 i32 i64 isize char bool);
 
 impl<T> AsUSize for *const T {
-    fn as_(self) -> usize {
+    fn as_usize(self) -> usize {
         self as usize
     }
 }
 
 impl<T> AsUSize for *mut T {
-    fn as_(self) -> usize {
+    fn as_usize(self) -> usize {
         self as usize
     }
 }
@@ -146,25 +146,30 @@ impl<T> AsUSize for *mut T {
 impl<T1: AsUSize> SyscallArgs for (T1,) {
     const N: usize = 1;
     fn to_usize_slice(&self) -> [usize; Self::N] {
-        [self.0.as_()]
+        [self.0.as_usize()]
     }
 }
 impl<T1: AsUSize, T2: AsUSize> SyscallArgs for (T1, T2) {
     const N: usize = 2;
     fn to_usize_slice(&self) -> [usize; Self::N] {
-        [self.0.as_(), self.1.as_()]
+        [self.0.as_usize(), self.1.as_usize()]
     }
 }
 impl<T1: AsUSize, T2: AsUSize, T3: AsUSize> SyscallArgs for (T1, T2, T3) {
     const N: usize = 3;
     fn to_usize_slice(&self) -> [usize; Self::N] {
-        [self.0.as_(), self.1.as_(), self.2.as_()]
+        [self.0.as_usize(), self.1.as_usize(), self.2.as_usize()]
     }
 }
 impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize> SyscallArgs for (T1, T2, T3, T4) {
     const N: usize = 4;
     fn to_usize_slice(&self) -> [usize; Self::N] {
-        [self.0.as_(), self.1.as_(), self.2.as_(), self.3.as_()]
+        [
+            self.0.as_usize(),
+            self.1.as_usize(),
+            self.2.as_usize(),
+            self.3.as_usize(),
+        ]
     }
 }
 impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize> SyscallArgs
@@ -173,11 +178,11 @@ impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize> SyscallArg
     const N: usize = 5;
     fn to_usize_slice(&self) -> [usize; Self::N] {
         [
-            self.0.as_(),
-            self.1.as_(),
-            self.2.as_(),
-            self.3.as_(),
-            self.4.as_(),
+            self.0.as_usize(),
+            self.1.as_usize(),
+            self.2.as_usize(),
+            self.3.as_usize(),
+            self.4.as_usize(),
         ]
     }
 }
@@ -187,12 +192,12 @@ impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize, T6: AsUSiz
     const N: usize = 6;
     fn to_usize_slice(&self) -> [usize; Self::N] {
         [
-            self.0.as_(),
-            self.1.as_(),
-            self.2.as_(),
-            self.3.as_(),
-            self.4.as_(),
-            self.5.as_(),
+            self.0.as_usize(),
+            self.1.as_usize(),
+            self.2.as_usize(),
+            self.3.as_usize(),
+            self.4.as_usize(),
+            self.5.as_usize(),
         ]
     }
 }
@@ -202,14 +207,20 @@ impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize, T6: AsUSiz
     const N: usize = 7;
     fn to_usize_slice(&self) -> [usize; Self::N] {
         [
-            self.0.as_(),
-            self.1.as_(),
-            self.2.as_(),
-            self.3.as_(),
-            self.4.as_(),
-            self.5.as_(),
-            self.6.as_(),
+            self.0.as_usize(),
+            self.1.as_usize(),
+            self.2.as_usize(),
+            self.3.as_usize(),
+            self.4.as_usize(),
+            self.5.as_usize(),
+            self.6.as_usize(),
         ]
+    }
+}
+impl SyscallArgs for [usize; 7] {
+    const N: usize = 7;
+    fn to_usize_slice(&self) -> [usize; Self::N] {
+        *self
     }
 }
 
@@ -221,6 +232,10 @@ impl TracedProcess {
             cached_registers: None,
             registers_edited: false,
         })
+    }
+
+    pub fn get_pid(&self) -> Pid {
+        self.pid
     }
 
     pub fn reload_mm(&mut self) -> Result<()> {

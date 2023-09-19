@@ -1,4 +1,4 @@
-use crate::linux::system;
+use crate::{linux::system, log};
 use anyhow::{Context, Result};
 use nix::{libc, libc::CLONE_NEWPID};
 use std::path::PathBuf;
@@ -12,6 +12,8 @@ pub fn unshare_pidns() -> std::io::Result<()> {
 
 pub fn mount_procfs(proc_path: &str) -> Result<()> {
     system::mount("none", proc_path, "proc", 0, None)?;
+
+    log!("Hiding dangerous files under /proc");
 
     // Linux announces way too much information under /proc. Hide everything possibly dangerous.
     for path in [
@@ -107,6 +109,7 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
         if let Err(ref e) = metadata {
             if let std::io::ErrorKind::NotFound = e.kind() {
                 // If a file does not exist, there's nothing to hide
+                log!("Skipping /proc/{path} because it's missing");
                 continue;
             }
         }

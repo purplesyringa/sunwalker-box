@@ -89,5 +89,9 @@ def save_table_from_defines(table_name: str, file_name: str, regex: str):
 def save_syscall_table():
     save_table_from_defines("syscall_table", "sys/syscall.h", r"^#define __NR_(.*) (\d+)$")
 
+def save_errno_table():
+    save_table_from_defines("errno_table", "errno.h", r"^#define E(.*) (\d+)$")
+
 
 save_syscall_table()
+save_errno_table()

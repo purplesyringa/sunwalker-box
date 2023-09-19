@@ -31,3 +31,6 @@ mod linux {
     mod tracing;
     mod userns;
 }
+
+#[macro_use]
+mod log;
