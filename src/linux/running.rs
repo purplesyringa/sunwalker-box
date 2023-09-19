@@ -645,6 +645,63 @@ impl SingleRun<'_> {
                     },
                 ))
             }
+            libc::SYS_sysinfo => {
+                // We can't use std::mem::zeroed because we need the guarantee that padding bytes
+                // are zeroed (or we'll actually leak sunwalker's memory)
+                let mut user_sysinfo: libc::sysinfo =
+                    unsafe { std::mem::transmute([0u8; std::mem::size_of::<libc::sysinfo>()]) };
+
+                let mut our_sysinfo: libc::sysinfo = unsafe { std::mem::zeroed() };
+                if unsafe { libc::sysinfo(&mut our_sysinfo as *mut _) } == -1 {
+                    Err(std::io::Error::last_os_error()).context("Failed to get sysinfo")?;
+                }
+
+                let mem = self
+                    .box_cgroup
+                    .as_ref()
+                    .unwrap()
+                    .get_memory_stats()
+                    .context("Failed to get memory stats")?;
+
+                user_sysinfo.uptime =
+                    our_sysinfo.uptime - self.runner.timens_controller.get_uptime_shift();
+                user_sysinfo.loads = [0; 3]; // there's no practical way to replicate LA
+                if let Some(limit) = self.options.memory_limit {
+                    user_sysinfo.totalram = limit as u64;
+                } else {
+                    user_sysinfo.totalram = our_sysinfo.totalram * our_sysinfo.mem_unit as u64;
+                }
+                user_sysinfo.freeram =
+                    user_sysinfo.totalram - (mem.anon + mem.file + mem.kernel) as u64;
+                user_sysinfo.sharedram = mem.shmem as u64;
+                user_sysinfo.bufferram = mem.file as u64;
+                user_sysinfo.totalswap = 0;
+                user_sysinfo.freeswap = 0;
+                user_sysinfo.procs = self
+                    .box_cgroup
+                    .as_ref()
+                    .unwrap()
+                    .get_current_processes()
+                    .context("Failed to get count of runnning processes")?
+                    as u16;
+                user_sysinfo.totalhigh = 0;
+                user_sysinfo.freehigh = 0;
+                user_sysinfo.mem_unit = 1;
+
+                if process
+                    .traced_process
+                    .write_memory(syscall_info.args[0] as usize, unsafe {
+                        // We have to force the size to 112 bytes because musl's sysinfo is much
+                        // larger, and we don't want to override user's data
+                        &std::mem::transmute_copy::<libc::sysinfo, [u8; 112]>(&user_sysinfo)
+                    })
+                    .is_ok()
+                {
+                    Ok(EmulatedSyscall::result(0))
+                } else {
+                    Ok(EmulatedSyscall::result(-libc::EFAULT))
+                }
+            }
             _ => {
                 log!(
                     impossible,

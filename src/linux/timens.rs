@@ -1,6 +1,6 @@
 use crate::log;
 use anyhow::{Context, Result};
-use nix::{libc, libc::c_int, time::ClockId};
+use nix::{libc, libc::c_int, sys::sysinfo, time::ClockId};
 use std::fs::File;
 use std::io::{Seek, Write};
 
@@ -9,6 +9,7 @@ const CLONE_NEWTIME: c_int = 0x80;
 pub struct TimeNsController {
     timens_offsets: File,
     arch_dependent: TimeNsControllerArchDependent,
+    uptime_shift: u64,
 }
 
 impl TimeNsController {
@@ -18,11 +19,21 @@ impl TimeNsController {
         Ok(Self {
             timens_offsets,
             arch_dependent: TimeNsControllerArchDependent::new()?,
+            uptime_shift: 0,
         })
+    }
+
+    pub fn get_uptime_shift(&self) -> u64 {
+        self.uptime_shift
     }
 
     pub fn reset_system_time_for_children(&mut self) -> Result<()> {
         log!("Rewinding clocks");
+
+        self.uptime_shift = sysinfo::sysinfo()
+            .context("Failed to get sysinfo")?
+            .uptime()
+            .as_secs();
 
         // timens_offsets can only be set if no process has entered the timens before
         if unsafe { libc::unshare(CLONE_NEWTIME) } != 0 {
