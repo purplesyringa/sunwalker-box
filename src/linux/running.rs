@@ -7,7 +7,7 @@ use crossmist::Object;
 use nix::{
     errno, libc,
     libc::pid_t,
-    sys::{epoll, ptrace, signal, signalfd, wait},
+    sys::{epoll, ptrace, resource, signal, signalfd, time, wait},
     unistd,
     unistd::Pid,
 };
@@ -1028,21 +1028,35 @@ fn executor_worker(
             }
         }
 
+        ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
+
         if let Some(cpu_time_limit) = cpu_time_limit {
             // An additional optimization for finer handling of cpu time limit. An ITIMER_PROF timer
             // can emit a signal when the given limit is exceeded and is not reset upon execve. This
             // only applies to a single process, not a cgroup, and can be overwritten by the user
             // program, but this feature is not mission-critical. It merely saves us a few precious
             // milliseconds due to the (somewhat artificially deliberate) inefficiency of polling.
+            //
+            // We set itimer after adding the process to the cgroup so that when SIGPROF fires, it
+            // is guaranteed that the cgroup limit has indeed been exceeded.
+
+            // rusage is preserved across execve, so we have to account for the CPU time we have
+            // already spent
+            let rusage = resource::getrusage(resource::UsageWho::RUSAGE_SELF)
+                .context("Failed to getrusage")?;
+            let delay = rusage.user_time()
+                + rusage.system_time()
+                + time::TimeVal::new(
+                    cpu_time_limit.as_secs() as i64,
+                    cpu_time_limit.subsec_micros() as i64,
+                );
+
             let timer = libc::itimerval {
                 it_interval: libc::timeval {
                     tv_sec: 0,
                     tv_usec: 0,
                 },
-                it_value: libc::timeval {
-                    tv_sec: cpu_time_limit.as_secs() as i64,
-                    tv_usec: cpu_time_limit.subsec_micros() as i64,
-                },
+                it_value: delay.as_ref().clone(),
             };
             if unsafe {
                 libc::syscall(
@@ -1056,8 +1070,6 @@ fn executor_worker(
                 Err(std::io::Error::last_os_error()).context("Failed to set interval timer")?;
             }
         }
-
-        ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
 
         // We don't need to reset signals because we didn't configure them inside executor_worker()
 
