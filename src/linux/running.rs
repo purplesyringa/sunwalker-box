@@ -1042,14 +1042,15 @@ fn executor_worker(
     exec_wrapper: File,
 ) {
     let result: Result<()> = try {
-        tracing::apply_seccomp_filter().context("Failed to apply seccomp filter")?;
-
-        userns::drop_privileges().context("Failed to drop privileges")?;
-
         // We want to disable rdtsc. Turns out, ld.so always calls rdtsc when it starts and keeps
         // using it as if it's always available. Bummer. This means we'll have to simulate rdtsc.
         timens::disable_native_instructions()
             .context("Failed to disable native timens instructions")?;
+
+        // Only apply seccomp filter after disabling the possibility to turn rdtsc back on
+        tracing::apply_seccomp_filter().context("Failed to apply seccomp filter")?;
+
+        userns::drop_privileges().context("Failed to drop privileges")?;
 
         std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
 

@@ -5,6 +5,7 @@ arch:
 */
 
 #include <stdio.h>
+#include <sys/prctl.h>
 #include <time.h>
 #include <x86intrin.h>
 
@@ -45,6 +46,27 @@ int main() {
 
   unsigned aux;
   TEST(__rdtscp(&aux));
+
+  // Check that PR_SET_TSC does not work
+  _mm_lfence();
+  unsigned long long start = __rdtsc();
+  _mm_lfence();
+  busy_loop(100000);
+  _mm_lfence();
+  unsigned long long mid = __rdtsc();
+  _mm_lfence();
+  if (prctl(PR_SET_TSC, PR_TSC_ENABLE) == -1) {
+    perror("prctl");
+    return 1;
+  }
+  _mm_lfence();
+  unsigned long long end = __rdtsc();
+  _mm_lfence();
+  fprintf(stderr, "%llu %llu %llu\n", start, mid, end);
+  if (end < mid || end - mid > (mid - start) * 2) {
+    fprintf(stderr, "Time jumped too much\n");
+    return 1;
+  }
 
   return 0;
 }
