@@ -25,4 +25,4 @@ kill:
 return KILL
 
 enosys:
-return ERRNO(ENOSYS)
+return ERRNO(38)  # ENOSYS
