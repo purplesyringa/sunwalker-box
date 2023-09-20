@@ -8,13 +8,14 @@ use nix::{
     sys::{ptrace, signal, wait},
     unistd::Pid,
 };
+use std::collections::HashMap;
 use std::ffi::CString;
 use std::fmt::Write;
 use std::fs::File;
 use std::io;
 use std::io::{BufRead, BufReader};
 use std::ops::{Deref, DerefMut};
-use std::os::unix::fs::FileExt;
+use std::os::{fd::RawFd, unix::fs::FileExt};
 
 pub struct TracedProcess {
     pid: Pid,
@@ -33,6 +34,8 @@ pub struct AuxiliaryEntry {
 const AT_SYSINFO_EHDR: u64 = 33; // x86-64
 const SECCOMP_SET_MODE_FILTER: c_uint = 1;
 const PTRACE_GET_SYSCALL_INFO: i32 = 0x420e;
+const PTRACE_GET_RSEQ_CONFIGURATION: i32 = 0x420f;
+const SIGEV_THREAD_ID: i32 = 4;
 
 #[cfg(target_arch = "aarch64")]
 const NT_PRSTATUS: i32 = 1;
@@ -79,6 +82,15 @@ pub union ptrace_syscall_info_data {
     pub entry: ptrace_syscall_info_entry,
     pub exit: ptrace_syscall_info_exit,
     pub seccomp: ptrace_syscall_info_seccomp,
+}
+
+#[repr(C)]
+pub struct ptrace_rseq_configuration {
+    pub rseq_abi_pointer: u64,
+    pub rseq_abi_size: u32,
+    pub signature: u32,
+    pub flags: u32,
+    pub pad: u32,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -287,6 +299,30 @@ pub struct MemoryMap {
     // > deleted, the string " (deleted)" is appended to the
     // > pathname.  Note that this is ambiguous too.
     pub desc: String,
+}
+
+#[derive(Debug)]
+pub struct Stat {
+    // We might add more fields in the future -- this is just the subset we need for now
+    pub start_code: usize,
+    pub end_code: usize,
+    pub start_data: usize,
+    pub end_data: usize,
+    pub start_stack: usize,
+    pub start_brk: usize,
+    pub arg_start: usize,
+    pub arg_end: usize,
+    pub env_start: usize,
+    pub env_end: usize,
+}
+
+#[derive(Debug)]
+pub struct Timer {
+    pub id: i32,
+    pub signal: i32,
+    pub sigev_value: usize,
+    pub notify: (i32, Pid),
+    pub clock_id: i32,
 }
 
 impl TracedProcess {
@@ -822,6 +858,167 @@ impl TracedProcess {
         }
 
         Ok(maps)
+    }
+
+    pub fn get_stat(&self) -> Result<Stat> {
+        let path = self.get_procfs_path("stat");
+        let stat = std::fs::read(&path).with_context(|| format!("Failed to read {path}"))?;
+        let pos = stat
+            .iter()
+            .rposition(|&c| c == b')')
+            .context("Invalid stat format")?;
+        let fields = std::str::from_utf8(&stat[pos..])
+            .context("Invalid stat format")?
+            .split(' ')
+            .skip(2)
+            .collect::<Vec<_>>();
+        ensure!(fields.len() >= 48, "Invalid stat format");
+        let parse_usize = |s: &str| {
+            s.parse::<usize>()
+                .with_context(|| format!("Failed to parse {s} as usize"))
+        };
+        Ok(Stat {
+            start_code: parse_usize(fields[22])?,
+            end_code: parse_usize(fields[23])?,
+            start_data: parse_usize(fields[41])?,
+            end_data: parse_usize(fields[42])?,
+            start_stack: parse_usize(fields[24])?,
+            start_brk: parse_usize(fields[43])?,
+            arg_start: parse_usize(fields[44])?,
+            arg_end: parse_usize(fields[45])?,
+            env_start: parse_usize(fields[46])?,
+            env_end: parse_usize(fields[47])?,
+        })
+    }
+
+    pub fn open_map_file(&self, base: usize, end: usize) -> Result<File> {
+        let path = self.get_procfs_path(&format!("map_files/{base:x}-{end:x}"));
+        File::open(&path).with_context(|| format!("Failed to open {path}"))
+    }
+
+    pub fn open_cwd(&self) -> Result<File> {
+        let path = self.get_procfs_path("cwd");
+        File::open(&path).with_context(|| format!("Failed to open {path}"))
+    }
+
+    pub fn get_rseq_configuration(&self) -> Result<ptrace_rseq_configuration> {
+        let mut data = std::mem::MaybeUninit::<ptrace_rseq_configuration>::uninit();
+        if unsafe {
+            libc::ptrace(
+                PTRACE_GET_RSEQ_CONFIGURATION,
+                self.pid.as_raw(),
+                std::mem::size_of_val(&data) as *const c_void,
+                data.as_mut_ptr(),
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error())?;
+        }
+        unsafe { Ok(data.assume_init()) }
+    }
+
+    pub fn list_fds(&self) -> Result<Vec<RawFd>> {
+        let path = self.get_procfs_path("fd");
+        let mut fds = Vec::new();
+        for entry in std::fs::read_dir(&path)? {
+            let name = entry
+                .with_context(|| format!("Failed to read {path}"))?
+                .file_name();
+            let name = name
+                .to_str()
+                .with_context(|| format!("Name of file in {path} is invalid"))?;
+            let fd = name
+                .parse()
+                .with_context(|| format!("{path}/{name} is an unexpected filename"))?;
+            fds.push(fd);
+        }
+        Ok(fds)
+    }
+
+    pub fn get_fd_info(&self, fd: RawFd) -> Result<HashMap<String, String>> {
+        let path = self.get_procfs_path(&format!("fdinfo/{fd}"));
+        let file = File::open(&path).with_context(|| format!("Failed to open {path}"))?;
+
+        let mut info = HashMap::new();
+        for line in BufReader::new(file).lines() {
+            let line = line.with_context(|| format!("Failed to read {path}"))?;
+            let (key, value) = line
+                .trim()
+                .split_once(":")
+                .with_context(|| format!("Colon missing from a line in {path}"))?;
+            info.insert(key.to_string(), value.trim().to_string());
+        }
+
+        Ok(info)
+    }
+
+    pub fn get_timers(&self) -> Result<Vec<Timer>> {
+        let path = self.get_procfs_path("timers");
+        let file = File::open(&path).with_context(|| format!("Failed to open {path}"))?;
+
+        let mut timers = Vec::new();
+        let mut timer = None;
+
+        for line in BufReader::new(file).lines() {
+            let line = line.with_context(|| format!("Failed to read {path}"))?;
+            let (key, value) = line
+                .split_once(": ")
+                .with_context(|| format!("Colon missing from a line in {path}"))?;
+
+            match key {
+                "ID" => {
+                    if let Some(timer) = timer.take() {
+                        timers.push(timer);
+                    }
+                    timer = Some(Timer {
+                        id: value.parse().context("Invalid timer ID")?,
+                        signal: 0,
+                        sigev_value: 0,
+                        notify: (libc::SIGEV_NONE, Pid::from_raw(0)),
+                        clock_id: 0,
+                    })
+                }
+                "signal" => {
+                    let (signal, sigev_value) =
+                        value.split_once('/').context("Missing / in signal entry")?;
+                    let timer = timer.as_mut().context("Unexpected entry before ID")?;
+                    timer.signal = signal.parse().context("Invalid signal number")?;
+                    timer.sigev_value =
+                        usize::from_str_radix(sigev_value, 16).context("Invalid sigev_value")?;
+                }
+                "notify" => {
+                    let timer = timer.as_mut().context("Unexpected entry before ID")?;
+                    let (mechanism, target) =
+                        value.split_once('/').context("Missing / in notify entry")?;
+                    let mut mechanism = match mechanism {
+                        "thread" => libc::SIGEV_THREAD,
+                        "signal" => libc::SIGEV_SIGNAL,
+                        "none" => libc::SIGEV_NONE,
+                        _ => bail!("Invalid notification mechanism {mechanism}"),
+                    };
+                    let target = if let Some(tid) = target.strip_prefix("tid.") {
+                        mechanism |= SIGEV_THREAD_ID;
+                        Pid::from_raw(tid.parse().context("Invalid TID")?)
+                    } else if let Some(pid) = target.strip_prefix("pid.") {
+                        Pid::from_raw(pid.parse().context("Invalid PID")?)
+                    } else {
+                        bail!("Invalid notification target {target}")
+                    };
+                    timer.notify = (mechanism, target);
+                }
+                "ClockID" => {
+                    let timer = timer.as_mut().context("Unexpected entry before ID")?;
+                    timer.clock_id = value.parse().context("Invalid clock ID")?;
+                }
+                _ => bail!("Invalid key {key}"),
+            }
+        }
+
+        if let Some(timer) = timer.take() {
+            timers.push(timer);
+        }
+
+        Ok(timers)
     }
 }
 

@@ -1,6 +1,10 @@
 use crate::linux::ids::*;
 use anyhow::{Context, Result};
-use nix::{libc, libc::CLONE_NEWUSER, unistd};
+use nix::{
+    libc,
+    libc::{CLONE_NEWUSER, PR_SET_DUMPABLE},
+    unistd,
+};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
@@ -20,6 +24,12 @@ pub fn enter_user_namespace() -> Result<()> {
         .context("Failed to setuid to root")?;
     nix::unistd::setgid(nix::unistd::Gid::from_raw(INTERNAL_ROOT_GID))
         .context("Failed to setgid to root")?;
+
+    // Being non-dumpable is pointless because of permissions anyway, and we need to be dumpable for
+    // prefork to work
+    if unsafe { libc::prctl(PR_SET_DUMPABLE, 1) } == -1 {
+        return Err(std::io::Error::last_os_error()).context("Failed to make the process dumpable");
+    }
 
     Ok(())
 }

@@ -34,6 +34,8 @@ target/syscall_slave: target/$(ARCH)/syscall_slave.o
 	$(ARCH)-linux-gnu-gcc $^ -o $@ -static -nostartfiles -n -s
 target/x86_64/syscall_slave.o: src/linux/x86_64/syscall_slave.asm
 	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
+target/aarch64/syscall_slave.o: src/linux/aarch64/syscall_slave.asm
+	mkdir -p target/aarch64 && aarch64-linux-gnu-as $^ -o $@
 
 target/syscall_loop.bin: target/syscall_loop
 	$(ARCH)-linux-gnu-objcopy -O binary --only-section=.text $^ $@
@@ -41,6 +43,8 @@ target/syscall_loop: target/$(ARCH)/syscall_loop.o
 	$(ARCH)-linux-gnu-gcc $^ -o $@ -static -nostartfiles -n -s
 target/x86_64/syscall_loop.o: src/linux/x86_64/syscall_loop.asm
 	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
+target/aarch64/syscall_loop.o: src/linux/aarch64/syscall_loop.asm
+	mkdir -p target/aarch64 && aarch64-linux-gnu-as $^ -o $@
 
 target/sunwalker.ko: kmodule/$(ARCH)/sunwalker.ko
 	mkdir -p target && cp $^ $@
