@@ -106,7 +106,7 @@ static COLORS: [(u8, u8, u8); 23] = [
     (255, 0, 85),
 ];
 
-pub fn do_log<'a>(level: LogLevel, file: &'static str, args: impl FnOnce() -> String) {
+pub fn do_log(level: LogLevel, file: &'static str, args: impl FnOnce() -> String) {
     let config = get_diagnostics_config();
     if level < config.level {
         return;

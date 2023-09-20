@@ -1114,7 +1114,7 @@ fn executor_worker(
                     tv_sec: 0,
                     tv_usec: 0,
                 },
-                it_value: delay.as_ref().clone(),
+                it_value: *delay.as_ref(),
             };
             if unsafe {
                 libc::syscall(
