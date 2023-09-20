@@ -1,7 +1,7 @@
 ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
 TARGET := $(ARCH)-unknown-linux-musl
 
-SECCOMP_FILTERS := filter
+SECCOMP_FILTERS := filter filter_restricted
 
 RUSTFLAGS := --remap-path-prefix ${HOME}/.rustup=~/.rustup --remap-path-prefix ${HOME}/.cargo=~/.cargo --remap-path-prefix $(shell pwd)=.
 
@@ -17,7 +17,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	cp $^ $@
-target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko target/syscall_table.offsets
+target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/syscall_slave target/syscall_loop.bin target/sunwalker.ko target/syscall_table.offsets
 	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features= --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(CC)\"
 
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
@@ -29,6 +29,18 @@ target/x86_64/exec_wrapper.o: src/linux/x86_64/exec_wrapper.asm
 	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
 target/aarch64/exec_wrapper.o: src/linux/aarch64/exec_wrapper.asm
 	mkdir -p target/aarch64 && aarch64-linux-gnu-as $^ -o $@
+
+target/syscall_slave: target/$(ARCH)/syscall_slave.o
+	$(ARCH)-linux-gnu-gcc $^ -o $@ -static -nostartfiles -n -s
+target/x86_64/syscall_slave.o: src/linux/x86_64/syscall_slave.asm
+	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
+
+target/syscall_loop.bin: target/syscall_loop
+	$(ARCH)-linux-gnu-objcopy -O binary --only-section=.text $^ $@
+target/syscall_loop: target/$(ARCH)/syscall_loop.o
+	$(ARCH)-linux-gnu-gcc $^ -o $@ -static -nostartfiles -n -s
+target/x86_64/syscall_loop.o: src/linux/x86_64/syscall_loop.asm
+	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
 
 target/sunwalker.ko: kmodule/$(ARCH)/sunwalker.ko
 	mkdir -p target && cp $^ $@

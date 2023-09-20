@@ -1,0 +1,173 @@
+# TODO: handle multiarch gracefully instead of killing the process
+A = arch
+A == ARCH_X86_64 ? next : kill
+
+A = sys_number
+
+A == mmap ? mmap : next
+A == prctl ? prctl : next
+
+A == stat ? allow : next
+A == fstat ? allow : next
+A == lstat ? allow : next
+A == poll ? allow : next
+A == mprotect ? allow : next
+A == munmap ? allow : next
+A == brk ? allow : next
+A == rt_sigaction ? allow : next
+A == rt_sigprocmask ? allow : next
+A == rt_sigreturn ? allow : next
+A == access ? allow : next
+A == select ? allow : next
+A == sched_yield ? allow : next
+A == mremap ? allow : next
+A == msync ? allow : next
+A == mincore ? allow : next
+A == madvise ? allow : next
+A == pause ? allow : next
+A == nanosleep ? allow : next
+A == getitimer ? allow : next
+A == alarm ? allow : next
+A == setitimer ? allow : next
+A == getpid ? allow : next
+A == getpeername ? allow : next
+A == execve ? allow : next
+A == exit ? allow : next
+A == wait4 ? allow : next
+A == kill ? allow : next
+A == uname ? allow : next
+A == getdents ? allow : next
+A == getcwd ? allow : next
+A == chdir ? allow : next
+A == fchdir ? allow : next
+A == readlink ? allow : next
+A == umask ? allow : next
+A == gettimeofday ? allow : next
+A == getrlimit ? allow : next
+A == getrusage ? allow : next
+A == times ? allow : next
+A == getuid ? allow : next
+A == getgid ? allow : next
+A == geteuid ? allow : next
+A == getegid ? allow : next
+A == getpgrp ? allow : next
+A == getgroups ? allow : next
+A == getresuid ? allow : next
+A == getresgid ? allow : next
+A == getpgid ? allow : next
+A == getsid ? allow : next
+A == capget ? allow : next
+A == rt_sigpending ? allow : next
+A == rt_sigtimedwait ? allow : next
+A == rt_sigqueueinfo ? allow : next
+A == rt_sigsuspend ? allow : next
+A == sigaltstack ? allow : next
+A == personality ? allow : next
+A == ustat ? allow : next
+A == statfs ? allow : next
+A == fstatfs ? allow : next
+A == sysfs ? allow : next
+A == getpriority ? allow : next
+A == sched_getscheduler ? allow : next
+A == sched_get_priority_min ? allow : next
+A == sched_rr_get_interval ? allow : next
+A == arch_prctl ? arch_prctl : next
+A == setrlimit ? allow : next
+A == sync ? allow : next
+A == quotactl ? allow : next
+A == gettid ? allow : next
+A == readahead ? allow : next
+A == getxattr ? allow : next
+A == lgetxattr ? allow : next
+A == fgetxattr ? allow : next
+A == listxattr ? allow : next
+A == llistxattr ? allow : next
+A == flistxattr ? allow : next
+A == tkill ? allow : next
+A == time ? allow : next
+A == futex ? allow : next
+A == sched_getaffinity ? allow : next
+A == get_thread_area ? allow : next
+A == lookup_dcookie ? allow : next
+A == remap_file_pages ? allow : next
+A == getdents64 ? allow : next
+A == set_tid_address ? allow : next
+A == restart_syscall ? allow : next
+A == fadvise64 ? allow : next
+A == timer_create ? allow : next
+A == timer_settime ? allow : next
+A == timer_gettime ? allow : next
+A == timer_getoverrun ? allow : next
+A == timer_delete ? allow : next
+A == clock_gettime ? allow : next
+A == clock_getres ? allow : next
+A == clock_nanosleep ? allow : next
+A == exit_group ? allow : next
+A == tgkill ? allow : next
+A == get_mempolicy ? allow : next
+A == waitid ? allow : next
+A == ioprio_get ? allow : next
+A == newfstatat ? allow : next
+A == readlinkat ? allow : next
+A == faccessat ? allow : next
+A == pselect6 ? allow : next
+A == ppoll ? allow : next
+A == set_robust_list ? allow : next
+A == get_robust_list ? allow : next
+A == sync_file_range ? allow : next
+A == eventfd ? allow : next
+A == eventfd2 ? allow : next  # for Ruby
+A == rt_tgsigqueueinfo ? allow : next
+A == prlimit64 ? allow : next
+A == syncfs ? allow : next
+A == getcpu ? allow : next
+A == process_vm_readv ? allow : next
+A == process_vm_writev ? allow : next
+A == sched_getattr ? allow : next
+A == getrandom ? allow : next
+A == execveat ? allow : next
+A == membarrier ? allow : next
+A == statx ? allow : next
+A == 334 ? allow : next  # rseq
+A == 439 ? allow : next  # faccessat2
+A == 440 ? allow : next  # process_madvise
+A == 449 ? allow : next  # futex_waitv
+
+# Forbid x86-32 ABI in x86-64 mode
+A &= 0x40000000
+A == 0 ? trace : kill
+
+mmap:
+# A = args[3]
+# A &= 0x02  # MAP_PRIVATE
+# A == 0 ? trace : next
+A = args[4]
+A &= 0xffffffff
+A < 3 ? trace : allow
+
+prctl:
+A = args[0]
+A == 42 ? allow : next  # PR_GET_THP_DISABLE
+A == 40 ? allow : trace  # PR_GET_TID_ADDRESS
+
+arch_prctl:
+A = args[0]
+A == 0x1001 ? allow : next  # ARCH_SET_GS
+A == 0x1002 ? allow : next  # ARCH_SET_FS
+A == 0x1003 ? allow : next  # ARCH_GET_FS
+A == 0x1004 ? allow : next  # ARCH_GET_GS
+A == 0x1011 ? allow : next  # ARCH_GET_CPUID
+A == 0x1012 ? allow : next  # ARCH_SET_CPUID
+A == 0x3001 ? einval : trace  # ARCH_CET_STATUS -- simulate lack of CET
+
+trace:
+return TRACE
+
+allow:
+return ALLOW
+
+kill:
+return KILL
+
+einval:
+return ERRNO(EINVAL)

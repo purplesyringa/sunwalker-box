@@ -1,5 +1,5 @@
 use crate::{
-    linux::{cgroups, running, system},
+    linux::{cgroups, reaper, running, system},
     log,
 };
 use anyhow::{Context, Result};
@@ -14,34 +14,36 @@ pub enum Command {
 #[crossmist::func]
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
-    mut channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    mut entry_channel: crossmist::Duplex<Result<Option<String>, String>, Command>,
+    reaper_channel: crossmist::Duplex<reaper::Request, Result<reaper::Response, String>>,
     log_level: log::LogLevel,
 ) {
     log::enable_diagnostics("manager", log_level);
 
     log!("Manager started");
 
-    let mut runner = running::Runner::new(proc_cgroup).expect("Failed to create runner");
+    let runner =
+        running::Runner::new(proc_cgroup, reaper_channel).expect("Failed to create runner");
 
     log!("Ready to receive commands");
-    channel
+    entry_channel
         .send(&Ok(None))
         .expect("Failed to notify parent about readiness");
 
-    while let Some(command) = channel
+    while let Some(command) = entry_channel
         .recv()
-        .expect("Failed to receive message from channel")
+        .expect("Failed to receive message from entry channel")
     {
-        channel
-            .send(&match execute_command(command, &mut runner) {
+        entry_channel
+            .send(&match execute_command(command, &runner) {
                 Ok(value) => Ok(value),
                 Err(e) => Err(format!("{e:?}")),
             })
-            .expect("Failed to send reply to channel")
+            .expect("Failed to send reply to entry channel")
     }
 }
 
-fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Option<String>> {
+fn execute_command(command: Command, runner: &running::Runner) -> Result<Option<String>> {
     log!("Running command {command:?}");
 
     match command {

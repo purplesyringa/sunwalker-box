@@ -1,4 +1,5 @@
 #![feature(
+    generic_arg_infer,
     generic_const_exprs,
     io_error_more,
     never_type,
@@ -19,6 +20,7 @@ mod linux {
     mod manager;
     mod mountns;
     mod openat;
+    mod prefork;
     mod procs;
     mod reaper;
     mod rootfs;

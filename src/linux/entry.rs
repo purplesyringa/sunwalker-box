@@ -275,6 +275,16 @@ fn handle_command(
         "run" => {
             let mut arg = json::parse(arg).context("Invalid JSON")?;
 
+            let mode = if arg["mode"].is_null() {
+                running::Mode::Run
+            } else {
+                match arg["mode"].as_str().context("Invalid 'mode' argument")? {
+                    "run" => running::Mode::Run,
+                    "prefork" => running::Mode::PreFork,
+                    _ => bail!("Invalid 'mode' argument"),
+                }
+            };
+
             let argv = arg["argv"]
                 .members_mut()
                 .map(|arg| arg.take_string())
@@ -293,9 +303,25 @@ fn handle_command(
                     )
                 })
             };
-            let stdin = parse_string("stdin")?.unwrap_or_else(|| "/dev/null".to_string());
-            let stdout = parse_string("stdout")?.unwrap_or_else(|| "/dev/null".to_string());
-            let stderr = parse_string("stderr")?.unwrap_or_else(|| "/dev/null".to_string());
+            let (stdin, stdout, stderr);
+            match mode {
+                running::Mode::Run => {
+                    stdin = parse_string("stdin")?.unwrap_or_else(|| "/dev/null".to_string());
+                    stdout = parse_string("stdout")?.unwrap_or_else(|| "/dev/null".to_string());
+                    stderr = parse_string("stderr")?.unwrap_or_else(|| "/dev/null".to_string());
+                }
+                running::Mode::PreFork => {
+                    stdin = "".to_string();
+                    stdout = "".to_string();
+                    stderr = "".to_string();
+                    for name in ["stdin", "stdout", "stderr"] {
+                        ensure!(
+                            arg[name].is_null(),
+                            "'{name}' is unavailable in prefork mode"
+                        );
+                    }
+                }
+            }
 
             let parse_duration = |name: &str| -> Result<Option<Duration>> {
                 if arg[name].is_null() {
@@ -325,6 +351,12 @@ fn handle_command(
             };
             let memory_limit = parse_usize("memory_limit")?;
             let processes_limit = parse_usize("processes_limit")?;
+            if let running::Mode::PreFork = mode {
+                ensure!(
+                    processes_limit.is_none(),
+                    "'processes_limit' is unavailable in prefork mode"
+                );
+            }
 
             let mut env = None;
             if !arg["env"].is_null() {
@@ -339,6 +371,7 @@ fn handle_command(
 
             controller.run_manager_command(manager::Command::Run {
                 options: running::Options {
+                    mode,
                     argv,
                     stdin,
                     stdout,

@@ -2,7 +2,7 @@ use crate::linux::system;
 use anyhow::{bail, ensure, Context, Result};
 use nix::{
     libc,
-    libc::{c_char, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM},
+    libc::{c_char, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM, PR_SET_NO_NEW_PRIVS},
 };
 
 pub fn sanity_checks() -> Result<()> {
@@ -128,6 +128,8 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to mkdir /tmp/sunwalker_box/emptydir")?;
     std::fs::write("/tmp/sunwalker_box/emptyfile", [])
         .context("Failed to touch /tmp/sunwalker_box/emptyfile")?;
+    std::fs::write("/tmp/sunwalker_box/stdiosubst", [])
+        .context("Failed to touch /tmp/sunwalker_box/stdiosubst")?;
 
     // Move old root and pivot_root
     std::fs::create_dir("/tmp/sunwalker_box/oldroot")
@@ -197,5 +199,12 @@ pub fn create_dev_copy() -> Result<()> {
     std::fs::create_dir("/dev/shm").context("Failed to mkdir /dev/shm")?;
     std::fs::create_dir("/dev/mqueue").context("Failed to mkdir /dev/mqueue")?;
 
+    Ok(())
+}
+
+pub fn set_no_new_privs() -> Result<()> {
+    if unsafe { libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) } != 0 {
+        return Err(std::io::Error::last_os_error()).context("Failed to set no_new_privs");
+    }
     Ok(())
 }

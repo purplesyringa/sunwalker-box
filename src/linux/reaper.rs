@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, ipc, manager, procs},
+    linux::{cgroups, ipc, manager, prefork, procs, tracing},
     log,
 };
 use anyhow::{Context, Result};
@@ -9,8 +9,10 @@ use nix::{
     fcntl, libc,
     libc::{c_int, pid_t, PR_SET_PDEATHSIG},
     sys::{signal, wait},
+    unistd::Pid,
 };
 use std::os::unix::io::{AsRawFd, OwnedFd, RawFd};
+use std::time::Instant;
 
 extern "C" fn pid1_signal_handler(signo: c_int) {
     // std::process::exit is not async-safe
@@ -23,6 +25,24 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
 pub enum Command {
     Init,
     Reset,
+}
+
+// Design requests such that the manager, which runs in a much more secure context (sandbox root
+// instead of real root), cannot obtain privileges that it can't obtain without requests. Sure,
+// crossmist does not support untrusted actors, but better separate security domains anyway.
+#[derive(Object)]
+pub enum Request {
+    SuspendProcess {
+        pid: pid_t,
+        options: prefork::SuspendOptions,
+        registers: tracing::Registers,
+        started: Instant,
+    },
+}
+
+#[derive(Object)]
+pub enum Response {
+    SuspendProcess,
 }
 
 #[crossmist::func]
@@ -49,6 +69,7 @@ pub fn reaper(
     let mut mask = signal::SigSet::empty();
     mask.add(signal::Signal::SIGUSR1);
     mask.add(signal::Signal::SIGIO);
+    mask.add(signal::Signal::SIGURG);
     mask.add(signal::Signal::SIGCHLD);
     if let Err(e) = mask.thread_block() {
         eprintln!("Failed to configure signal mask: {e}");
@@ -133,6 +154,9 @@ pub fn reaper(
     nix::unistd::setsid().expect("Failed to setsid");
     log!("Reaper is now running in a detached controlling terminal");
 
+    let (mut manager_request_ours, manager_request_theirs) =
+        crossmist::duplex().expect("Failed to create channel");
+
     // Send a signal whenever a new message appears on a channel
     fn enable_async(channel: &impl AsRawFd, signal: signal::Signal) -> Result<()> {
         // Send to pid 1 (i.e. self)
@@ -159,6 +183,8 @@ pub fn reaper(
 
     enable_async(&reaper_channel, signal::Signal::SIGIO)
         .expect("Failed to enable SIGIO on reaper channel");
+    enable_async(&manager_request_ours, signal::Signal::SIGURG)
+        .expect("Failed to enable SIGURG on manager request channel");
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.
@@ -171,6 +197,7 @@ pub fn reaper(
                 .try_clone()
                 .expect("Failed to clone box cgroup reference"),
             manager_channel,
+            manager_request_theirs,
             log_level,
         )
         .expect("Failed to start child");
@@ -206,6 +233,18 @@ pub fn reaper(
                 };
                 let result = execute_command(command, child.id()).map_err(|e| format!("{e:?}"));
                 reaper_channel
+                    .send(&result)
+                    .expect("Failed to report result");
+            }
+            signal::Signal::SIGURG => {
+                // Incoming request
+                let Some(request) = manager_request_ours.recv().expect("Failed to read request")
+                else {
+                    // Considerations similar to those of SIGUSR1 apply
+                    continue;
+                };
+                let result = execute_request(request).map_err(|e| format!("{e:?}"));
+                manager_request_ours
                     .send(&result)
                     .expect("Failed to report result");
             }
@@ -275,6 +314,20 @@ fn execute_command(command: Command, child_pid: pid_t) -> Result<Option<String>>
             procs::reset_pidns().context("Failed to reset pidns")?;
             ipc::reset().context("Failed to reset IPC namespace")?;
             Ok(None)
+        }
+    }
+}
+
+fn execute_request(request: Request) -> Result<Response> {
+    match request {
+        Request::SuspendProcess {
+            pid,
+            options,
+            registers,
+            started,
+        } => {
+            prefork::Suspender::new(Pid::from_raw(pid), options, registers, started)?.suspend()?;
+            Ok(Response::SuspendProcess)
         }
     }
 }

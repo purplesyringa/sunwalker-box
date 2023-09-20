@@ -1,5 +1,8 @@
 use crate::{
-    linux::{cgroups, ipc, rootfs, string_table, system, timens, tracing, userns},
+    linux::{
+        cgroups, ipc, prefork, reaper, rootfs, sandbox, string_table, system, timens, tracing,
+        userns,
+    },
     log,
 };
 use anyhow::{bail, ensure, Context, Result};
@@ -20,15 +23,17 @@ use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
 pub struct Runner {
-    proc_cgroup: cgroups::ProcCgroup,
-    timens_controller: timens::TimeNsController,
-    sigfd: signalfd::SignalFd,
+    prefork_manager: prefork::PreForkManager,
+    timens_controller: RefCell<timens::TimeNsController>,
+    sigfd: RefCell<signalfd::SignalFd>,
     epoll: epoll::Epoll,
     exec_wrapper: File,
+    proc_cgroup: cgroups::ProcCgroup,
 }
 
 #[derive(Debug, Object)]
 pub struct Options {
+    pub mode: Mode,
     pub argv: Vec<String>,
     pub stdin: String,
     pub stdout: String,
@@ -39,6 +44,12 @@ pub struct Options {
     pub memory_limit: Option<usize>,
     pub processes_limit: Option<usize>,
     pub env: Option<HashMap<String, String>>,
+}
+
+#[derive(Clone, Copy, Debug, Object)]
+pub enum Mode {
+    Run,
+    PreFork,
 }
 
 #[derive(PartialEq, Eq)]
@@ -59,7 +70,7 @@ pub struct RunResults {
     pub memory: usize,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum ProcessState {
     JustStarted,
     Alive,
@@ -71,7 +82,8 @@ struct ProcessInfo {
 }
 
 struct SingleRun<'a> {
-    runner: &'a mut Runner,
+    runner: &'a Runner,
+    stdio_subst: File,
     options: Options,
     results: RunResults,
     box_cgroup: Option<cgroups::BoxCgroup>,
@@ -83,6 +95,7 @@ struct SingleRun<'a> {
     sem_next_id: Cell<isize>,
     msg_next_id: Cell<isize>,
     shm_next_id: Cell<isize>,
+    prefork: Option<prefork::PreForkRun<'a>>,
 }
 
 enum EmulatedSyscall {
@@ -124,8 +137,13 @@ impl EmulatedSyscall {
 }
 
 impl Runner {
-    pub fn new(proc_cgroup: cgroups::ProcCgroup) -> Result<Self> {
+    pub fn new(
+        proc_cgroup: cgroups::ProcCgroup,
+        request_channel: crossmist::Duplex<reaper::Request, Result<reaper::Response, String>>,
+    ) -> Result<Self> {
         log!("Initializing runner");
+
+        let stdio_subst = File::open("/stdiosubst").context("Failed to open /stdiosubst")?;
 
         // Mount procfs and enter the sandboxed root
         let timens_controller = timens::TimeNsController::new().context("Failed to adjust time")?;
@@ -155,22 +173,32 @@ impl Runner {
             )
             .context("Failed to configure epoll")?;
 
-        let exec_wrapper =
-            system::make_memfd("exec_wrapper", include_bytes!("../../target/exec_wrapper"))
-                .context("Failed to create memfd for exec_wrapper")?;
-
         Ok(Runner {
-            proc_cgroup,
-            timens_controller,
-            sigfd,
+            prefork_manager: prefork::PreForkManager::new(stdio_subst, request_channel)?,
+            timens_controller: RefCell::new(timens_controller),
+            sigfd: RefCell::new(sigfd),
             epoll,
-            exec_wrapper,
+            exec_wrapper: system::make_memfd(
+                "exec_wrapper",
+                include_bytes!("../../target/exec_wrapper"),
+            )
+            .context("Failed to create memfd for exec_wrapper")?,
+            proc_cgroup,
         })
     }
 
-    pub fn run(&mut self, options: Options) -> Result<RunResults> {
+    pub fn run(&self, options: Options) -> Result<RunResults> {
+        let stdio_subst = self
+            .prefork_manager
+            .get_stdio_subst()
+            .context("Failed to get stdio subst")?;
+        let prefork = match options.mode {
+            Mode::Run => None,
+            Mode::PreFork => Some(self.prefork_manager.run()),
+        };
         let mut single_run = SingleRun {
             runner: self,
+            stdio_subst,
             options,
             results: RunResults {
                 verdict: Verdict::ExitCode(0),
@@ -188,6 +216,7 @@ impl Runner {
             sem_next_id: Cell::new(0),
             msg_next_id: Cell::new(0),
             shm_next_id: Cell::new(0),
+            prefork,
         };
         single_run.run()?;
         Ok(single_run.results)
@@ -198,20 +227,28 @@ impl SingleRun<'_> {
     fn open_standard_streams(&self) -> Result<[File; 3]> {
         log!("Opening standard streams");
 
-        let stdin = File::open(&self.options.stdin).context("Failed to open stdin file")?;
-        let stdout = File::options()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&self.options.stdout)
-            .context("Failed to open stdout file")?;
-        let stderr = File::options()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .open(&self.options.stderr)
-            .context("Failed to open stderr file")?;
-        Ok([stdin, stdout, stderr])
+        match self.options.mode {
+            Mode::Run => {
+                let stdin = File::open(&self.options.stdin).context("Failed to open stdin file")?;
+                let stdout = File::options()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&self.options.stdout)
+                    .context("Failed to open stdout file")?;
+                let stderr = File::options()
+                    .write(true)
+                    .create(true)
+                    .truncate(true)
+                    .open(&self.options.stderr)
+                    .context("Failed to open stderr file")?;
+                Ok([stdin, stdout, stderr])
+            }
+            Mode::PreFork => {
+                let get = || self.stdio_subst.try_clone();
+                Ok([get()?, get()?, get()?])
+            }
+        }
     }
 
     fn create_box_cgroup(&mut self) -> Result<()> {
@@ -243,6 +280,7 @@ impl SingleRun<'_> {
         let (theirs, mut ours) = crossmist::channel().context("Failed to create a pipe")?;
         let user_process = executor_worker
             .spawn(
+                self.options.mode,
                 self.options.argv.clone(),
                 self.options.env.clone(),
                 stdin,
@@ -449,6 +487,7 @@ impl SingleRun<'_> {
                 while self
                     .runner
                     .sigfd
+                    .borrow_mut()
                     .read_signal()
                     .context("Failed to read signal")?
                     .is_some()
@@ -494,6 +533,18 @@ impl SingleRun<'_> {
     }
 
     fn on_seccomp(&self, process: &mut ProcessInfo) -> Result<()> {
+        match self.options.mode {
+            Mode::Run => self.on_seccomp_run(process),
+            Mode::PreFork => self
+                .prefork
+                .as_ref()
+                .unwrap()
+                .on_seccomp(&mut process.traced_process)
+                .context("Failed to handle seccomp in prefork mode"),
+        }
+    }
+
+    fn on_seccomp_run(&self, process: &mut ProcessInfo) -> Result<()> {
         use tracing::SyscallArgs;
 
         let pid = process.traced_process.get_pid();
@@ -664,7 +715,7 @@ impl SingleRun<'_> {
                     .context("Failed to get memory stats")?;
 
                 user_sysinfo.uptime =
-                    our_sysinfo.uptime - self.runner.timens_controller.get_uptime_shift();
+                    our_sysinfo.uptime - self.runner.timens_controller.borrow().get_uptime_shift();
                 user_sysinfo.loads = [0; 3]; // there's no practical way to replicate LA
                 if let Some(limit) = self.options.memory_limit {
                     user_sysinfo.totalram = limit as u64;
@@ -900,11 +951,21 @@ impl SingleRun<'_> {
                 }
             }
 
-            system::WaitStatus::PtraceSyscall(pid) => {
-                let process = self.processes.get_mut(&pid).unwrap().get_mut();
-                process.state = ProcessState::Alive;
-                process.traced_process.resume()?;
-            }
+            system::WaitStatus::PtraceSyscall(pid) => match self.options.mode {
+                Mode::Run => bail!("Unexpected PtraceSyscall in run mode"),
+                Mode::PreFork => {
+                    let process = self
+                        .processes
+                        .get_mut(&pid)
+                        .with_context(|| format!("Unknown pid {pid}"))?
+                        .get_mut();
+                    self.prefork
+                        .as_mut()
+                        .unwrap()
+                        .handle_syscall(&mut process.traced_process)
+                        .context("Failed to handle syscall in prefork mode")?
+                }
+            },
 
             _ => {
                 bail!("waitpid returned unexpected status: {wait_status:?}");
@@ -979,6 +1040,7 @@ impl SingleRun<'_> {
 
         self.runner
             .timens_controller
+            .borrow_mut()
             .reset_system_time_for_children()
             .context("Failed to virtualize boot time")?;
 
@@ -1028,6 +1090,7 @@ impl SingleRun<'_> {
 
 #[crossmist::func]
 fn executor_worker(
+    mode: Mode,
     argv: Vec<String>,
     env: Option<HashMap<String, String>>,
     stdin: File,
@@ -1038,13 +1101,16 @@ fn executor_worker(
     exec_wrapper: File,
 ) {
     let result: Result<()> = try {
+        // We need setsid() in prefork mode, so use it here as well for uniformity
+        nix::unistd::setsid().context("Failed to setsid")?;
+
         // We want to disable rdtsc. Turns out, ld.so always calls rdtsc when it starts and keeps
         // using it as if it's always available. Bummer. This means we'll have to simulate rdtsc.
         timens::disable_native_instructions()
             .context("Failed to disable native timens instructions")?;
 
-        // Only apply seccomp filter after disabling the possibility to turn rdtsc back on
-        tracing::apply_seccomp_filter().context("Failed to apply seccomp filter")?;
+        // Enable seccomp() after dropping privileges
+        sandbox::set_no_new_privs()?;
 
         userns::drop_privileges().context("Failed to drop privileges")?;
 
@@ -1124,6 +1190,12 @@ fn executor_worker(
                 Err(std::io::Error::last_os_error()).context("Failed to set interval timer")?;
             }
         }
+
+        tracing::apply_seccomp_filter(match mode {
+            Mode::Run => false,
+            Mode::PreFork => true,
+        })
+        .context("Failed to apply seccomp filter")?;
 
         // We don't need to reset signals because we didn't configure them inside executor_worker()
 
