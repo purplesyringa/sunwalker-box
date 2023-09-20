@@ -301,7 +301,7 @@ impl TracedProcess {
         self.mem.write_all_at(buf, address as u64)
     }
 
-    pub unsafe fn write_word(&self, address: usize, value: usize) -> io::Result<()> {
+    pub fn write_word(&self, address: usize, value: usize) -> io::Result<()> {
         self.write_memory(address, &value.to_ne_bytes())
     }
 
@@ -357,7 +357,7 @@ impl TracedProcess {
     pub fn disable_vdso(&mut self) -> Result<()> {
         for entry in self.get_auxiliary_entries()? {
             if entry.id == AT_SYSINFO_EHDR as usize {
-                unsafe { self.write_word(entry.address, libc::AT_IGNORE as usize) }
+                self.write_word(entry.address, libc::AT_IGNORE as usize)
                     .context("Failed to write AT_IGNORE")?;
             }
         }
