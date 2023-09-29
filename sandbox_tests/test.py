@@ -76,8 +76,11 @@ def parse_approximate_value(s: str, value_parser: Callable[[str], float]) -> tup
 
 class Box:
     def __init__(self, opts: list[str] = []):
-        self.proc = subprocess.Popen(["../sunwalker_box", "start", "--core", str(
-            CORE), *opts], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+        self.proc = subprocess.Popen(
+            ["../sunwalker_box", "start", "--core", str(CORE), *opts],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE
+        )
 
     def __enter__(self):
         return self
