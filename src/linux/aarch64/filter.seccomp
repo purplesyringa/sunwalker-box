@@ -9,6 +9,7 @@ A == semget ? trace : next
 A == shmget ? trace : next
 A == memfd_create ? trace : next
 A == 447 ? enosys : next  # memfd_secret -- as unsafe as memfd_create, but is behind a knob, so we don't have to emulate it
+A == sysinfo ? trace : next
 
 allow:
 return ALLOW
@@ -20,4 +21,4 @@ kill:
 return KILL
 
 enosys:
-return ERRNO(ENOSYS)
+return ERRNO(38)  # ENOSYS

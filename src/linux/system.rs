@@ -1,4 +1,5 @@
 use nix::{
+    errno::Errno,
     libc,
     libc::{c_int, c_ulong, c_void, SYS_pidfd_open},
     sys::memfd,
@@ -11,6 +12,7 @@ pub use nix::libc::{
     MS_RELATIME, MS_REMOUNT, MS_SHARED, MS_SILENT, MS_SLAVE, MS_STRICTATIME, MS_SYNCHRONOUS,
     MS_UNBINDABLE, UMOUNT_NOFOLLOW,
 };
+pub use nix::sys::wait::WaitPidFlag;
 
 use std::ffi::CString;
 use std::fs::File;
@@ -134,4 +136,55 @@ pub fn open_pidfd(pid: Pid) -> Result<OwnedFd> {
     } else {
         Err(std::io::Error::last_os_error())
     }
+}
+
+// We need to roll our own nix::wait because nix's version doesn't support realtime signals -- and
+// not only does it not support them, it also fails to handle waitpid() in this case, making Mono
+// runtime die.
+#[derive(Debug, PartialEq)]
+pub enum WaitStatus {
+    Exited(Pid, i32),
+    Signaled(Pid, i32),
+    Stopped(Pid, i32),
+    PtraceEvent(Pid, i32, c_int),
+    PtraceSyscall(Pid),
+    Continued(Pid),
+    StillAlive,
+}
+
+pub fn waitpid(pid: Option<Pid>, options: WaitPidFlag) -> nix::Result<WaitStatus> {
+    let mut status: i32 = 0;
+    let res = unsafe {
+        libc::waitpid(
+            pid.unwrap_or(Pid::from_raw(-1)).into(),
+            &mut status as *mut c_int,
+            options.bits(),
+        )
+    };
+
+    let pid = Pid::from_raw(res);
+
+    if res == -1 {
+        return Err(Errno::last());
+    }
+
+    Ok(if res == 0 {
+        WaitStatus::StillAlive
+    } else if libc::WIFEXITED(status) {
+        WaitStatus::Exited(pid, libc::WEXITSTATUS(status))
+    } else if libc::WIFSIGNALED(status) {
+        WaitStatus::Signaled(pid, libc::WTERMSIG(status))
+    } else if libc::WIFSTOPPED(status) {
+        if libc::WSTOPSIG(status) == libc::SIGTRAP | 0x80 {
+            WaitStatus::PtraceSyscall(pid)
+        } else if status >> 16 == 0 {
+            WaitStatus::Stopped(pid, libc::WSTOPSIG(status))
+        } else {
+            WaitStatus::PtraceEvent(pid, libc::WSTOPSIG(status), status >> 16)
+        }
+    } else if libc::WIFCONTINUED(status) {
+        WaitStatus::Continued(pid)
+    } else {
+        return Err(Errno::EINVAL);
+    })
 }

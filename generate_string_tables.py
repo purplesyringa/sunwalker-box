@@ -70,7 +70,7 @@ def save_table(table_name: str, table: list[tuple[str, int]]):
 
 def save_table_from_defines(table_name: str, file_name: str, regex: str):
     proc = subprocess.run(
-        [f"{ARCH}-linux-gnu-cpp", "-dM"],
+        [f"{ARCH}-linux-gnu-gcc", "-E", "-dM", "-"],
         input=f"#include <{file_name}>".encode(),
         check=True,
         capture_output=True

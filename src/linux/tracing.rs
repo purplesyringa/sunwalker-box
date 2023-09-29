@@ -4,7 +4,7 @@ use nix::{
     errno::Errno,
     libc,
     libc::{c_uint, c_void},
-    sys::{ptrace, signal},
+    sys::ptrace,
     unistd::Pid,
 };
 use std::ffi::CString;
@@ -301,7 +301,7 @@ impl TracedProcess {
         self.mem.write_all_at(buf, address as u64)
     }
 
-    pub unsafe fn write_word(&self, address: usize, value: usize) -> io::Result<()> {
+    pub fn write_word(&self, address: usize, value: usize) -> io::Result<()> {
         self.write_memory(address, &value.to_ne_bytes())
     }
 
@@ -357,7 +357,7 @@ impl TracedProcess {
     pub fn disable_vdso(&mut self) -> Result<()> {
         for entry in self.get_auxiliary_entries()? {
             if entry.id == AT_SYSINFO_EHDR as usize {
-                unsafe { self.write_word(entry.address, libc::AT_IGNORE as usize) }
+                self.write_word(entry.address, libc::AT_IGNORE as usize)
                     .context("Failed to write AT_IGNORE")?;
             }
         }
@@ -368,9 +368,23 @@ impl TracedProcess {
         self._store_registers()?;
         ptrace::cont(self.pid, None).context("Failed to ptrace-resume the child")
     }
-    pub fn resume_signal(&mut self, signal: signal::Signal) -> Result<()> {
+    // We need to support realtime signals, which nix doesn't support -- that's why we're using i32
+    // and wrapping libc here
+    pub fn resume_signal(&mut self, signal: i32) -> Result<()> {
         self._store_registers()?;
-        ptrace::cont(self.pid, Some(signal)).context("Failed to ptrace-resume the child")
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_CONT,
+                self.pid,
+                std::ptr::null_mut::<c_void>(),
+                signal as *mut c_void,
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("Failed to ptrace-resume the child");
+        }
+        Ok(())
     }
 
     pub fn get_signal_info(&self) -> Result<libc::siginfo_t> {

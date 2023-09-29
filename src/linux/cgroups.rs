@@ -244,6 +244,47 @@ impl BoxCgroup {
         buf.trim().parse().context("Invalid memory.peak format")
     }
 
+    pub fn get_memory_stats(&self) -> Result<MemoryStats> {
+        let mut buf = String::new();
+        self.proc_cgroup_fd
+            .open_file(format!("box-{}/memory.stat", self.box_id))
+            .context("Failed to open memory.stat for reading")?
+            .read_to_string(&mut buf)
+            .context("Failed to read memory.stat")?;
+
+        let mut stat = MemoryStats {
+            anon: 0,
+            file: 0,
+            kernel: 0,
+            shmem: 0,
+        };
+
+        for line in buf.lines() {
+            let target;
+            if line.starts_with("anon ") {
+                target = &mut stat.anon;
+            } else if line.starts_with("file ") {
+                target = &mut stat.file;
+            } else if line.starts_with("kernel ") {
+                target = &mut stat.kernel;
+            } else if line.starts_with("shmem ") {
+                target = &mut stat.shmem;
+            } else {
+                continue;
+            }
+
+            let mut it = line.split_ascii_whitespace();
+            it.next();
+            *target = it
+                .next()
+                .context("Invalid memory.stat format")?
+                .parse()
+                .context("Invalid memory.stat format")?;
+        }
+
+        Ok(stat)
+    }
+
     pub fn was_oom_killed(&self) -> Result<bool> {
         let mut buf = String::new();
         self.proc_cgroup_fd
@@ -269,6 +310,16 @@ impl BoxCgroup {
 
         let oom_kill = oom_kill.context("oom_kill is missing from memory.events")?;
         Ok(oom_kill > 0)
+    }
+
+    pub fn get_current_processes(&self) -> Result<usize> {
+        let mut buf = String::new();
+        self.proc_cgroup_fd
+            .open_file(format!("box-{}/cgroup.procs", self.box_id))
+            .context("Failed to open cgroup.procs for reading")?
+            .read_to_string(&mut buf)
+            .context("Failed to read cgroup.procs")?;
+        Ok(buf.lines().count())
     }
 
     fn _destroy(&mut self) -> Result<()> {
@@ -452,4 +503,12 @@ pub struct CpuStats {
     pub user: Duration,
     pub system: Duration,
     pub total: Duration,
+}
+
+#[derive(Clone, Copy)]
+pub struct MemoryStats {
+    pub anon: usize,
+    pub file: usize,
+    pub kernel: usize,
+    pub shmem: usize,
 }

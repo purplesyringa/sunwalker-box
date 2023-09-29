@@ -9,10 +9,16 @@ A == semget ? trace : next
 A == shmget ? trace : next
 A == memfd_create ? trace : next
 A == 447 ? enosys : next  # memfd_secret -- as unsafe as memfd_create, but is behind a knob, so we don't have to emulate it
+A == sysinfo ? trace : next
+A == prctl ? prctl : next
 
 # Forbid x86-32 ABI in x86-64 mode
 A &= 0x40000000
-A == 0 ? next : kill
+A == 0 ? allow : kill
+
+prctl:
+A = args[0]
+A == 26 ? skip : next  # PR_SET_TSC
 
 allow:
 return ALLOW
@@ -24,4 +30,7 @@ kill:
 return KILL
 
 enosys:
-return ERRNO(ENOSYS)
+return ERRNO(38)  # ENOSYS
+
+skip:
+return ERRNO(0)
