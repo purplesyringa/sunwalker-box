@@ -1011,7 +1011,6 @@ impl SingleRun<'_> {
             while !self.is_exceeding_limits() {
                 wait_status = self.wait_for_event()?;
                 if self.handle_event(&wait_status)? {
-                    eprintln!("break");
                     break;
                 }
                 self.update_metrics()?;
