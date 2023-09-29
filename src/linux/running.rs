@@ -259,12 +259,12 @@ impl SingleRun<'_> {
         self.main_pid = Pid::from_raw(user_process.id());
 
         // The child will either exit or trigger SIGTRAP on execve() to exec_wrapper due to ptrace
-        let wait_status =
-            wait::waitpid(self.main_pid, None).context("Failed to waitpid for process")?;
+        let wait_status = system::waitpid(Some(self.main_pid), wait::WaitPidFlag::empty())
+            .context("Failed to waitpid for process")?;
         log!("Worker has stopped on launch with {wait_status:?}");
 
         match wait_status {
-            wait::WaitStatus::Exited(_, _) => {
+            system::WaitStatus::Exited(_, _) => {
                 bail!(
                     "{}",
                     ours.recv()
@@ -272,7 +272,7 @@ impl SingleRun<'_> {
                         .context("The child terminated but did not report any error")?
                 );
             }
-            wait::WaitStatus::Stopped(_, signal::Signal::SIGTRAP) => {}
+            system::WaitStatus::Stopped(_, libc::SIGTRAP) => {}
             _ => {
                 bail!("waitpid returned unexpected status: {wait_status:?}");
             }
@@ -293,19 +293,19 @@ impl SingleRun<'_> {
         traced_process.resume()?;
 
         // The child will either exit or trigger SIGTRAP on execve() to the real program
-        let wait_status =
-            wait::waitpid(self.main_pid, None).context("Failed to waitpid for process")?;
+        let wait_status = system::waitpid(Some(self.main_pid), wait::WaitPidFlag::empty())
+            .context("Failed to waitpid for process")?;
         log!("Worker has stopped on execve with {wait_status:?}");
 
         match wait_status {
-            wait::WaitStatus::Exited(_, exit_code) => {
+            system::WaitStatus::Exited(_, exit_code) => {
                 let errno = exit_code;
                 bail!(
                     "Failed to start program with error {}",
                     std::io::Error::from_raw_os_error(errno)
                 );
             }
-            wait::WaitStatus::Stopped(_, signal::Signal::SIGTRAP) => {
+            system::WaitStatus::Stopped(_, libc::SIGTRAP) => {
                 traced_process.reload_mm()?;
                 Ok(traced_process)
             }
@@ -380,9 +380,9 @@ impl SingleRun<'_> {
             || Self::is_exceeding(self.options.memory_limit, self.results.memory)
     }
 
-    fn compute_verdict(&self, wait_status: wait::WaitStatus) -> Result<Verdict> {
+    fn compute_verdict(&self, wait_status: system::WaitStatus) -> Result<Verdict> {
         if Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time) {
-            if let wait::WaitStatus::Stopped(_, signal::Signal::SIGPROF) = wait_status {
+            if let system::WaitStatus::Stopped(_, libc::SIGPROF) = wait_status {
             } else {
                 log!(
                     warn,
@@ -419,19 +419,19 @@ impl SingleRun<'_> {
             return Ok(Verdict::MemoryLimitExceeded);
         }
         match wait_status {
-            wait::WaitStatus::Exited(_, exit_code) => Ok(Verdict::ExitCode(exit_code)),
-            wait::WaitStatus::Signaled(_, signal, _) => Ok(Verdict::Signaled(signal as i32)),
+            system::WaitStatus::Exited(_, exit_code) => Ok(Verdict::ExitCode(exit_code)),
+            system::WaitStatus::Signaled(_, signal) => Ok(Verdict::Signaled(signal)),
             _ => bail!("waitpid returned unexpected status: {wait_status:?}"),
         }
     }
 
-    fn wait_for_event(&mut self) -> Result<wait::WaitStatus> {
-        let wait_status = wait::waitpid(
+    fn wait_for_event(&mut self) -> Result<system::WaitStatus> {
+        let wait_status = system::waitpid(
             None,
-            Some(wait::WaitPidFlag::__WALL | wait::WaitPidFlag::WNOHANG),
+            system::WaitPidFlag::__WALL | system::WaitPidFlag::WNOHANG,
         )
         .context("Failed to waitpid for process")?;
-        if wait_status != wait::WaitStatus::StillAlive {
+        if wait_status != system::WaitStatus::StillAlive {
             return Ok(wait_status);
         }
 
@@ -444,7 +444,7 @@ impl SingleRun<'_> {
             .context("epoll_wait failed")?;
 
         match n_events {
-            0 => Ok(wait::WaitStatus::StillAlive),
+            0 => Ok(system::WaitStatus::StillAlive),
             1 => {
                 while self
                     .runner
@@ -454,9 +454,9 @@ impl SingleRun<'_> {
                     .is_some()
                 {}
 
-                Ok(wait::waitpid(
+                Ok(system::waitpid(
                     None,
-                    Some(wait::WaitPidFlag::__WALL | wait::WaitPidFlag::WNOHANG),
+                    system::WaitPidFlag::__WALL | system::WaitPidFlag::WNOHANG,
                 )
                 .context("Failed to waitpid for process")?)
             }
@@ -736,9 +736,7 @@ impl SingleRun<'_> {
         }
 
         log!("Delivering SIGSEGV");
-        process
-            .traced_process
-            .resume_signal(signal::Signal::SIGSEGV)?;
+        process.traced_process.resume_signal(libc::SIGSEGV)?;
         Ok(())
     }
 
@@ -746,9 +744,7 @@ impl SingleRun<'_> {
     fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
         if !self.emulate_insn(process)? {
             log!("Delivering SIGILL");
-            process
-                .traced_process
-                .resume_signal(signal::Signal::SIGILL)?;
+            process.traced_process.resume_signal(libc::SIGILL)?;
         }
 
         Ok(())
@@ -811,18 +807,18 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn _handle_event(&mut self, wait_status: wait::WaitStatus) -> Result<bool> {
-        match wait_status {
-            wait::WaitStatus::StillAlive => {}
+    fn _handle_event(&mut self, wait_status: &system::WaitStatus) -> Result<bool> {
+        match *wait_status {
+            system::WaitStatus::StillAlive => {}
 
-            wait::WaitStatus::Exited(pid, _) | wait::WaitStatus::Signaled(pid, _, _) => {
+            system::WaitStatus::Exited(pid, _) | system::WaitStatus::Signaled(pid, _) => {
                 if pid == self.main_pid {
-                    log!("Main process exitted");
+                    log!("Main process exited");
                     return Ok(true);
                 }
             }
 
-            wait::WaitStatus::Stopped(pid, signal) => {
+            system::WaitStatus::Stopped(pid, signal) => {
                 let mut process = self
                     .processes
                     .get(&pid)
@@ -830,7 +826,7 @@ impl SingleRun<'_> {
                     .borrow_mut();
 
                 match signal {
-                    signal::Signal::SIGSTOP => {
+                    libc::SIGSTOP => {
                         if process.state == ProcessState::JustStarted {
                             process.state = ProcessState::Alive;
                             self.on_after_fork(&process)?;
@@ -838,11 +834,11 @@ impl SingleRun<'_> {
                             return Ok(false);
                         }
                     }
-                    signal::Signal::SIGSEGV => {
+                    libc::SIGSEGV => {
                         self.handle_sigsegv(&mut process)?;
                         return Ok(false);
                     }
-                    signal::Signal::SIGILL => {
+                    libc::SIGILL => {
                         self.handle_sigill(&mut process)?;
                         return Ok(false);
                     }
@@ -852,7 +848,7 @@ impl SingleRun<'_> {
                 process.traced_process.resume_signal(signal)?;
             }
 
-            wait::WaitStatus::PtraceEvent(pid, _, event) => {
+            system::WaitStatus::PtraceEvent(pid, _, event) => {
                 if event == libc::PTRACE_EVENT_EXEC {
                     // We might not be aware of the given a pid. Consider the following situation:
                     // - Process with PID 2 starts a thread with PID 3
@@ -904,7 +900,7 @@ impl SingleRun<'_> {
                 }
             }
 
-            wait::WaitStatus::PtraceSyscall(pid) => {
+            system::WaitStatus::PtraceSyscall(pid) => {
                 let process = self.processes.get_mut(&pid).unwrap().get_mut();
                 process.state = ProcessState::Alive;
                 process.traced_process.resume()?;
@@ -918,7 +914,7 @@ impl SingleRun<'_> {
         Ok(false)
     }
 
-    fn handle_event(&mut self, wait_status: wait::WaitStatus) -> Result<bool> {
+    fn handle_event(&mut self, wait_status: &system::WaitStatus) -> Result<bool> {
         log!("Event {wait_status:?}");
 
         // ptrace often reports ESRCH if the process is killed before we notice that
@@ -950,9 +946,9 @@ impl SingleRun<'_> {
 
         // We don't really care what happens after, but we have to waitpid() anyway
         loop {
-            match wait::waitpid(None, Some(wait::WaitPidFlag::__WALL)) {
+            match system::waitpid(None, system::WaitPidFlag::__WALL) {
                 Ok(wait_status) => {
-                    self.handle_event(wait_status)?;
+                    self.handle_event(&wait_status)?;
                 }
                 Err(errno::Errno::ECHILD) => break,
                 Err(e) => Err(e).context("Failed to waitpid")?,
@@ -1011,10 +1007,11 @@ impl SingleRun<'_> {
         //
         // Either way, we're doing the right thing without handling SIGPROF in a special way.
         let result = try {
-            let mut wait_status = wait::WaitStatus::StillAlive;
+            let mut wait_status = system::WaitStatus::StillAlive;
             while !self.is_exceeding_limits() {
                 wait_status = self.wait_for_event()?;
-                if self.handle_event(wait_status)? {
+                if self.handle_event(&wait_status)? {
+                    eprintln!("break");
                     break;
                 }
                 self.update_metrics()?;
