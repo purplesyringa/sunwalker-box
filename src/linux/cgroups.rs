@@ -404,8 +404,6 @@ fn chown_cgroup(dir: &OpenAtDir, uid: Option<u32>, gid: Option<u32>) -> Result<(
 // This function is subject to race conditions because one cgroup can be removed by several
 // processes simultaneously. Therefore, ENOENT is not considered an error.
 fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
-    kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
-
     let dir = match parent.sub_dir(dir_name) {
         Ok(dir) => dir,
         Err(e) => {
@@ -415,6 +413,8 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
             return Err(e).with_context(|| format!("Failed to open {dir_name:?}"));
         }
     };
+
+    kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
 
     for entry in dir.list_dir(".").context("Failed to list directory")? {
         // list_self() is broken
