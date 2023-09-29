@@ -34,9 +34,6 @@ DEFAULT_ENV = {
 }
 
 
-sunwalker_prefix = []
-
-
 def parse_size(s: str) -> int:
     if " " not in s.strip():
         return int(s)
@@ -79,7 +76,7 @@ def parse_approximate_value(s: str, value_parser: Callable[[str], float]) -> tup
 
 class Box:
     def __init__(self, opts: list[str] = []):
-        self.proc = subprocess.Popen(sunwalker_prefix + ["../sunwalker_box", "start", "--core", str(
+        self.proc = subprocess.Popen(["../sunwalker_box", "start", "--core", str(
             CORE), *opts], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
 
     def __enter__(self):
@@ -540,14 +537,10 @@ class Tester:
 
 
 def main():
-    global sunwalker_prefix
-
     os.makedirs("build", exist_ok=True)
     os.makedirs("build/roots", exist_ok=True)
     os.makedirs("build/assets", exist_ok=True)
     f_makefile = open("build/Makefile", "w")
-
-    # sunwalker_prefix = ["strace", "-f"]
 
     subprocess.run(["../sunwalker_box", "isolate",
                    "--core", str(CORE)], check=True)
