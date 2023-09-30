@@ -49,6 +49,10 @@ impl Controller {
             .add_self_as_manager()
             .context("Failed to add self to manager cgroup")?;
 
+        cgroup
+            .enable_controllers()
+            .context("Failed to enable cgroup controllers")?;
+
         log!("sunwalker is now running on core {core}");
 
         self.cgroup = Some(cgroup);

@@ -22,17 +22,36 @@ Finally, sandboxes seldom prioritize efficiency. We can do much better than recr
 
 sunwalker-box supports x86-64 (AMD64) and aarch64 (ARM64) architectures and requires Linux 5.19+ on x86-64 and Linux 6.2+ on aarch64.
 
-You will need to install the following dependencies:
+Both build methods generate a `sunwalker_box` executable in the current directory. The executable is statically linked and relatively small (around a megabyte, and smaller in compressed form), so it can be copied to any Linux machine and run without requiring any additional libraries or dependencies.
 
-- Rust, with toolchain `nightly-<architecture>-unknown-linux-gnu` and target `<target>-unknown-linux-musl`
+
+### With Docker
+
+For x86-64, you can use the `Dockerfile` provided in this repository:
+
+```shell
+$ id="$(docker create "$(docker build -q .)" a)" && docker cp "$id:/sunwalker_box" sunwalker_box && docker rm "$id"
+```
+
+This generates `sunwalker_box` binary.
+
+
+### Without Docker
+
+For aarch64, or if you don't want to use Docker, you will need to install the following dependencies:
+
+- Rust, with toolchain `nightly-<architecture>-unknown-linux-gnu`, target `<target>-unknown-linux-musl`, and component `rust-src`
 - GNU make
 - GCC
 - binutils
+- Python 3
 - `musl-gcc`, provided on Ubuntu by `musl-tools`
+- `ruby`, provided on ubuntu by `ruby`
 - `gem`, provided on Ubuntu by `ruby-rubygems`
 - Ruby headers, provided on Ubuntu by `ruby-dev`
 - `seccomp-tools`, provided by `gem install seccomp-tools`
-- (aarch64 only) Linux headers, provided on Ubuntu by `linux-headers-$(uname -r)`
+- `nasm`, provided on Ubuntu by `nasm`
+- (aarch64 only) Linux headers, provided on Ubuntu by `linux-headers-$(uname -r)`,
 
 To build sunwalker-box, use:
 
@@ -40,16 +59,16 @@ To build sunwalker-box, use:
 $ make
 ```
 
-This generates a `sunwalker_box` executable in the current directory. The executable is statically linked and relatively small (around a megabyte, and smaller in compressed form), so it can be copied to any Linux machine and run without requiring any additional libraries or dependencies.
+This generates a `sunwalker_box` executable in the current directory.
 
-Cross-compilation for x86-64 is supported by passing `ARCH=x86-64` to `make`. For aarch64, sunwalker-box should be built natively on the target machine, as it includes a kernel module.
+Cross-compilation for x86-64 is supported by passing `CC=x86_64-linux-gnu-gcc` (or the corresponding cross-compiler for your Linux distribution) to `make`. For aarch64, sunwalker-box should be built natively on the target machine, as it includes a kernel module which is dependent on the exact kernel version.
 
 
 ## Using
 
 > TL;DR: Isolate the cores you want sunwalker-box to run user processes on with `sunwalker_box isolate --core {CORE}`, then start the sandbox with `sunwalker_box start --core {CORE}` (but you should add a few more options for security).
 
-Sunwalker manipulates the system configuration quite a bit, so all commands have to be run under root.
+Sunwalker manipulates the system configuration quite a bit, so all commands have to be run under root. If, for some reason, you need to run sunwalker-box in Docker (and that's very, very inefficient and makes absolutely no sense if you're spawning a container per user submission because Docker's just duplicating what sunwalker-box does, just worse), `--privileged` suffices.
 
 Firstly, reserve the cores you want sunwalker to use exclusively for running untrusted code. The preferred way to do this is to start the Linux kernel with the `isolcpus` option. If you can't or won't use `isolcpus`, sunwalker will work fine anyway, but then Linux might use the cores for kernel tasks, so the testing results might be somewhat unstable.
 
