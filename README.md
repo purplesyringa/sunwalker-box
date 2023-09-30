@@ -40,7 +40,10 @@ This generates `sunwalker_box` binary.
 
 For aarch64, or if you don't want to use Docker, you will need to install the following dependencies:
 
-- Rust, with toolchain `nightly-<architecture>-unknown-linux-gnu`, target `<target>-unknown-linux-musl`, and component `rust-src`
+- Rust, with:
+  - Toolchain `nightly-<architecture>-unknown-linux-gnu`, provided by e.g. `rustup toolchain install nightly-x86_64-unknown-linux-gnu`,
+  - Target `<target>-unknown-linux-musl`, provided by e.g. `rustup +nightly target add x86_64-unknown-linux-musl`,
+  - Component `rust-src`, provided by `rustup component add rust-src`
 - GNU make
 - GCC
 - binutils
