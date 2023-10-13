@@ -361,7 +361,9 @@ impl PreForkRun<'_> {
                 let uid = fd_stat.st_uid;
                 let gid = fd_stat.st_gid;
                 let writable = if uid == ids::INTERNAL_USER_UID {
-                    stat_mode.contains(stat::Mode::S_IWUSR)
+                    // Even if the file is not writable at the moment, the owner may change
+                    // permissions later
+                    true
                 } else if gid == ids::INTERNAL_USER_GID {
                     stat_mode.contains(stat::Mode::S_IWGRP)
                 } else {
