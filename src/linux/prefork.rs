@@ -359,7 +359,7 @@ impl PreForkRun<'_> {
                 // Assumes that UID and GID can't be changed, and ACL is not present
                 let stat_mode = stat::Mode::from_bits_truncate(fd_stat.st_mode);
                 let uid = fd_stat.st_uid;
-                let gid = fd_stat.st_uid;
+                let gid = fd_stat.st_gid;
                 let writable = if uid == ids::INTERNAL_USER_UID {
                     stat_mode.contains(stat::Mode::S_IWUSR)
                 } else if gid == ids::INTERNAL_USER_GID {
