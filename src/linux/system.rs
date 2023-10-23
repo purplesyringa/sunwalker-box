@@ -98,7 +98,6 @@ pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
     // bind-mount without specifying those same flags. Parsing mountinfo seems slow, and this case
     // isn't going to be triggered often in production anyway, so we just use the shotgun approach
     // for now, bruteforcing the flags in the order of most likeliness.
-    let mut result = Ok(());
     for flags in [
         0,
         MS_NOSUID,
@@ -109,15 +108,12 @@ pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
         MS_NOEXEC | MS_NODEV,
         MS_NOEXEC | MS_NOSUID | MS_NODEV,
     ] {
-        result = bind_mount_opt("none", path.as_ref(), MS_REMOUNT | MS_RDONLY | flags);
-        if let Err(ref e) = result {
-            if let ErrorKind::PermissionDenied = e.kind() {
-                continue;
-            }
+        match bind_mount_opt("none", path.as_ref(), MS_REMOUNT | MS_RDONLY | flags) {
+            Err(e) if e.kind() == ErrorKind::PermissionDenied => continue,
+            result => return result,
         }
-        break;
     }
-    result
+    Err(std::io::Error::last_os_error())
 }
 
 pub fn make_memfd(name: &str, contents: &[u8]) -> Result<File> {

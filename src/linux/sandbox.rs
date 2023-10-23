@@ -72,8 +72,8 @@ pub fn unshare_persistent_namespaces() -> Result<()> {
     // it disabled for now.
     //
     // The second reason is that enabling it not as easy as flicking a switch. Linux collects
-    // statistics on network interfaces, so the the network interfaces have to be re-created every
-    // time to prevent data leaks. The lo interface is unique in the way that it always exists in
+    // statistics on network interfaces, so network interfaces have to be re-created every time
+    // to prevent data leaks. The lo interface is unique in the way that it always exists in
     // the netns and can't be deleted or recreated, according to a comment in Linux kernel:
     //     The loopback device is special if any other network devices
     //     is present in a network namespace the loopback device must
@@ -166,7 +166,7 @@ pub fn create_dev_copy() -> Result<()> {
         };
         let target = format!("/dev/{name}");
         let metadata = std::fs::symlink_metadata(&source)
-            .with_context(|| format!("{source} does not exist (or oculd not be accessed)"))?;
+            .with_context(|| format!("{source} does not exist (or could not be accessed)"))?;
         if metadata.is_symlink() {
             let symlink_target = std::fs::read_link(&source)
                 .with_context(|| format!("Failed to readlink {source:?}"))?;
