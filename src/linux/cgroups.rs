@@ -13,6 +13,7 @@ use std::time::Duration;
 #[derive(Object)]
 pub struct Cgroup {
     core_cgroup_fd: OpenAtDir,
+    core: u64,
 }
 
 #[derive(Object)]
@@ -31,37 +32,18 @@ impl Cgroup {
     pub fn new(core: u64) -> Result<Self> {
         log!("Creating cgroup");
 
-        // Enabling controllers globally is necessary on some systems, e.g. WSL
-        std::fs::write(
-            "/sys/fs/cgroup/cgroup.subtree_control",
-            "+cpu +cpuset +memory +pids",
-        )
-        .context("Failed to enable cgroup controllers")?;
-
         // Create a cgroup for the core; it must be an immediate child of the root cgroup
         let dir = format!("/sys/fs/cgroup/sunwalker-box-core-{core}");
         std::fs::create_dir_all(&dir).with_context(|| format!("Failed to mkdir {dir}"))?;
-        std::fs::write(
-            format!("{dir}/cgroup.subtree_control"),
-            "+cpu +memory +pids",
-        )
-        .context("Failed to enable cgroup controllers")?;
 
         // sysfs is unavailable inside the box, so we have to acquire a file descriptor
         let core_cgroup_fd = OpenAtDir::open(&dir).context("Failed to open cgroup directory")?;
-
         chown_cgroup(
             &core_cgroup_fd,
             Some(ids::EXTERNAL_ROOT_UID),
             Some(ids::EXTERNAL_ROOT_GID),
         )
         .with_context(|| format!("Failed to chown {dir}"))?;
-
-        // Set core
-        std::fs::write(format!("{dir}/cpuset.cpus"), format!("{core}\n"))
-            .with_context(|| format!("Failed to write to {dir}/cpuset.cpus"))?;
-        std::fs::write(format!("{dir}/cpuset.cpus.partition"), "root\n")
-            .context("Failed to switch partition type to 'root'")?;
 
         // Create a cgroup for the manager
         std::fs::create_dir_all(format!("{dir}/manager"))
@@ -74,7 +56,10 @@ impl Cgroup {
             Some(ids::EXTERNAL_ROOT_GID),
         )?;
 
-        Ok(Self { core_cgroup_fd })
+        Ok(Self {
+            core_cgroup_fd,
+            core,
+        })
     }
 
     pub fn add_self_as_manager(&self) -> Result<()> {
@@ -83,6 +68,43 @@ impl Cgroup {
             .context("Failed to open cgroup.procs for writing")?
             .write(b"0\n")
             .context("Failed to move process")?;
+        Ok(())
+    }
+
+    pub fn enable_controllers(&self) -> Result<()> {
+        // Write to cgroup.subtree_control *after* moving the manager to a subgroup. This way, we
+        // handle Docker containers gracefully. Docker starts with one "root" cgroup with ourselves
+        // as the process. Due to a quirk in Linux kernel, non-root cgroups can either contain
+        // direct processes or have controllers enabled, but not both. Docker's "root" cgroup is not
+        // a root cgroup for Linux, so this limitation is established, meaning that we have to
+        // first move ourselves to a subgroup and then to enable controllers.
+
+        // Enabling controllers globally is necessary on some systems, e.g. WSL
+        std::fs::write(
+            "/sys/fs/cgroup/cgroup.subtree_control",
+            "+cpu +cpuset +memory +pids",
+        )
+        .context("Failed to enable cgroup controllers")?;
+
+        // For core
+        self.core_cgroup_fd
+            .write_file("cgroup.subtree_control", 0o700)
+            .with_context(|| format!("Failed to open cgroup.subtree_control for writing"))?
+            .write(b"+cpu +memory +pids\n")
+            .context("Failed to enable cgroup controllers")?;
+
+        // Set core
+        self.core_cgroup_fd
+            .write_file("cpuset.cpus", 0o700)
+            .with_context(|| format!("Failed to open cpuset.cpus for writing"))?
+            .write(format!("{}", self.core).as_bytes())
+            .context("Failed to set CPU")?;
+        self.core_cgroup_fd
+            .write_file("cpuset.cpus.partition", 0o700)
+            .with_context(|| format!("Failed to open cpuset.cpus.partition for writing"))?
+            .write(b"root")
+            .context("Failed to switch partition type to 'root'")?;
+
         Ok(())
     }
 
@@ -404,8 +426,6 @@ fn chown_cgroup(dir: &OpenAtDir, uid: Option<u32>, gid: Option<u32>) -> Result<(
 // This function is subject to race conditions because one cgroup can be removed by several
 // processes simultaneously. Therefore, ENOENT is not considered an error.
 fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
-    kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
-
     let dir = match parent.sub_dir(dir_name) {
         Ok(dir) => dir,
         Err(e) => {
@@ -415,6 +435,8 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
             return Err(e).with_context(|| format!("Failed to open {dir_name:?}"));
         }
     };
+
+    kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
 
     for entry in dir.list_dir(".").context("Failed to list directory")? {
         // list_self() is broken

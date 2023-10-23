@@ -1,9 +1,9 @@
+import os
 import re
 import struct
 import subprocess
-import sys
 
-_, ARCH = sys.argv
+CC = os.environ["CC"]
 
 
 # Find maximal suffix of s that is also a prefix of t
@@ -70,7 +70,7 @@ def save_table(table_name: str, table: list[tuple[str, int]]):
 
 def save_table_from_defines(table_name: str, file_name: str, regex: str):
     proc = subprocess.run(
-        [f"{ARCH}-linux-gnu-gcc", "-E", "-dM", "-"],
+        [CC, "-E", "-dM", "-"],
         input=f"#include <{file_name}>".encode(),
         check=True,
         capture_output=True
