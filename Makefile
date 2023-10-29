@@ -1,5 +1,8 @@
 ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
+CLANG := clang-16
 TARGET := $(ARCH)-unknown-linux-musl
+TARGET_FREESTANDING := $(ARCH)-unknown-none
+SYSROOT := $(shell rustc --print sysroot)
 
 SECCOMP_FILTERS := filter filter_restricted
 
@@ -9,7 +12,7 @@ ifeq ($(ARCH),aarch64)
 RUSTFLAGS += -C link-arg=-lgcc
 endif
 
-.PHONY: target/$(TARGET)/release/sunwalker_box test clean
+.PHONY: target/$(TARGET)/release/sunwalker_box target/parasite test clean
 
 all: sunwalker_box
 
@@ -17,8 +20,17 @@ sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	cp $^ $@
-target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/syscall_slave target/syscall_loop.bin target/sunwalker.ko target/syscall_table.offsets
+target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/syscall_slave target/syscall_loop.bin target/sunwalker.ko target/syscall_table.offsets target/parasite
 	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features= --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(CC)\"
+
+target/parasite: parasite/src/libc.rs
+	-rm target/$(TARGET_FREESTANDING)/release/deps/parasite*.ll
+	touch parasite/src/lib.rs
+	cd parasite && RUSTFLAGS="$(RUSTFLAGS) -C relocation-model=pie --emit llvm-ir" cargo +nightly rustc --target $(TARGET_FREESTANDING) -Z build-std=core,panic_abort --release
+	sed -i -E 's/llvm.(memcpy|memmove).p0.p0.i64/\1/g' target/$(TARGET_FREESTANDING)/release/deps/parasite*.ll
+	$(CLANG) target/$(TARGET_FREESTANDING)/release/deps/*.ll -static-pie -ffreestanding -nodefaultlibs -nostartfiles -flto -Wl,--gc-sections -Wl,-pie -T parasite/script.ld -O1 -o $@
+parasite/src/libc.rs: generate_constant_table.py
+	CC=$(CC) python3 generate_constant_table.py >$@
 
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
 	mkdir -p target && seccomp-tools asm $^ -o $@ -f raw
