@@ -1,6 +1,5 @@
+use crate::anyhow::{from_syscall_result, Result};
 use core::arch::asm;
-use core::convert::Infallible;
-use core::ops::{ControlFlow, FromResidual, Try};
 
 #[macro_export]
 macro_rules! c {
@@ -53,54 +52,9 @@ impl<T: ?Sized> Arg for *mut T {
     }
 }
 
-#[must_use]
-pub struct SyscallResult(pub isize);
-
-impl SyscallResult {
-    pub fn is_err(&self) -> bool {
-        (-4095..0).contains(&self.0)
-    }
-}
-
-impl Try for SyscallResult {
-    type Output = isize;
-    type Residual = SyscallResult;
-    fn from_output(value: isize) -> Self {
-        Self(value)
-    }
-    fn branch(self) -> ControlFlow<SyscallResult, isize> {
-        if self.is_err() {
-            ControlFlow::Break(self)
-        } else {
-            ControlFlow::Continue(self.0)
-        }
-    }
-}
-
-impl FromResidual for SyscallResult {
-    fn from_residual(value: Self) -> Self {
-        value
-    }
-}
-
-impl<T> FromResidual<SyscallResult> for Result<T, SyscallResult> {
-    fn from_residual(value: SyscallResult) -> Self {
-        Err(value)
-    }
-}
-
-impl FromResidual<Result<Infallible, SyscallResult>> for SyscallResult {
-    fn from_residual(value: Result<Infallible, SyscallResult>) -> Self {
-        match value {
-            Ok(value) => match value {},
-            Err(e) => e,
-        }
-    }
-}
-
 impl FnOnce<()> for SyscallWrapper {
-    type Output = SyscallResult;
-    extern "rust-call" fn call_once(self, _args: ()) -> SyscallResult {
+    type Output = Result<isize>;
+    extern "rust-call" fn call_once(self, _args: ()) -> Result<isize> {
         let return_value: isize;
         unsafe {
             asm!(
@@ -111,13 +65,13 @@ impl FnOnce<()> for SyscallWrapper {
                 lateout("r11") _,
             );
         }
-        SyscallResult(return_value)
+        from_syscall_result(return_value)
     }
 }
 
 impl<T1: Arg> FnOnce<(T1,)> for SyscallWrapper {
-    type Output = SyscallResult;
-    extern "rust-call" fn call_once(self, args: (T1,)) -> SyscallResult {
+    type Output = Result<isize>;
+    extern "rust-call" fn call_once(self, args: (T1,)) -> Result<isize> {
         let return_value: isize;
         unsafe {
             asm!(
@@ -129,13 +83,13 @@ impl<T1: Arg> FnOnce<(T1,)> for SyscallWrapper {
                 lateout("r11") _,
             );
         }
-        SyscallResult(return_value)
+        from_syscall_result(return_value)
     }
 }
 
 impl<T1: Arg, T2: Arg> FnOnce<(T1, T2)> for SyscallWrapper {
-    type Output = SyscallResult;
-    extern "rust-call" fn call_once(self, args: (T1, T2)) -> SyscallResult {
+    type Output = Result<isize>;
+    extern "rust-call" fn call_once(self, args: (T1, T2)) -> Result<isize> {
         let return_value: isize;
         unsafe {
             asm!(
@@ -148,13 +102,13 @@ impl<T1: Arg, T2: Arg> FnOnce<(T1, T2)> for SyscallWrapper {
                 lateout("r11") _,
             );
         }
-        SyscallResult(return_value)
+        from_syscall_result(return_value)
     }
 }
 
 impl<T1: Arg, T2: Arg, T3: Arg> FnOnce<(T1, T2, T3)> for SyscallWrapper {
-    type Output = SyscallResult;
-    extern "rust-call" fn call_once(self, args: (T1, T2, T3)) -> SyscallResult {
+    type Output = Result<isize>;
+    extern "rust-call" fn call_once(self, args: (T1, T2, T3)) -> Result<isize> {
         let return_value: isize;
         unsafe {
             asm!(
@@ -168,13 +122,13 @@ impl<T1: Arg, T2: Arg, T3: Arg> FnOnce<(T1, T2, T3)> for SyscallWrapper {
                 lateout("r11") _,
             );
         }
-        SyscallResult(return_value)
+        from_syscall_result(return_value)
     }
 }
 
 impl<T1: Arg, T2: Arg, T3: Arg, T4: Arg> FnOnce<(T1, T2, T3, T4)> for SyscallWrapper {
-    type Output = SyscallResult;
-    extern "rust-call" fn call_once(self, args: (T1, T2, T3, T4)) -> SyscallResult {
+    type Output = Result<isize>;
+    extern "rust-call" fn call_once(self, args: (T1, T2, T3, T4)) -> Result<isize> {
         let return_value: isize;
         unsafe {
             asm!(
@@ -189,13 +143,13 @@ impl<T1: Arg, T2: Arg, T3: Arg, T4: Arg> FnOnce<(T1, T2, T3, T4)> for SyscallWra
                 lateout("r11") _,
             );
         }
-        SyscallResult(return_value)
+        from_syscall_result(return_value)
     }
 }
 
 impl<T1: Arg, T2: Arg, T3: Arg, T4: Arg, T5: Arg> FnOnce<(T1, T2, T3, T4, T5)> for SyscallWrapper {
-    type Output = SyscallResult;
-    extern "rust-call" fn call_once(self, args: (T1, T2, T3, T4, T5)) -> SyscallResult {
+    type Output = Result<isize>;
+    extern "rust-call" fn call_once(self, args: (T1, T2, T3, T4, T5)) -> Result<isize> {
         let return_value: isize;
         unsafe {
             asm!(
@@ -211,15 +165,15 @@ impl<T1: Arg, T2: Arg, T3: Arg, T4: Arg, T5: Arg> FnOnce<(T1, T2, T3, T4, T5)> f
                 lateout("r11") _,
             );
         }
-        SyscallResult(return_value)
+        from_syscall_result(return_value)
     }
 }
 
 impl<T1: Arg, T2: Arg, T3: Arg, T4: Arg, T5: Arg, T6: Arg> FnOnce<(T1, T2, T3, T4, T5, T6)>
     for SyscallWrapper
 {
-    type Output = SyscallResult;
-    extern "rust-call" fn call_once(self, args: (T1, T2, T3, T4, T5, T6)) -> SyscallResult {
+    type Output = Result<isize>;
+    extern "rust-call" fn call_once(self, args: (T1, T2, T3, T4, T5, T6)) -> Result<isize> {
         let return_value: isize;
         unsafe {
             asm!(
@@ -236,6 +190,6 @@ impl<T1: Arg, T2: Arg, T3: Arg, T4: Arg, T5: Arg, T6: Arg> FnOnce<(T1, T2, T3, T
                 lateout("r11") _,
             );
         }
-        SyscallResult(return_value)
+        from_syscall_result(return_value)
     }
 }

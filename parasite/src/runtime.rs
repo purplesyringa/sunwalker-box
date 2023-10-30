@@ -9,6 +9,14 @@ fn panic(_panic: &PanicInfo<'_>) -> ! {
 #[no_mangle]
 pub extern "C" fn _start() -> ! {
     let result = main();
-    let _ = libc::exit_group(if result.is_err() { -result.0 } else { 0 });
+    match result {
+        Ok(()) => {
+            let _ = libc::exit_group(0);
+        }
+        Err(error) => {
+            let _ = error.print_to_stderr();
+            let _ = libc::exit_group(error.errno());
+        }
+    };
     core::intrinsics::abort();
 }

@@ -8,7 +8,12 @@ CC = os.environ["CC"]
 
 proc = subprocess.run(
     [CC, "-E", "-dM", "-"],
-    input="#include <errno.h>\n#include <fcntl.h>\n#include <sys/syscall.h>\n".encode(),
+    input="""
+#include <errno.h>
+#include <fcntl.h>
+#include <sys/mman.h>
+#include <sys/syscall.h>
+""".encode(),
     check=True,
     capture_output=True
 )
@@ -24,7 +29,11 @@ for line in proc.stdout.decode().splitlines():
     match = const_regex.match(line)
     if match:
         name, value = match.groups()
-        if value.isdigit() or value in defined_constants:
+        if value[0] == "-" or value[0].isdigit() or value in defined_constants:
+            if value[0] == "-":
+                value = value.rstrip("ULE") + "isize"
+            elif value[0].isdigit():
+                value = value.rstrip("ULE") + "usize as isize"
             print(f"pub const {name}: isize = {value};")
             defined_constants.add(name)
 
