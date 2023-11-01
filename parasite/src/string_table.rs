@@ -27,7 +27,9 @@ macro_rules! table {
                     let offset = data / (MAX_LENGTH + 1);
                     let length = data % (MAX_LENGTH + 1);
                     return Some(unsafe {
-                        core::str::from_utf8_unchecked(TABLE_NAMES.get_unchecked(offset..offset + length))
+                        core::str::from_utf8_unchecked(
+                            TABLE_NAMES.get_unchecked(offset..offset + length),
+                        )
                     });
                 }
             }

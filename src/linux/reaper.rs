@@ -36,6 +36,7 @@ pub enum Request {
         pid: pid_t,
         options: prefork::SuspendOptions,
         registers: tracing::Registers,
+        rseq_info: Option<prefork::RSeqInfo>,
         started: Instant,
     },
 }
@@ -324,9 +325,10 @@ fn execute_request(request: Request) -> Result<Response> {
             pid,
             options,
             registers,
+            rseq_info,
             started,
         } => {
-            prefork::Suspender::new(Pid::from_raw(pid), options, registers, started)?.suspend()?;
+            prefork::Suspender::new(Pid::from_raw(pid), options, registers, rseq_info, started)?.suspend()?;
             Ok(Response::SuspendProcess)
         }
     }

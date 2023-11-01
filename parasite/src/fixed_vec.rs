@@ -42,6 +42,10 @@ impl<T, const N: usize> FixedVec<T, N> {
         self.data.get_unchecked_mut(index).assume_init_mut()
     }
 
+    pub unsafe fn write_unchecked(&mut self, index: usize, value: T) -> &mut T {
+        self.data.get_unchecked_mut(index).write(value)
+    }
+
     pub unsafe fn slice_unchecked(&self, index: Range<usize>) -> &[T] {
         MaybeUninit::slice_assume_init_ref(self.data.get_unchecked(index))
     }
@@ -60,9 +64,29 @@ impl<T, const N: usize> FixedVec<T, N> {
         self.as_mut().as_mut_ptr_range()
     }
 
+    pub unsafe fn extend_unchecked(&mut self, values: &[T])
+    where
+        T: Clone,
+    {
+        MaybeUninit::write_slice_cloned(
+            self.data
+                .get_unchecked_mut(self.length..self.length + values.len()),
+            values,
+        );
+        self.length += values.len();
+    }
     pub unsafe fn push_unchecked(&mut self, value: T) {
         self.data.get_unchecked_mut(self.length).write(value);
         self.length += 1;
+    }
+
+    pub fn try_push(&mut self, value: T) -> Result<(), T> {
+        if self.len() < self.capacity() {
+            unsafe { self.push_unchecked(value); }
+            Ok(())
+        } else {
+            Err(value)
+        }
     }
 
     pub unsafe fn last_unchecked(&mut self) -> &mut T {
@@ -90,5 +114,11 @@ impl<T, const N: usize> Deref for FixedVec<T, N> {
 impl<T, const N: usize> DerefMut for FixedVec<T, N> {
     fn deref_mut(&mut self) -> &mut [T] {
         unsafe { self.slice_mut_unchecked(0..self.len()) }
+    }
+}
+
+impl<T: PartialEq, const N: usize> PartialEq for FixedVec<T, N> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_ref() == other.as_ref()
     }
 }

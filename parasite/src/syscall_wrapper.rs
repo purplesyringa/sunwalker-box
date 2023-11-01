@@ -1,13 +1,6 @@
 use crate::anyhow::{from_syscall_result, Result};
 use core::arch::asm;
 
-#[macro_export]
-macro_rules! c {
-    ($s:literal) => {
-        unsafe { core::ffi::CStr::from_bytes_with_nul_unchecked(concat!($s, "\0").as_bytes()) }
-    };
-}
-
 pub struct SyscallWrapper(pub isize);
 
 trait Arg {
@@ -26,7 +19,7 @@ macro_rules! impl_primitive {
     () => {};
 }
 
-impl_primitive!(isize usize i32);
+impl_primitive!(i8 u8 i16 u16 i32 u32 i64 u64 isize usize);
 
 impl<T: ?Sized> Arg for &T {
     fn into_isize(self) -> isize {

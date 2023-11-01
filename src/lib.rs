@@ -3,6 +3,7 @@
     generic_const_exprs,
     io_error_more,
     never_type,
+    offset_of,
     slice_group_by,
     try_blocks,
     unwrap_infallible

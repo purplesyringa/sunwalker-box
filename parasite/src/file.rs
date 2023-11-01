@@ -6,7 +6,7 @@ use crate::{
 use core::ffi::CStr;
 
 pub struct File {
-    fd: isize,
+    fd: i32,
 }
 
 pub struct BufReader<'a> {
@@ -20,8 +20,24 @@ pub struct LineIterator<'a> {
 
 impl File {
     pub fn open(path: &CStr) -> Result<Self> {
-        let fd = libc::open(path, libc::O_RDONLY | libc::O_CLOEXEC)?;
+        let fd = libc::open(path, libc::O_RDONLY | libc::O_CLOEXEC)? as i32;
         Ok(Self { fd })
+    }
+
+    pub fn as_raw_fd(&self) -> i32 {
+        self.fd
+    }
+
+    pub fn read_into<const N: usize>(&self, buf: &mut FixedVec<u8, N>) -> Result<()> {
+        let n_read = libc::read(
+            self.fd,
+            buf.as_mut_ptr(),
+            buf.capacity(),
+        )?;
+        unsafe {
+            buf.set_len(n_read as usize);
+        }
+        Ok(())
     }
 }
 

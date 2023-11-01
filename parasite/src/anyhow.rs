@@ -1,3 +1,4 @@
+use crate::types::iovec;
 use crate::fixed_vec::FixedVec;
 use crate::libc;
 use crate::string_table::errno_to_name;
@@ -10,12 +11,6 @@ pub trait Context {
 pub struct Error {
     errno: isize,
     context: FixedVec<&'static str, 8>,
-}
-
-#[repr(C)]
-struct iovec {
-    iov_base: *const u8,
-    iov_len: usize,
 }
 
 impl Error {
@@ -38,7 +33,7 @@ impl Error {
     }
 
     pub fn print_to_stderr(&self) -> Result<()> {
-        let mut iov: FixedVec<iovec, {8 * 2 + 3}> = FixedVec::new();
+        let mut iov: FixedVec<iovec, { 8 * 2 + 3 }> = FixedVec::new();
         unsafe {
             match self.errno.try_into().ok().and_then(errno_to_name) {
                 Some(name) => {
@@ -127,4 +122,23 @@ impl<T> Context for Option<T> {
     fn context(self, message: &'static str) -> Result<T> {
         self.ok_or(Error::custom(libc::ENOENT, message))
     }
+}
+
+#[macro_export]
+macro_rules! bail {
+    ($description:expr) => {
+        return Err(crate::anyhow::Error::custom(
+            crate::libc::EINVAL,
+            $description,
+        ));
+    };
+}
+
+#[macro_export]
+macro_rules! ensure {
+    ($expr:expr, $description:expr) => {
+        if !$expr {
+            crate::bail!($description);
+        }
+    };
 }

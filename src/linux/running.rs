@@ -143,7 +143,8 @@ impl Runner {
     ) -> Result<Self> {
         log!("Initializing runner");
 
-        let stdio_subst = File::open("/stdiosubst").context("Failed to open /stdiosubst")?;
+        // let stdio_subst = File::open("/stdiosubst").context("Failed to open /stdiosubst")?;
+        let stdio_subst = File::open("/oldroot/dev/pts/0").context("Failed to open /stdiosubst")?;
 
         // Mount procfs and enter the sandboxed root
         let timens_controller = timens::TimeNsController::new().context("Failed to adjust time")?;
