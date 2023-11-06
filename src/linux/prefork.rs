@@ -5,7 +5,7 @@ use crate::{
 use anyhow::{anyhow, bail, Context, Result};
 use crossmist::Object;
 use nix::{
-    fcntl, libc,
+    libc,
     libc::{dev_t, off_t},
     sys::{ptrace, signal, stat, wait},
     unistd,
@@ -14,7 +14,7 @@ use nix::{
 use std::cell::{Cell, RefCell};
 use std::ffi::CStr;
 use std::fs::File;
-use std::os::fd::{AsRawFd, OwnedFd, RawFd};
+use std::os::fd::{AsRawFd, RawFd};
 use std::time::Instant;
 
 pub struct PreForkManager {
@@ -80,9 +80,6 @@ struct ParasiteStartInformation {
     prog_size: usize,
     rseq_info: Option<RSeqInfo>,
 }
-
-const SUSPENDER_PIDFD_FIXED_FD: RawFd = 1;
-// const ORIG_VM_FIXED_FD: RawFd = 2;
 
 struct ParasiteInfo {
     prog_size: usize,
@@ -529,13 +526,9 @@ impl Suspender {
     fn start_master(&mut self) -> Result<tracing::TracedProcess> {
         log!("Starting master copy");
 
-        // Pass pidfd to self
-        let pidfd =
-            system::open_pidfd(nix::unistd::getpid()).context("Failed to get pidfd of self")?;
-
         let (theirs, mut ours) = crossmist::channel().context("Failed to create a pipe")?;
         let master_process = prefork_master
-            .spawn(theirs, pidfd)
+            .spawn(theirs)
             .context("Failed to spawn the child")?;
         let master_pid = Pid::from_raw(master_process.id());
 
@@ -748,22 +741,10 @@ impl Suspender {
 }
 
 #[crossmist::func]
-fn prefork_master(mut pipe: crossmist::Sender<String>, suspender_pidfd: OwnedFd) {
+fn prefork_master(mut pipe: crossmist::Sender<String>) {
     let result: Result<()> = try {
         // We don't want to bother about emulating setsid() in userspace fork, so use it by default
         nix::unistd::setsid().context("Failed to setsid")?;
-
-        // Disable CLOEXEC for suspender_pidfd, as we want the syscall slave to use it. Also, we
-        // want a fixed fd.
-        unistd::dup2(suspender_pidfd.as_raw_fd(), SUSPENDER_PIDFD_FIXED_FD)
-            .context("Failed to dup2 suspender_pidfd")?;
-        let mut flags = fcntl::FdFlag::from_bits_truncate(
-            fcntl::fcntl(SUSPENDER_PIDFD_FIXED_FD, fcntl::FcntlArg::F_GETFD)
-                .expect("Failed to F_GETFD"),
-        );
-        flags &= !fcntl::FdFlag::FD_CLOEXEC;
-        fcntl::fcntl(SUSPENDER_PIDFD_FIXED_FD, fcntl::FcntlArg::F_SETFD(flags))
-            .expect("Failed to F_SETFD");
 
         // memfd should be created before applying seccomp filter
         let parasite = system::make_memfd("parasite", PARASITE_ELF)?;
