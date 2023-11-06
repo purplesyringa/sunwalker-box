@@ -1,7 +1,7 @@
-use crate::types::iovec;
 use crate::fixed_vec::FixedVec;
 use crate::libc;
 use crate::string_table::errno_to_name;
+use crate::types::iovec;
 
 pub trait Context {
     type Target;
@@ -130,7 +130,7 @@ macro_rules! bail {
         return Err(crate::anyhow::Error::custom(
             crate::libc::EINVAL,
             $description,
-        ));
+        ))
     };
 }
 

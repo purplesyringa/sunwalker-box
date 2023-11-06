@@ -1,4 +1,4 @@
-use crate::{libc, anyhow::Result};
+use crate::{anyhow::Result, libc};
 use core::panic::PanicInfo;
 
 #[panic_handler]
@@ -7,11 +7,10 @@ fn panic(_panic: &PanicInfo<'_>) -> ! {
 }
 
 #[no_mangle]
-static STACK: [u8; 40960] = [0u8; 40960];
+static STACK: [u8; 32 * 4096] = [0u8; 32 * 4096];
 
 #[no_mangle]
-pub fn go(action: fn() -> Result<()>) -> ! {
-    let result = action();
+pub fn go(result: &Result<()>) -> ! {
     match result {
         Ok(()) => {
             let _ = libc::exit_group(0);

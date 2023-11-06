@@ -31,6 +31,10 @@ impl<T, const N: usize> FixedVec<T, N> {
         self.length = length;
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.length == 0
+    }
+
     pub fn capacity(&self) -> usize {
         self.data.len()
     }
@@ -82,7 +86,9 @@ impl<T, const N: usize> FixedVec<T, N> {
 
     pub fn try_push(&mut self, value: T) -> Result<(), T> {
         if self.len() < self.capacity() {
-            unsafe { self.push_unchecked(value); }
+            unsafe {
+                self.push_unchecked(value);
+            }
             Ok(())
         } else {
             Err(value)

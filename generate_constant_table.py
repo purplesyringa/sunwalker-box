@@ -16,6 +16,7 @@ proc = subprocess.run(
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
+#include <time.h>
 """.encode(),
     check=True,
     capture_output=True

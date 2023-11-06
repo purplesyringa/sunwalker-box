@@ -1,4 +1,4 @@
-use crate::{libc, anyhow::Result};
+use crate::{anyhow::Result, libc};
 
 const ARCH_SET_GS: i32 = 0x1001;
 const ARCH_SET_FS: i32 = 0x1002;

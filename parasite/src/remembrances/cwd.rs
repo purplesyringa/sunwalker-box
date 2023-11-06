@@ -1,7 +1,7 @@
-use crate::{util, libc,entry::START_INFORMATION, anyhow::Result};
+use crate::{anyhow::Result, entry::START_INFORMATION, format, libc};
 
 pub fn in_master() -> Result<()> {
-    let cwd = util::format_proc_path(Some(unsafe { START_INFORMATION.orig_pid }), b"/cwd");
+    let cwd = format!(b"/proc/", unsafe { START_INFORMATION.orig_pid }, b"/cwd\0");
     libc::chdir(cwd.as_ref())?;
     Ok(())
 }

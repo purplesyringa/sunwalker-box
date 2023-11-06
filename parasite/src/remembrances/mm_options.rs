@@ -1,4 +1,10 @@
-use crate::{c, file, libc, fixed_vec::FixedVec, anyhow::{Context, Result}, util::from_str_radix};
+use crate::{
+    anyhow::{Context, Result},
+    c, file,
+    fixed_vec::FixedVec,
+    libc,
+    util::from_str_radix,
+};
 
 #[repr(C)]
 pub struct prctl_mm_map {
@@ -22,9 +28,13 @@ pub fn in_orig() -> Result<prctl_mm_map> {
     let file = file::File::open(c!("/proc/self/stat")).context("Failed to open /proc/self/stat")?;
 
     let mut buf: FixedVec<u8, 1024> = FixedVec::new();
-    file.read_into(&mut buf).context("Failed to read /proc/self/stat")?;
+    file.read_into(&mut buf)
+        .context("Failed to read /proc/self/stat")?;
 
-    let pos = buf.iter().rposition(|&c| c == b')').context("Invalid stat format")?;
+    let pos = buf
+        .iter()
+        .rposition(|&c| c == b')')
+        .context("Invalid stat format")?;
     let mut fields = buf[pos..].split(|&c| c == b' ').skip(2);
 
     for _ in 0..22 {
@@ -63,6 +73,12 @@ pub fn in_orig() -> Result<prctl_mm_map> {
 }
 
 pub fn in_master(map: prctl_mm_map) -> Result<()> {
-    libc::prctl(libc::PR_SET_MM, libc::PR_SET_MM_MAP, &map, core::mem::size_of_val(&map), 0)?;
+    libc::prctl(
+        libc::PR_SET_MM,
+        libc::PR_SET_MM_MAP,
+        &map,
+        core::mem::size_of_val(&map),
+        0,
+    )?;
     Ok(())
 }

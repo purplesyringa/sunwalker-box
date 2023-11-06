@@ -1,4 +1,4 @@
-use crate::{libc, anyhow::Result};
+use crate::{anyhow::Result, libc};
 
 #[repr(C)]
 struct itimerval {

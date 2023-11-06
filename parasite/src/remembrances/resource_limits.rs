@@ -1,4 +1,4 @@
-use crate::{libc, entry::START_INFORMATION, anyhow::Result};
+use crate::{anyhow::Result, entry::START_INFORMATION, libc};
 
 #[repr(C)]
 struct rlimit {
@@ -51,7 +51,12 @@ pub fn in_master() -> Result<()> {
             rlim_cur: 0,
             rlim_max: 0,
         };
-        libc::prlimit64(unsafe { START_INFORMATION.orig_pid }, resource, 0, &mut limit)?;
+        libc::prlimit64(
+            unsafe { START_INFORMATION.orig_pid },
+            resource,
+            0,
+            &mut limit,
+        )?;
         libc::prlimit64(0, resource, &limit, 0)?;
     }
 

@@ -1,25 +1,21 @@
 use crate::{
-    linux::{ids, reaper, sandbox, system, timens, tracing, rootfs},
+    linux::{ids, reaper, rootfs, sandbox, system, timens, tracing},
     log,
 };
-use anyhow::{anyhow, bail, ensure, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use crossmist::Object;
 use nix::{
     fcntl, libc,
-    libc::{c_void, dev_t, itimerval, off_t, stack_t},
+    libc::{dev_t, off_t},
     sys::{ptrace, signal, stat, wait},
     unistd,
     unistd::Pid,
 };
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::ffi::CStr;
 use std::fs::File;
-use std::ops::Range;
 use std::os::fd::{AsRawFd, OwnedFd, RawFd};
 use std::time::Instant;
-
-use super::tracing::MemoryMap;
 
 pub struct PreForkManager {
     stdio_subst: File,
@@ -54,7 +50,6 @@ pub struct Suspender {
     parasite_location: usize,
     registers: tracing::Registers,
     rseq_info: Option<RSeqInfo>,
-    on_after_fork_syscalls: Vec<[usize; 7]>,
     started: Instant,
 }
 
@@ -79,7 +74,7 @@ struct prctl_mm_map {
 
 #[repr(C)]
 struct ParasiteStartInformation {
-    orig_pid: i32,
+    orig_pid: u32,
     relocate_from: usize,
     relocate_to: usize,
     prog_size: usize,
@@ -264,14 +259,19 @@ impl PreForkRun<'_> {
         // Check if IP is inside a restartable sequence. If it is, the kernel might jump to the
         // abort handler when we don't expect that to happen. Prevent this by resetting the
         // information about the critical section, if present.
-        let rseq = orig.get_rseq_configuration().context("Failed to get rseq configuration")?;
+        let rseq = orig
+            .get_rseq_configuration()
+            .context("Failed to get rseq configuration")?;
         if rseq.rseq_abi_size == 0 {
             return Ok(None);
         }
         let rseq_cs_ptr = rseq.rseq_abi_pointer as usize + std::mem::offset_of!(rseq_abi, rseq_cs);
-        let rseq_cs = orig.read_word(rseq_cs_ptr).context("Failed to read rseq CS pointer")?;
+        let rseq_cs = orig
+            .read_word(rseq_cs_ptr)
+            .context("Failed to read rseq CS pointer")?;
         if rseq_cs != 0 {
-            orig.write_word(rseq_cs_ptr, 0).context("Failed to override rseq CS pointer to 0")?;
+            orig.write_word(rseq_cs_ptr, 0)
+                .context("Failed to override rseq CS pointer to 0")?;
         }
         Ok(Some(RSeqInfo {
             rseq_abi_pointer: rseq.rseq_abi_pointer as usize,
@@ -483,7 +483,6 @@ impl Suspender {
             parasite_location: 0,
             registers,
             rseq_info,
-            on_after_fork_syscalls: Vec::new(),
             started,
         })
     }
@@ -505,7 +504,7 @@ impl Suspender {
         // Find a location unused in both processes where we can safely map the syscall instruction
         // in the new process
         let memory_maps = self.orig.get_memory_maps()?;
-        let mut master_memory_maps = self.master.as_ref().unwrap().get_memory_maps()?;
+        let master_memory_maps = self.master.as_ref().unwrap().get_memory_maps()?;
         self.parasite_location = self
             .find_location_for_parasite(&memory_maps, &master_memory_maps)
             .context("Failed to find location for syscall page")?;
@@ -518,75 +517,14 @@ impl Suspender {
         self.teleport_parasite_to_master(&master_memory_maps)
             .context("Failed to teleport parasite to master")?;
 
-        let wait_status =
-            wait::waitpid(self.master.as_ref().unwrap().get_pid(), None).context("Failed to waitpid for process")?;
+        let wait_status = wait::waitpid(self.master.as_ref().unwrap().get_pid(), None)
+            .context("Failed to waitpid for master")?;
         eprintln!("{wait_status:?}");
-
-        // // Unmap everything but [vsyscall], which cannot be unmapped (and we don't want to unmap it
-        // // anyway, as it is located at the same address in every process), and the syscall page
-        // self.unmap_garbage_in_slave(&slave_memory_maps)?;
-
-        // // Copy all state
-        // self.copy_maps(&memory_maps)
-        //     .context("Failed to copy maps")?;
-        // self.copy_thp_options()
-        //     .context("Failed to copy transparent huge pages options")?;
-        // self.copy_mm_options()
-        //     .context("Failed to copy mm options")?;
-        // self.copy_cwd().context("Failed to copy cwd")?;
-        // self.copy_umask().context("Failed to copy umask")?;
-        // self.copy_tid_address()
-        //     .context("Failed to copy tid address")?;
-        // self.copy_sigaltstack()
-        //     .context("Failed to copy sigaltstack")?;
-        // self.copy_arch_prctl_options()
-        //     .context("Failed to copy arch_prctl options")?;
-        // self.copy_personality()
-        //     .context("Failed to copy personality")?;
-        // self.copy_resource_limits()
-        //     .context("Failed to copy resource limits")?;
-        // self.copy_robust_list()
-        //     .context("Failed to copy robust futex list")?;
-        // self.copy_itimers()
-        //     .context("Failed to copy interval timers")?;
-        // self.copy_rseq()
-        //     .context("Failed to copy restartable sequence")?;
-        // self.copy_fds().context("Failed to copy file descriptors")?;
-        // self.copy_timers().context("Failed to copy timers")?;
-        // self.copy_signal_handlers()
-        //     .context("Failed to copy signal handlers")?;
-        // self.copy_signal_mask()
-        //     .context("Failed to copy signal mask")?;
 
         log!("Suspend finished in {:?}", self.started.elapsed());
 
-        // proc.runner.
         Ok(())
     }
-
-    // fn add_syscall_page(proc: &mut tracing::TracedProcess, location: usize) -> Result<()> {
-    //     // mmap an rwx page
-    //     proc.exec_syscall(
-    //         (
-    //             libc::SYS_mmap,
-    //             location,
-    //             4096,
-    //             libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
-    //             libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | libc::MAP_FIXED,
-    //             -1,
-    //             0,
-    //         ),
-    //         false,
-    //     )
-    //     .context("Failed to mmap syscall page")?;
-
-    //     // Configure syscall page
-    //     proc.write_memory(location, include_bytes!("../../target/syscall_loop.bin"))
-    //         .context("Failed to write syscall page")?;
-    //     proc.set_instruction_pointer(location)?;
-
-    //     Ok(())
-    // }
 
     fn start_master(&mut self) -> Result<tracing::TracedProcess> {
         log!("Starting master copy");
@@ -699,7 +637,7 @@ impl Suspender {
         self.orig.set_registers(regs);
 
         let start_information = ParasiteStartInformation {
-            orig_pid: self.orig.get_pid().as_raw(),
+            orig_pid: self.orig.get_pid().as_raw() as u32,
             relocate_from: 0,
             relocate_to: self.parasite_location,
             prog_size: PARASITE_INFO.prog_size,
@@ -763,7 +701,7 @@ impl Suspender {
         Ok(())
     }
 
-    fn teleport_parasite_to_master(&mut self, memory_maps: &[MemoryMap]) -> Result<()> {
+    fn teleport_parasite_to_master(&mut self, memory_maps: &[tracing::MemoryMap]) -> Result<()> {
         log!("Initializing parasite in master");
         let current_parasite_map = memory_maps
             .iter()
@@ -771,7 +709,7 @@ impl Suspender {
             .context("Could not find current parasite mapping")?;
         log!("Current base is 0x{:x}", current_parasite_map.base);
         let start_information = ParasiteStartInformation {
-            orig_pid: self.orig.get_pid().as_raw(),
+            orig_pid: self.orig.get_pid().as_raw() as u32,
             relocate_from: current_parasite_map.base,
             relocate_to: self.parasite_location,
             prog_size: current_parasite_map.end - current_parasite_map.base,
@@ -807,220 +745,6 @@ impl Suspender {
 
         Ok(())
     }
-
-    // fn slave_syscall<Args: tracing::SyscallArgs>(&mut self, args: Args) -> Result<isize>
-    // where
-    //     [(); Args::N]:,
-    // {
-    //     self.slave.as_mut().unwrap().exec_syscall(args, false)
-    // }
-
-    // fn slave_syscall_after_fork<Args: tracing::SyscallArgs>(&mut self, args: Args)
-    // where
-    //     [(); Args::N]:,
-    // {
-    //     let mut ext_args = [0; 7];
-    //     ext_args[..Args::N].copy_from_slice(&args.to_usize_slice());
-    //     self.on_after_fork_syscalls.push(ext_args)
-    // }
-
-    // fn copy_fds(&mut self) -> Result<()> {
-    //     log!("Copying file descriptors");
-
-    //     let orig_pidfd = system::open_pidfd(self.orig.get_pid())
-    //         .context("Failed to get pidfd of the original process")?;
-
-    //     for orig_fd in self.orig.list_fds()? {
-    //         if orig_fd < 3 {
-    //             continue;
-    //         }
-
-    //         let fd_info = self.orig.get_fd_info(orig_fd)?;
-
-    //         let slave_fd;
-
-    //         if let Some(count) = fd_info.get("eventfd-count") {
-    //             // Clone an eventfd
-    //             let count: u32 = count.parse().context("'eventfd-count' is not a number")?;
-    //             let mut flags = i32::from_str_radix(
-    //                 fd_info
-    //                     .get("flags")
-    //                     .context("'flags' missing from an eventfd fdinfo")?,
-    //                 16,
-    //             )
-    //             .context("'flags' is not a hexadecimal number")?;
-    //             flags &= !libc::O_ACCMODE;
-    //             // FIXME: move this to after fork
-    //             slave_fd = self.slave_syscall((libc::SYS_eventfd, count, flags))? as RawFd;
-    //         } else {
-    //             // Clone a normal fd
-    //             let fd = system::pidfd_getfd(orig_pidfd.as_raw_fd(), orig_fd)?;
-    //             slave_fd = self.slave_syscall((
-    //                 libc::SYS_pidfd_getfd,
-    //                 SUSPENDER_PIDFD_FIXED_FD,
-    //                 fd.as_raw_fd(),
-    //                 0,
-    //             ))? as RawFd;
-    //             // FIXME: this should open another file description
-    //         }
-
-    //         // Make the two fds match
-    //         ensure!(slave_fd <= orig_fd, "Unexpected allocated fd");
-    //         if slave_fd < orig_fd {
-    //             self.slave_syscall((libc::SYS_dup2, slave_fd, orig_fd))?;
-    //             self.slave_syscall((libc::SYS_close, slave_fd))?;
-    //         }
-
-    //         eprintln!("{orig_fd} {slave_fd}");
-    //     }
-
-    //     Ok(())
-    // }
-
-    // fn copy_timers(&mut self) -> Result<()> {
-    //     log!("Copying timers");
-
-    //     let mut timers = self.orig.get_timers()?;
-    //     timers.sort_unstable_by_key(|timer| timer.id);
-
-    //     let mut next_timer_id = 0;
-
-    //     let mut add_timer = |timer: &tracing::Timer| -> Result<()> {
-    //         // Fucking libc
-    //         let mut sigevent: libc::sigevent = unsafe { std::mem::zeroed() };
-    //         sigevent.sigev_notify = timer.notify.0;
-    //         sigevent.sigev_signo = timer.signal;
-    //         sigevent.sigev_value.sival_ptr = timer.sigev_value as *mut _;
-    //         sigevent.sigev_notify_thread_id = timer.notify.1.as_raw();
-    //         self.slave.as_ref().unwrap().write_memory(
-    //             self.parasite_location + 128,
-    //             unsafe {
-    //                 &std::mem::transmute::<
-    //                     libc::sigevent,
-    //                     [u8; std::mem::size_of::<libc::sigevent>()],
-    //                 >(sigevent)
-    //             },
-    //         )?;
-    //         self.slave
-    //             .as_ref()
-    //             .unwrap()
-    //             .write_word(self.parasite_location + 256, 0)?;
-    //         self.slave_syscall((
-    //             libc::SYS_timer_create,
-    //             timer.clock_id,
-    //             self.parasite_location + 128,
-    //             self.parasite_location + 256,
-    //         ))?;
-    //         let timer_id = self
-    //             .slave
-    //             .as_ref()
-    //             .unwrap()
-    //             .read_word(self.parasite_location + 256)? as i32;
-    //         if timer.id != timer_id {
-    //             bail!(
-    //                 "Expected to create timer #{} actually created #{timer_id}",
-    //                 timer.id
-    //             );
-    //         }
-    //         Ok(())
-    //     };
-
-    //     for timer in &timers {
-    //         while timer.id > next_timer_id {
-    //             // Create a temporary unused timer to fill the void so that our timer gets the right
-    //             // ID
-    //             add_timer(&tracing::Timer {
-    //                 id: next_timer_id,
-    //                 signal: 0,
-    //                 sigev_value: 0,
-    //                 notify: (libc::SIGEV_NONE, Pid::from_raw(0)),
-    //                 clock_id: libc::CLOCK_REALTIME,
-    //             })?;
-    //             next_timer_id += 1;
-    //         }
-    //         add_timer(&timer)?;
-    //         next_timer_id += 1;
-    //     }
-
-    //     // Remove temporary timers
-    //     next_timer_id = 0;
-    //     for timer in timers {
-    //         while timer.id > next_timer_id {
-    //             // Create a temporary unused timer to fill the void so that our timer gets the right
-    //             // ID
-    //             self.slave_syscall((libc::SYS_timer_delete, next_timer_id))?;
-    //             next_timer_id += 1;
-    //         }
-    //         next_timer_id += 1;
-    //     }
-
-    //     Ok(())
-    // }
-
-    // fn copy_signal_handlers(&mut self) -> Result<()> {
-    //     log!("Copying signal handlers");
-
-    //     for signum in 1..=64 {
-    //         if signum == libc::SIGKILL || signum == libc::SIGSTOP {
-    //             continue;
-    //         }
-
-    //         self.orig.exec_syscall(
-    //             (
-    //                 libc::SYS_rt_sigaction,
-    //                 signum,
-    //                 0,
-    //                 self.parasite_location + 128,
-    //                 8,
-    //             ),
-    //             false,
-    //         )?;
-    //         let mut action = [0u8; std::mem::size_of::<libc::sigaction>()];
-    //         self.orig
-    //             .read_memory(self.parasite_location + 128, &mut action)?;
-    //         self.slave
-    //             .as_ref()
-    //             .unwrap()
-    //             .write_memory(self.parasite_location + 128, &action)?;
-    //         self.slave_syscall((
-    //             libc::SYS_rt_sigaction,
-    //             signum,
-    //             self.parasite_location + 128,
-    //             0,
-    //             8,
-    //         ))?;
-    //     }
-
-    //     Ok(())
-    // }
-
-    // fn copy_signal_mask(&mut self) -> Result<()> {
-    //     log!("Copying signal mask");
-
-    //     self.orig.exec_syscall(
-    //         (
-    //             libc::SYS_rt_sigprocmask,
-    //             libc::SIG_BLOCK,
-    //             0,
-    //             self.parasite_location + 128,
-    //             8,
-    //         ),
-    //         false,
-    //     )?;
-    //     let sigset = self.orig.read_word(self.parasite_location + 128)?;
-    //     self.slave
-    //         .as_ref()
-    //         .unwrap()
-    //         .write_word(self.parasite_location + 128, sigset)?;
-    //     self.slave_syscall((
-    //         libc::SYS_rt_sigprocmask,
-    //         libc::SIG_SETMASK,
-    //         self.parasite_location + 128,
-    //         0,
-    //         8,
-    //     ))?;
-    //     Ok(())
-    // }
 }
 
 #[crossmist::func]

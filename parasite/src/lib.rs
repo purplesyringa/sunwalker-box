@@ -1,4 +1,5 @@
 #![feature(
+    byte_slice_trim_ascii,
     concat_bytes,
     core_intrinsics,
     error_in_core,
@@ -9,6 +10,7 @@
     maybe_uninit_write_slice,
     never_type,
     slice_index_methods,
+    slice_swap_unchecked,
     try_trait_v2,
     unboxed_closures
 )]
@@ -19,6 +21,7 @@ mod anyhow;
 pub mod entry;
 mod file;
 mod fixed_vec;
+mod format;
 mod libc;
 mod remembrances;
 pub mod runtime;

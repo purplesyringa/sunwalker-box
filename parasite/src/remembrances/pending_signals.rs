@@ -2,7 +2,7 @@ use crate::{anyhow::Result, ensure, libc};
 
 pub fn in_orig() -> Result<()> {
     // TODO: we'd better remove this restriction
-    let mut sigset = 0usize;
+    let mut sigset = 0u64;
     libc::rt_sigpending(&mut sigset, 8)?;
     ensure!(
         sigset == 0,

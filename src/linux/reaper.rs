@@ -328,7 +328,8 @@ fn execute_request(request: Request) -> Result<Response> {
             rseq_info,
             started,
         } => {
-            prefork::Suspender::new(Pid::from_raw(pid), options, registers, rseq_info, started)?.suspend()?;
+            prefork::Suspender::new(Pid::from_raw(pid), options, registers, rseq_info, started)?
+                .suspend()?;
             Ok(Response::SuspendProcess)
         }
     }

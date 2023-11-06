@@ -1,12 +1,13 @@
-use core::ffi::CStr;
 use crate::{
-    util::{format_proc_path, from_str_radix},
+    anyhow::{Context, Error, Result},
+    ensure,
     entry::START_INFORMATION,
-    anyhow::{Context, Result, Error},
-    ensure, file,
+    file,
     fixed_vec::FixedVec,
-    libc,
+    format, libc,
+    util::from_str_radix,
 };
+use core::ffi::CStr;
 
 #[derive(PartialEq)]
 enum SegmentType {
@@ -18,7 +19,7 @@ enum SegmentType {
 }
 
 struct MemoryMap<'a> {
-    pid: Option<i32>,
+    pid: Option<u32>,
     base_str: &'a [u8],
     end_str: &'a [u8],
     prot: isize,
@@ -50,15 +51,18 @@ impl MemoryMap<'_> {
     }
 
     fn get_map_files_path(&self) -> FixedVec<u8, 61> {
-        let mut path = format_proc_path(self.pid, &concat_bytes!(b"/map_files/", [0u8; 33]));
-        unsafe {
-            path.set_len(path.len() - 34);
-            path.extend_unchecked(self.base_str);
-            path.push_unchecked(b'-');
-            path.extend_unchecked(self.end_str);
-            path.push_unchecked(b'\0');
-        }
-        path
+        format!(
+            b"/proc/",
+            {either} match self.pid {
+                Some(pid) => Left(pid),
+                None => Right(b"self"),
+            },
+            b"/map_files/",
+            {<= 16} self.base_str,
+            b"-",
+            {<= 16} self.end_str,
+            b"\0",
+        )
     }
 }
 
@@ -77,7 +81,7 @@ pub struct Saved {
 pub fn in_master() -> Result<Saved> {
     unmap_garbage()?;
 
-    let mem_path = format_proc_path(Some(unsafe { START_INFORMATION.orig_pid }), b"/mem");
+    let mem_path = format!(b"/proc/", unsafe { START_INFORMATION.orig_pid }, b"/mem\0");
     let mem_path = unsafe { CStr::from_bytes_with_nul_unchecked(&mem_path) };
     let mem = file::File::open(mem_path).context("Failed to open /proc/pid/mem")?;
 
@@ -126,20 +130,22 @@ pub fn in_master() -> Result<Saved> {
             // we have disabled memfd_create() in prefork mode, so that doesn't bother us.
 
             // TODO: handle non-zero offset
-            shared_mappings.try_push(SavedMapping {
-                base,
-                end,
-                prot: map.prot,
-            })
+            shared_mappings
+                .try_push(SavedMapping {
+                    base,
+                    end,
+                    prot: map.prot,
+                })
                 .map_err(|_| Error::custom(libc::ENOMEM, "Too many shared mappings"))?;
         } else {
             let mut flags = libc::MAP_FIXED_NOREPLACE | libc::MAP_PRIVATE;
             if map.segment_type == SegmentType::Stack {
-                // FIXME: This assumes that a) only [stack] uses MAP_GROWSDOWN, b) no one has disabled
-                // MAP_GROWSDOWN on [stack]. This is the case for most runtimes, but is horrendously
-                // broken. We should parse /proc/<pid>/smaps instead. The same applies to MAP_STACK.
-                // Also, they say that MAP_GROWSDOWN'ing a new page is not quite the same thing as what
-                // the kernel does when allocating the main stack, so we should figure that out.
+                // FIXME: This assumes that a) only [stack] uses MAP_GROWSDOWN, b) no one has
+                // disabled MAP_GROWSDOWN on [stack]. This is the case for most runtimes, but is
+                // horrendously broken. We should parse /proc/<pid>/smaps instead. The same applies
+                // to MAP_STACK. Also, they say that MAP_GROWSDOWN'ing a new page is not quite the
+                // same thing as what the kernel does when allocating the main stack, so we should
+                // figure that out.
                 flags |= libc::MAP_GROWSDOWN | libc::MAP_STACK;
             }
 
@@ -180,18 +186,15 @@ pub fn in_master() -> Result<Saved> {
             // Don't grant PROT_EXEC before dropping permissions so that we don't accidentally
             // execute user code under real root. Oof.
             if map.prot & !libc::PROT_EXEC != libc::PROT_READ | libc::PROT_WRITE {
-                libc::mprotect(
-                    base,
-                    end - base,
-                    map.prot & !libc::PROT_EXEC,
-                )?;
+                libc::mprotect(base, end - base, map.prot & !libc::PROT_EXEC)?;
             }
             if map.prot & libc::PROT_EXEC != 0 {
-                executable_mappings.try_push(SavedMapping {
-                    base,
-                    end,
-                    prot: map.prot,
-                })
+                executable_mappings
+                    .try_push(SavedMapping {
+                        base,
+                        end,
+                        prot: map.prot,
+                    })
                     .map_err(|_| Error::custom(libc::ENOMEM, "Too many executable mappings"))?;
             }
         }
@@ -218,22 +221,14 @@ pub fn in_fork(saved: Saved) -> Result<()> {
             libc::PROT_READ | libc::PROT_WRITE, // for pread64
             libc::MAP_FIXED_NOREPLACE | libc::MAP_SHARED,
             -1,
-            0, 
+            0,
         )?;
         populate_region(saved.mem.as_raw_fd(), map.base, map.end)?;
-        libc::mprotect(
-            map.base,
-            map.end - map.base,
-            map.prot,
-        )?;
+        libc::mprotect(map.base, map.end - map.base, map.prot)?;
     }
 
     for map in saved.executable_mappings.as_ref() {
-        libc::mprotect(
-            map.base,
-            map.end - map.base,
-            map.prot,
-        )?;
+        libc::mprotect(map.base, map.end - map.base, map.prot)?;
     }
 
     Ok(())
@@ -241,9 +236,13 @@ pub fn in_fork(saved: Saved) -> Result<()> {
 
 fn populate_region(mem_fd: i32, mut base: usize, end: usize) -> Result<()> {
     while base != end {
-        let n_read = libc::pread64(mem_fd, base, end - base, base).context("Failed to populate region")?;
+        let n_read =
+            libc::pread64(mem_fd, base, end - base, base).context("Failed to populate region")?;
         if n_read == 0 {
-            return Err(Error::custom(libc::EFAULT, "pread64 failed in the middle of a region"));
+            return Err(Error::custom(
+                libc::EFAULT,
+                "pread64 failed in the middle of a region",
+            ));
         }
         base += n_read as usize;
     }
@@ -262,12 +261,19 @@ fn unmap_garbage() -> Result<()> {
     })
 }
 
-fn for_each_map(pid: Option<i32>, mut handler: impl FnMut(MemoryMap) -> Result<()>) -> Result<()> {
-    let path = format_proc_path(pid, b"/maps");
+fn for_each_map(pid: Option<u32>, mut handler: impl FnMut(MemoryMap) -> Result<()>) -> Result<()> {
+    let path = format!(
+        b"/proc/",
+        {either} match pid {
+            Some(pid) => Left(pid),
+            None => Right(b"self"),
+        },
+        b"/maps\0",
+    );
     let path = unsafe { CStr::from_bytes_with_nul_unchecked(&path) };
     let mut maps = file::File::open(path).context("Failed to open /proc/pid/maps")?;
 
-    let mut buf = file::BufReader::new(&mut maps);
+    let mut buf: file::BufReader<'_, 128> = file::BufReader::new(&mut maps);
 
     for line in buf.lines() {
         let line = line.context("Failed to read /proc/pid/maps")?;
@@ -283,6 +289,7 @@ fn for_each_map(pid: Option<i32>, mut handler: impl FnMut(MemoryMap) -> Result<(
             base_end += 1;
         }
         ensure!(base_end < line.len(), "Invalid maps format");
+        ensure!(base_end - truncated_base_start <= 16, "Invalid maps format");
 
         if truncated_base_start == base_end {
             ensure!(truncated_base_start > 0, "Invalid maps format");
@@ -294,11 +301,12 @@ fn for_each_map(pid: Option<i32>, mut handler: impl FnMut(MemoryMap) -> Result<(
             truncated_end_start += 1;
         }
 
-        let mut end_end = truncated_base_start;
+        let mut end_end = truncated_end_start;
         while end_end < line.len() && line[end_end] != b' ' {
             end_end += 1;
         }
         ensure!(end_end < line.len(), "Invalid maps format");
+        ensure!(end_end - truncated_end_start <= 16, "Invalid maps format");
 
         let prot_start = end_end + 1;
         let prot_end = prot_start + 4;

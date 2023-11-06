@@ -1,4 +1,4 @@
-use crate::{libc, entry::START_INFORMATION, anyhow::Result};
+use crate::{anyhow::Result, entry::START_INFORMATION, libc};
 
 pub fn in_master() -> Result<()> {
     if let Some(rseq) = unsafe { &START_INFORMATION.rseq_info } {

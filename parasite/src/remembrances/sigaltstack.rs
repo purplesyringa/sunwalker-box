@@ -1,4 +1,4 @@
-use crate::{ensure, libc, anyhow::Result, entry::is_interval_safe};
+use crate::{anyhow::Result, ensure, entry::is_interval_safe, libc};
 
 #[repr(C)]
 pub struct stack_t {
@@ -20,7 +20,10 @@ pub fn in_orig() -> Result<stack_t> {
 pub fn in_master(stack: stack_t) -> Result<()> {
     const SS_DISABLE: i32 = 2;
     if stack.ss_flags & SS_DISABLE == 0 {
-        ensure!(is_interval_safe(stack.ss_sp..stack.ss_sp.saturating_add(stack.ss_size)), "sigaltstack intersects parasite");
+        ensure!(
+            is_interval_safe(stack.ss_sp..stack.ss_sp.saturating_add(stack.ss_size)),
+            "sigaltstack intersects parasite"
+        );
         libc::sigaltstack(&stack, 0)?;
     }
     Ok(())

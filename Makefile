@@ -33,7 +33,7 @@ target/parasite: $(shell find parasite/src -name *.rs) parasite/src/entry.S para
 	-rm target/$(TARGET_FREESTANDING)/release/deps/parasite*.ll
 	touch parasite/src/lib.rs
 	cd parasite && RUSTFLAGS="$(RUSTFLAGS) -C relocation-model=pie --emit llvm-ir" cargo +nightly rustc --target $(TARGET_FREESTANDING) -Z build-std=core,panic_abort --release
-	sed -i -E 's/llvm.(memcpy|memmove).p0.p0.i64/\1/g' target/$(TARGET_FREESTANDING)/release/deps/parasite*.ll
+	sed -i -E -e 's/llvm.(memcpy|memmove).p0.p0.i64/\1/g' -e 's/llvm.memset.p0.i64/memset/g' -e 's/"probe-stack"="inline-asm"//g' target/$(TARGET_FREESTANDING)/release/deps/*.ll
 	$(CLANG) target/$(TARGET_FREESTANDING)/release/deps/*.ll parasite/src/entry.S -static-pie -ffreestanding -nodefaultlibs -nostartfiles -flto -Wl,--gc-sections -Wl,-pie -T parasite/script.ld -O1 -o $@
 parasite/src/libc.rs: generate_constant_table.py
 	CC=$(CC) python3 generate_constant_table.py >$@
