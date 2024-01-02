@@ -1,4 +1,4 @@
-use crossmist::{Deserializer, Object, Serializer};
+use crossmist::{Deserializer, NonTrivialObject, Object, Serializer};
 use std::io::Result;
 use std::ops::Deref;
 use std::os::fd::{IntoRawFd, OwnedFd};
@@ -30,15 +30,18 @@ impl Deref for OpenAtDir {
     }
 }
 
-impl Object for OpenAtDir {
-    fn serialize_self(&self, s: &mut Serializer) {
+impl NonTrivialObject for OpenAtDir {
+    fn serialize_self_non_trivial(&self, s: &mut Serializer) {
         let handle = s.add_handle(self.0.as_raw_fd());
         s.serialize(&handle)
     }
-    fn deserialize_self(d: &mut Deserializer) -> Self {
+    unsafe fn deserialize_self_non_trivial(d: &mut Deserializer) -> Self {
         Self(unsafe { openat::Dir::from_raw_fd(d.deserialize::<OwnedFd>().into_raw_fd()) })
     }
-    fn deserialize_on_heap<'a>(&self, d: &mut Deserializer) -> Box<dyn Object + 'a>
+    unsafe fn deserialize_on_heap_non_trivial<'a>(
+        &self,
+        d: &mut Deserializer,
+    ) -> Box<dyn Object + 'a>
     where
         Self: 'a,
     {

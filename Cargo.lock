@@ -92,9 +92,9 @@ dependencies = [
 
 [[package]]
 name = "crossmist"
-version = "0.1.7"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "528c173ea84ca13733efcdd7cd1b2a945a0714ca75013813c878a5c60bddd18c"
+checksum = "afeb919fb51d054a956266b7e1b0def39b0d34232607d2e949746bd21b38ed45"
 dependencies = [
  "crossmist-derive",
  "ctor",
@@ -106,9 +106,9 @@ dependencies = [
 
 [[package]]
 name = "crossmist-derive"
-version = "0.1.3"
+version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "765c155f095d9153c397aae1b940945e03259edbe280e1e551b1d1e1922ca08e"
+checksum = "176bbf12f119ed0c0c17f666ee93c7c2d5f00f73908501a41b07575eeb63656c"
 dependencies = [
  "darling",
  "quote",

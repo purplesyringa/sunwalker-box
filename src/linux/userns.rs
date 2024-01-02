@@ -5,7 +5,7 @@ use nix::{libc, libc::CLONE_NEWUSER, unistd};
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
     let (mut tx, rx) = crossmist::channel::<()>().context("Failed to create channel")?;
-    let mut child = configure_ns.spawn(rx).context("Failed to start child")?;
+    let child = configure_ns.spawn(rx).context("Failed to start child")?;
 
     if unsafe { libc::unshare(CLONE_NEWUSER) } != 0 {
         return Err(std::io::Error::last_os_error()).context("unshare() failed");

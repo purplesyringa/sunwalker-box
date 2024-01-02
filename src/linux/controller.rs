@@ -93,7 +93,7 @@ impl Controller {
         // pidns, so we create the thread beforehand.
         let (thread_tx, thread_rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let mut child: crossmist::Child<!> =
+            let child: crossmist::Child<!> =
                 thread_rx.recv().expect("Failed to receive child in thread");
             panic!("Child failed: {}", child.join().into_err());
         });
