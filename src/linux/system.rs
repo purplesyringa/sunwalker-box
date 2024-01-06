@@ -1,7 +1,7 @@
 use nix::{
     errno::Errno,
     libc,
-    libc::{c_int, SYS_pidfd_open},
+    libc::{c_int, SYS_pidfd_getfd, SYS_pidfd_open},
     sys::memfd,
     unistd::Pid,
 };
@@ -95,6 +95,15 @@ pub fn open_pidfd(pid: Pid) -> Result<OwnedFd> {
     let pidfd = unsafe { libc::syscall(SYS_pidfd_open, pid, 0) } as RawFd;
     if pidfd >= 0 {
         Ok(unsafe { OwnedFd::from_raw_fd(pidfd) })
+    } else {
+        Err(std::io::Error::last_os_error())
+    }
+}
+
+pub fn pidfd_getfd(pidfd: RawFd, fd: RawFd) -> Result<OwnedFd> {
+    let fd = unsafe { libc::syscall(SYS_pidfd_getfd, pidfd, fd, 0) } as RawFd;
+    if fd >= 0 {
+        Ok(unsafe { OwnedFd::from_raw_fd(fd) })
     } else {
         Err(std::io::Error::last_os_error())
     }

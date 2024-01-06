@@ -2,7 +2,7 @@ FROM alpine as builder
 
 RUN \
 	apk update && \
-	apk add bash binutils curl gcc git linux-headers make musl-dev nasm ruby-dev python3 && \
+	apk add bash binutils curl gcc git gawk linux-headers make musl-dev nasm ruby-dev python3 && \
 	gem install seccomp-tools && \
 	curl --proto '=https' --tlsv1.3 https://sh.rustup.rs -sSf | \
 	bash -s -- \
