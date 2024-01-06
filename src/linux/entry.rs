@@ -164,10 +164,55 @@ impl CliCommand for Run {
 
         let result = controller.run_manager_command(manager::Command::Run {
             options: running::Options {
+                mode: running::Mode::Run,
                 argv: self.argv,
                 stdin: stdio.stdin.unwrap_or_else(dev_null),
                 stdout: stdio.stdout.unwrap_or_else(dev_null),
                 stderr: stdio.stderr.unwrap_or_else(dev_null),
+                real_time_limit: limits.real_time.map(Duration::from_secs_f64),
+                cpu_time_limit: limits.cpu_time.map(Duration::from_secs_f64),
+                idleness_time_limit: limits.idleness_time.map(Duration::from_secs_f64),
+                memory_limit: limits.memory,
+                processes_limit: limits.processes,
+                env: self.env,
+            },
+        });
+
+        match result {
+            Ok(Some(thing)) => thing,
+            Ok(None) => Response::success(&()),
+            Err(error) => Response::error(&error),
+        }
+    }
+
+    #[allow(refining_impl_trait)]
+    fn execute(self, _: &mut controller::Controller) -> Result<()> {
+        bail!("Not meant to be called like this")
+    }
+}
+
+#[derive(Deserialize)]
+struct Prefork {
+    argv: Vec<String>,
+    env: Option<HashMap<String, String>>,
+    limits: Option<Limits>,
+}
+
+impl CliCommand for Prefork {
+    fn execute_to_str(self, controller: &mut controller::Controller) -> String {
+        if self.argv.is_empty() {
+            return Response::error(&anyhow!("argv should not be empty"));
+        }
+
+        let limits = self.limits.unwrap_or_default();
+
+        let result = controller.run_manager_command(manager::Command::Run {
+            options: running::Options {
+                mode: running::Mode::PreFork,
+                argv: self.argv,
+                stdin: "".into(),
+                stdout: "".into(),
+                stderr: "".into(),
                 real_time_limit: limits.real_time.map(Duration::from_secs_f64),
                 cpu_time_limit: limits.cpu_time.map(Duration::from_secs_f64),
                 idleness_time_limit: limits.idleness_time.map(Duration::from_secs_f64),
@@ -233,6 +278,8 @@ enum Command {
     Commit,
     #[serde(rename = "run")]
     Run(Run),
+    #[serde(rename = "prefork")]
+    Prefork(Prefork),
 }
 
 impl Command {
@@ -243,6 +290,7 @@ impl Command {
             Command::Reset => Reset.execute_to_str(controller),
             Command::Commit => Commit.execute_to_str(controller),
             Command::Run(run) => run.execute_to_str(controller),
+            Command::Prefork(prefork) => prefork.execute_to_str(controller),
         }
     }
 }

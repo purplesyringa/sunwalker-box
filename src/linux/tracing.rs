@@ -1,14 +1,26 @@
-use crate::linux::string_table;
-use anyhow::{Context, Result};
-use nix::{errno::Errno, libc, libc::c_void, sys::ptrace, unistd::Pid};
+use crate::{
+    linux::{string_table, system},
+    log,
+};
+use anyhow::{bail, ensure, Context, Result};
+use nix::{
+    errno::Errno,
+    libc,
+    libc::{c_void, off_t},
+    sys::{ptrace, wait},
+    unistd::Pid,
+};
 use std::ffi::CString;
 use std::fs::File;
 use std::io;
+use std::io::{BufRead, BufReader};
 use std::os::unix::fs::FileExt;
+use std::path::PathBuf;
 
 pub struct TracedProcess {
     pid: Pid,
-    mem: File,
+    external: bool,
+    mem: Option<File>,
     cached_registers: Option<Result<Registers, Errno>>,
     registers_edited: bool,
 }
@@ -58,6 +70,15 @@ pub union ptrace_syscall_info_data {
     pub entry: ptrace_syscall_info_entry,
     pub exit: ptrace_syscall_info_exit,
     pub seccomp: ptrace_syscall_info_seccomp,
+}
+
+#[repr(C)]
+pub struct ptrace_rseq_configuration {
+    pub rseq_abi_pointer: u64,
+    pub rseq_abi_size: u32,
+    pub signature: u32,
+    pub flags: u32,
+    pub pad: u32,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -141,14 +162,68 @@ macro_rules! syscall {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct MemoryMap {
+    pub base: usize,
+    pub end: usize,
+    pub prot: i32,
+    pub shared: bool,
+    pub offset: off_t,
+    pub major: u8,
+    pub minor: u8,
+    pub inode: u64,
+    // The exact pathname is untrusted anyway, see proc(5):
+    // > pathname is shown unescaped except for newline characters,
+    // > which are replaced with an octal escape sequence.  As a
+    // > result, it is not possible to determine whether the
+    // > original pathname contained a newline character or the
+    // > literal \012 character sequence.
+    // >
+    // > If the mapping is file-backed and the file has been
+    // > deleted, the string " (deleted)" is appended to the
+    // > pathname.  Note that this is ambiguous too.
+    pub desc: String,
+}
+
+#[derive(Debug)]
+pub struct Stat {
+    // We might add more fields in the future -- this is just the subset we need for now
+    pub start_code: usize,
+    pub end_code: usize,
+    pub start_data: usize,
+    pub end_data: usize,
+    pub start_stack: usize,
+    pub start_brk: usize,
+    pub arg_start: usize,
+    pub arg_end: usize,
+    pub env_start: usize,
+    pub env_end: usize,
+}
+
+#[derive(Debug)]
+pub struct Timer {
+    pub id: i32,
+    pub signal: i32,
+    pub sigev_value: usize,
+    pub notify: (i32, Pid),
+    pub clock_id: i32,
+}
+
 impl TracedProcess {
     pub fn new(pid: Pid) -> Result<Self> {
-        Ok(TracedProcess {
+        Self::new_external(pid, false)
+    }
+
+    pub fn new_external(pid: Pid, external: bool) -> Result<Self> {
+        let mut proc = TracedProcess {
             pid,
-            mem: Self::open_mem(pid)?,
+            external,
+            mem: None,
             cached_registers: None,
             registers_edited: false,
-        })
+        };
+        proc.reload_mm()?;
+        Ok(proc)
     }
 
     pub fn get_pid(&self) -> Pid {
@@ -156,16 +231,30 @@ impl TracedProcess {
     }
 
     pub fn reload_mm(&mut self) -> Result<()> {
-        self.mem = Self::open_mem(self.pid)?;
+        self.mem = Some(self.open_mem()?);
         Ok(())
     }
 
-    fn open_mem(pid: Pid) -> Result<File> {
+    pub fn get_mem(&self) -> &File {
+        self.mem.as_ref().unwrap()
+    }
+
+    fn open_mem(&self) -> Result<File> {
+        let path = self.get_procfs_path("mem");
         File::options()
             .read(true)
             .write(true)
-            .open(format!("/proc/{pid}/mem"))
-            .with_context(|| format!("Failed to open /proc/{pid}/mem"))
+            .open(&path)
+            .with_context(|| format!("Failed to open {path}"))
+    }
+
+    fn get_procfs_path(&self, name: &str) -> String {
+        let prefix = if self.external { "/newroot" } else { "" };
+        format!("{prefix}/proc/{}/{name}", self.pid)
+    }
+
+    pub fn detach(&self) -> Result<()> {
+        ptrace::detach(self.pid, None).context("Failed to detach process")
     }
 
     pub fn init(&self) -> Result<()> {
@@ -182,7 +271,7 @@ impl TracedProcess {
     }
 
     pub fn read_memory(&self, address: usize, buf: &mut [u8]) -> io::Result<()> {
-        self.mem.read_exact_at(buf, address as u64)
+        self.get_mem().read_exact_at(buf, address as u64)
     }
 
     pub fn read_word(&self, address: usize) -> io::Result<usize> {
@@ -196,7 +285,7 @@ impl TracedProcess {
         let mut offset = 0;
 
         while offset < max_len + 1 {
-            let n_read = self.mem.read_at(&mut buf[offset..], address as u64)?;
+            let n_read = self.get_mem().read_at(&mut buf[offset..], address as u64)?;
             if n_read == 0 {
                 return Err(io::Error::from_raw_os_error(libc::EFAULT));
             }
@@ -214,7 +303,7 @@ impl TracedProcess {
     }
 
     pub fn write_memory(&self, address: usize, buf: &[u8]) -> io::Result<()> {
-        self.mem.write_all_at(buf, address as u64)
+        self.get_mem().write_all_at(buf, address as u64)
     }
 
     pub fn write_word(&self, address: usize, value: usize) -> io::Result<()> {
@@ -395,8 +484,8 @@ impl TracedProcess {
     fn _store_registers(&mut self) -> Result<()> {
         if self.registers_edited {
             self.registers_edited = false;
-            let regs = self.cached_registers.take().unwrap();
-            self._set_registers(regs?)?;
+            let regs = self.cached_registers.take().unwrap()?;
+            self._set_registers(regs)?;
         }
         self.cached_registers = None;
         Ok(())
@@ -472,6 +561,15 @@ impl TracedProcess {
     }
 
     #[cfg(target_arch = "x86_64")]
+    pub fn get_syscall_result(&mut self) -> io::Result<usize> {
+        Ok(self._load_registers()?.rax as usize)
+    }
+    #[cfg(target_arch = "aarch64")]
+    pub fn get_syscall_result(&mut self) -> io::Result<usize> {
+        Ok(self._load_registers()?.regs[0] as usize)
+    }
+
+    #[cfg(target_arch = "x86_64")]
     pub fn set_syscall_result(&mut self, result: usize) -> io::Result<()> {
         self.registers_edited = true;
         self._load_registers()?.rax = result as u64;
@@ -487,10 +585,211 @@ impl TracedProcess {
     pub fn get_stack_pointer(&mut self) -> io::Result<usize> {
         Ok(self._load_registers()?.get_stack_pointer())
     }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn get_instruction_pointer(&mut self) -> io::Result<usize> {
+        Ok(self._load_registers()?.rip as usize)
+    }
+    #[cfg(target_arch = "aarch64")]
+    pub fn get_instruction_pointer(&mut self) -> io::Result<usize> {
+        Ok(self._load_registers()?.pc as usize)
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn set_instruction_pointer(&mut self, address: usize) -> io::Result<()> {
+        self.registers_edited = true;
+        self._load_registers()?.rip = address as u64;
+        Ok(())
+    }
+    #[cfg(target_arch = "aarch64")]
+    pub fn set_instruction_pointer(&mut self, address: usize) -> io::Result<()> {
+        self.registers_edited = true;
+        self._load_registers()?.pc = address as u64;
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    pub fn get_syscall_insn_length(&self) -> usize {
+        2
+    }
+    #[cfg(target_arch = "aarch64")]
+    pub fn get_syscall_insn_length(&self) -> usize {
+        2
+    }
+
+    pub fn wait_for_ptrace_syscall(&self) -> Result<()> {
+        let wait_status = wait::waitpid(self.pid, None).context("Failed to waitpid for process")?;
+        if let wait::WaitStatus::PtraceSyscall(..) = wait_status {
+            return Ok(());
+        }
+        bail!(
+            "waitpid returned unexpected status at mmap: {wait_status:?}, expected PtraceSyscall"
+        );
+    }
+
+    pub fn exec_syscall(&mut self, args: SyscallArgs, inside_syscall: bool) -> Result<isize> {
+        // Assuming that the instruction pointer points to a syscall instruction, execute one
+        // syscall. set_syscall_no modifies orig_rax, which only makes sense after the syscall has
+        // been entered.
+        if !inside_syscall {
+            self.set_active_syscall_no(-1)?;
+            self.resume_syscall()?;
+            self.wait_for_ptrace_syscall()?;
+        }
+        self.set_syscall(args.clone())?;
+        self.resume_syscall()?;
+        self.wait_for_ptrace_syscall()?;
+        let result = self.get_syscall_result()? as isize;
+        if result >= 0 {
+            log!("<pid {}> {args} = {result}", self.pid);
+            Ok(result)
+        } else {
+            log!(
+                "<pid {}> {args} = -{}",
+                self.pid,
+                string_table::errno_to_name(-result as i32)
+            );
+            Err(io::Error::from_raw_os_error(-result as i32))?
+        }
+    }
+
+    pub fn get_memory_maps(&self) -> Result<Vec<MemoryMap>> {
+        let mut maps: Vec<MemoryMap> = Vec::new();
+
+        let path = self.get_procfs_path("maps");
+        let file = File::open(&path).with_context(|| format!("Failed to open {path}"))?;
+        for line in BufReader::new(file).split(b'\n') {
+            let mut line = &line.with_context(|| format!("Failed to read {path}"))?[..];
+
+            let mut split_by = |split_c: u8| -> Result<&str> {
+                let pos = line
+                    .iter()
+                    .position(|&c| c == split_c)
+                    .context("Invalid maps format")?;
+                let s = &line[..pos];
+                line = &line[pos + 1..];
+                std::str::from_utf8(s).context("Invalid maps format")
+            };
+
+            let base = usize::from_str_radix(split_by(b'-')?, 16).context("Invalid maps format")?;
+            let end = usize::from_str_radix(split_by(b' ')?, 16).context("Invalid maps format")?;
+
+            let prot = split_by(b' ')?.as_bytes();
+            ensure!(prot.len() == 4, "Invalid maps format");
+            let shared = prot[3] == b's';
+            let mut prot = if prot[0] == b'r' { libc::PROT_READ } else { 0 }
+                | if prot[1] == b'w' { libc::PROT_WRITE } else { 0 }
+                | if prot[2] == b'x' { libc::PROT_EXEC } else { 0 };
+            if prot == 0 {
+                prot = libc::PROT_NONE;
+            }
+
+            let offset =
+                off_t::from_str_radix(split_by(b' ')?, 16).context("Invalid maps format")?;
+            let major = u8::from_str_radix(split_by(b':')?, 16).context("Invalid maps format")?;
+            let minor = u8::from_str_radix(split_by(b' ')?, 16).context("Invalid maps format")?;
+            let inode = split_by(b' ')?.parse().context("Invalid maps format")?;
+
+            let mut desc = String::new();
+            if let Some(pos) = line.iter().position(|&c| c != b' ') {
+                // Only special mappings may have such pathnames
+                if line[pos] == b'[' && *line.last().unwrap() == b']' {
+                    desc =
+                        String::from_utf8(line[pos..].to_vec()).context("Invalid maps format")?;
+                }
+            }
+
+            maps.push(MemoryMap {
+                base,
+                end,
+                prot,
+                shared,
+                offset,
+                major,
+                minor,
+                inode,
+                desc,
+            });
+        }
+
+        Ok(maps)
+    }
+
+    pub fn get_memory_mapped_file_path(&self, map: &MemoryMap) -> Result<PathBuf> {
+        let path = self.get_procfs_path(&format!("map_files/{:x}-{:x}", map.base, map.end));
+        std::fs::read_link(&path).with_context(|| format!("Failed to readlink {path}"))
+    }
+
+    pub fn get_rseq_configuration(&self) -> Result<ptrace_rseq_configuration> {
+        let mut data = std::mem::MaybeUninit::<ptrace_rseq_configuration>::uninit();
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_GET_RSEQ_CONFIGURATION,
+                self.pid.as_raw(),
+                std::mem::size_of_val(&data) as *const c_void,
+                data.as_mut_ptr(),
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error())?;
+        }
+        unsafe { Ok(data.assume_init()) }
+    }
+
+    pub fn get_stat(&self) -> Result<Stat> {
+        let path = self.get_procfs_path("stat");
+        let buf = std::fs::read(&path).with_context(|| format!("Failed to open {path}"))?;
+
+        let pos = buf
+            .iter()
+            .rposition(|&c| c == b')')
+            .context("Invalid stat format")?;
+        let mut fields = std::str::from_utf8(&buf[pos..])
+            .context("Invalid stat format")?
+            .split(' ');
+
+        for _ in 0..24 {
+            fields.next().context("Invalid stat format")?;
+        }
+        let start_code = fields.next().context("Invalid stat format")?.parse()?;
+        let end_code = fields.next().context("Invalid stat format")?.parse()?;
+        let start_stack = fields.next().context("Invalid stat format")?.parse()?;
+        for _ in 0..16 {
+            fields.next().context("Invalid stat format")?;
+        }
+        let start_data = fields.next().context("Invalid stat format")?.parse()?;
+        let end_data = fields.next().context("Invalid stat format")?.parse()?;
+        let start_brk = fields.next().context("Invalid stat format")?.parse()?;
+        let arg_start = fields.next().context("Invalid stat format")?.parse()?;
+        let arg_end = fields.next().context("Invalid stat format")?.parse()?;
+        let env_start = fields.next().context("Invalid stat format")?.parse()?;
+        let env_end = fields.next().context("Invalid stat format")?.parse()?;
+
+        Ok(Stat {
+            start_code,
+            end_code,
+            start_data,
+            end_data,
+            start_stack,
+            start_brk,
+            arg_start,
+            arg_end,
+            env_start,
+            env_end,
+        })
+    }
+
+    pub fn wait(&self, flag: system::WaitPidFlag) -> Result<system::WaitStatus> {
+        system::waitpid(Some(self.get_pid()), flag).context("Failed to wait for traced process")
+    }
 }
 
-pub fn apply_seccomp_filter() -> Result<()> {
-    let filter = include_bytes!("../../target/filter.seccomp.out");
+pub fn apply_seccomp_filter(restricted: bool) -> Result<()> {
+    let filter = if restricted {
+        &include_bytes!("../../target/filter_restricted.seccomp.out")[..]
+    } else {
+        &include_bytes!("../../target/filter.seccomp.out")[..]
+    };
     let prog = libc::sock_fprog {
         len: (filter.len() / 8) as u16,
         filter: filter.as_ptr() as *mut libc::sock_filter,

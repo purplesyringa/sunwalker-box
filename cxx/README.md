@@ -1,0 +1,5 @@
+This is the code that gets injected into the process during prefork to capture its state that cannot be (easily) captured from outside (the parasite), andthe code that rolls up the saved state. What we *can* do here is pretty limited, as we want to avoid allocations and main stack because, duh, that modifies what we want to capture or restore. Luckily, so is what we *have* to do here.
+
+We can make do with C++ with no libc whatsoever and no dynamic allocations running off a single rwx page. We call syscalls directly (just like Go) and emit the serialized state to stdout and errors to stderr. We still collect stacktraces (i.e. contexts), but they're pretty minimal and have to be decoded on Rust side.
+
+Also, the parasite is untrusted. We stream it into the user process at a newly allocated page, run it, collects its output, but after that, we don't just blindly believe tha data because it is possible that arbitrary code execution might somehow be possible during this stage. This increases the necessity of a dead simple protocol.

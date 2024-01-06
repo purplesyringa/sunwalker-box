@@ -21,6 +21,7 @@ mod linux {
     mod kmodule;
     mod manager;
     mod openat;
+    mod prefork;
     mod procs;
     mod reaper;
     mod rootfs;
