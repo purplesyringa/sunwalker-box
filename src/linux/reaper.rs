@@ -25,6 +25,11 @@ pub enum Command {
     Reset,
 }
 
+#[derive(Object)]
+pub enum Response {
+    SuspendProcess,
+}
+
 #[crossmist::func]
 pub fn reaper(
     ppidfd: OwnedFd,
@@ -78,6 +83,7 @@ fn reaper_impl(
     let mut mask = signal::SigSet::empty();
     mask.add(signal::Signal::SIGUSR1);
     mask.add(signal::Signal::SIGIO);
+    mask.add(signal::Signal::SIGURG);
     mask.add(signal::Signal::SIGCHLD);
     mask.thread_block()
         .context("Failed to configure signal mask: {e}")?;

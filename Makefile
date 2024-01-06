@@ -22,7 +22,7 @@ CARGO_TARGET := $(shell echo "$(TARGET)" | tr a-z- A-Z_)
 CARGO := CARGO_TARGET_$(CARGO_TARGET)_LINKER="$(CC)" RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly
 CARGO_OPTIONS := --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release
 
-SECCOMP_FILTERS := filter
+SECCOMP_FILTERS := filter filter_restricted
 
 .PHONY: target/$(TARGET)/release/sunwalker_box test clean bloat check clippy
 
@@ -33,7 +33,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	strip $^ -o $@
 
-DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper.stripped target/exec_wrapper.itimer_prof target/sunwalker.ko target/syscall_table.offsets
+DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper.stripped target/exec_wrapper.itimer_prof target/sunwalker.ko target/syscall_table.offsets target/parasite.bin target/parasite.size target/parasite.result_context_map.json target/parasite.state target/stemcell.stripped target/stemcell.result_context_map.json target/stemcell.relocations target/stemcell.state
 
 target/$(TARGET)/release/sunwalker_box: $(DEPS)
 	$(CARGO) build $(CARGO_OPTIONS)
@@ -46,6 +46,32 @@ check: $(DEPS)
 
 clippy: $(DEPS)
 	$(CARGO) clippy $(CARGO_OPTIONS) $(OPTIONS)
+
+target/parasite.bin: target/parasite
+	objcopy -O binary --only-section=.text $< /dev/stdout | sed "$$ s/\x00*$$//g" >$@
+target/parasite.size: target/parasite
+	readelf -S $< | awk '/\.text/{ getline; print "0x" $$1 }' >$@
+target/parasite.result_context_map: target/parasite
+	objcopy -O binary --only-section=.result_context_map $< $@
+target/parasite.result_context_map.json: target/parasite.result_context_map generate/context_map.py
+	python3 generate/context_map.py <$< >$@
+target/parasite.state: target/parasite
+	readelf -s $< | awk '/OBJECT.*state/{ print "0x" $$2 }' >$@
+target/parasite: cxx/parasite.cpp $(shell find cxx -name '*.hpp') target/libc.hpp
+	$(CXX) $< -o $@ -T cxx/parasite.ld -static-pie $(CXX_OPTIONS)
+
+target/stemcell.result_context_map: target/stemcell
+	objcopy -O binary --only-section=.result_context_map $< $@
+target/stemcell.result_context_map.json: target/stemcell.result_context_map generate/context_map.py
+	python3 generate/context_map.py <$< >$@
+target/stemcell.relocations: target/stemcell.stripped generate/stemcell_relocations.py
+	python3 generate/stemcell_relocations.py $< >$@
+target/stemcell.state: target/stemcell
+	readelf -s $< | gawk '/OBJECT.*state/{ print strtonum("0x" $$2) - 0xdeadbeef000 }' >$@
+target/stemcell.stripped: target/stemcell
+	strip -s -R .result_context_map $< -o $@
+target/stemcell: cxx/stemcell.cpp $(shell find cxx -name '*.hpp') target/libc.hpp
+	$(CXX) $< -o $@ -T cxx/stemcell.ld -static $(CXX_OPTIONS) -Wl,-Ttext=0xdeadbeef000
 
 # Keep the Linux kernel versions in sync with the minimal supported versions listed in README. These
 # two assets are not expected to be built by the user, but are merely to make updates easier for the

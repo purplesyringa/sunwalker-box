@@ -16,7 +16,7 @@ pub enum Command {
 #[crossmist::func]
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
-    channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    channel: crossmist::Duplex<Result<Option<String>, String>, Command>,
     log_level: log::LogLevel,
 ) {
     if let Err(e) = manager_impl(proc_cgroup, channel, log_level) {
@@ -34,7 +34,7 @@ fn manager_impl(
 
     log!("Manager started");
 
-    let mut runner = running::Runner::new(proc_cgroup).context("Failed to create runner")?;
+    let runner = running::Runner::new(proc_cgroup).context("Failed to create runner")?;
 
     log!("Ready to receive commands");
     channel
@@ -43,20 +43,20 @@ fn manager_impl(
 
     while let Some(command) = channel
         .recv()
-        .context("Failed to receive message from channel")?
+        .context("Failed to receive message from entry channel")?
     {
         channel
-            .send(&match execute_command(command, &mut runner) {
+            .send(&match execute_command(command, &runner) {
                 Ok(value) => Ok(value),
                 Err(e) => Err(format!("{e:?}")),
             })
-            .context("Failed to send reply to channel")?
+            .context("Failed to send reply to entry channel")?
     }
 
     Ok(())
 }
 
-fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Option<String>> {
+fn execute_command(command: Command, runner: &running::Runner) -> Result<Option<String>> {
     log!("Running command {command:?}");
 
     match command {
@@ -92,6 +92,10 @@ fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Opt
                 running::Verdict::MemoryLimitExceeded => {
                     limit_verdict = "MemoryLimitExceeded";
                 }
+                running::Verdict::Suspended(pid) => {
+                    limit_verdict = "Suspended";
+                    exit_code = pid;
+                }
             }
 
             #[derive(Serialize)]
@@ -101,19 +105,17 @@ fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Opt
                 real_time: f64,
                 cpu_time: f64,
                 idleness_time: f64,
-                memory: usize
+                memory: usize,
             }
 
-            Ok(Some(
-                json::to_string(&Results {
-                    limit_verdict,
-                    exit_code,
-                    real_time: results.real_time.as_secs_f64(),
-                    cpu_time: results.cpu_time.as_secs_f64(),
-                    idleness_time: results.idleness_time.as_secs_f64(),
-                    memory: results.memory,
-                } ),
-            ))
+            Ok(Some(json::to_string(&Results {
+                limit_verdict,
+                exit_code,
+                real_time: results.real_time.as_secs_f64(),
+                cpu_time: results.cpu_time.as_secs_f64(),
+                idleness_time: results.idleness_time.as_secs_f64(),
+                memory: results.memory,
+            })))
         }
     }
 }

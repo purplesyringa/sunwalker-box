@@ -210,7 +210,7 @@ impl Controller {
             .as_mut()
             .context("Not started")?
             .request(&command)
-            .context("Failed to run command")?
+            .context("Failed to run reaper command")?
             .map_err(|e| anyhow!("{e}"))
     }
 
@@ -219,7 +219,7 @@ impl Controller {
             .as_mut()
             .context("Not started")?
             .request(&command)
-            .context("Failed to run command")?
+            .context("Failed to run manager command")?
             .map_err(|e| anyhow!("{e}"))
     }
 }

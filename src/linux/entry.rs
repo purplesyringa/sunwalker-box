@@ -326,10 +326,44 @@ impl CliCommand for Run {
 
         controller.run_manager_command(manager::Command::Run {
             options: running::Options {
+                mode: running::Mode::Run,
                 argv: self.argv,
                 stdin: self.stdin.unwrap_or_else(dev_null),
                 stdout: self.stdout.unwrap_or_else(dev_null),
                 stderr: self.stderr.unwrap_or_else(dev_null),
+                real_time_limit: self.real_time_limit.map(Duration::from_secs_f64),
+                cpu_time_limit: self.cpu_time_limit.map(Duration::from_secs_f64),
+                idleness_time_limit: self.idleness_time_limit.map(Duration::from_secs_f64),
+                memory_limit: self.memory_limit,
+                processes_limit: self.processes_limit,
+                env: self.env,
+            },
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct Prefork {
+    argv: Vec<String>,
+    real_time_limit: Option<f64>,
+    cpu_time_limit: Option<f64>,
+    idleness_time_limit: Option<f64>,
+    memory_limit: Option<usize>,
+    processes_limit: Option<usize>,
+    env: Option<HashMap<String, String>>,
+}
+
+impl CliCommand for Prefork {
+    fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
+        ensure!(!self.argv.is_empty(), "argv must not be empty");
+
+        controller.run_manager_command(manager::Command::Run {
+            options: running::Options {
+                mode: running::Mode::PreFork,
+                argv: self.argv,
+                stdin: "".into(),
+                stdout: "".into(),
+                stderr: "".into(),
                 real_time_limit: self.real_time_limit.map(Duration::from_secs_f64),
                 cpu_time_limit: self.cpu_time_limit.map(Duration::from_secs_f64),
                 idleness_time_limit: self.idleness_time_limit.map(Duration::from_secs_f64),
@@ -399,6 +433,10 @@ fn handle_command(
         "commit" => CliCommand::execute(Commit, controller),
         "run" => CliCommand::execute(
             json::from_str::<Run>(arg).context("Invalid JSON")?,
+            controller,
+        ),
+        "prefork" => CliCommand::execute(
+            json::from_str::<Prefork>(arg).context("Invalid JSON")?,
             controller,
         ),
         _ => bail!("Unknown command {command}"),
