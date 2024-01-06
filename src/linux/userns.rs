@@ -1,6 +1,6 @@
 use crate::linux::ids::*;
 use anyhow::{Context, Result};
-use nix::{sched, unistd};
+use nix::{sched, sys::prctl, unistd};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
@@ -16,6 +16,10 @@ pub fn enter_user_namespace() -> Result<()> {
     // Become in-sandbox root
     unistd::setuid(unistd::Uid::from_raw(INTERNAL_ROOT_UID)).context("Failed to setuid to root")?;
     unistd::setgid(unistd::Gid::from_raw(INTERNAL_ROOT_GID)).context("Failed to setgid to root")?;
+
+    // Being non-dumpable is pointless because of permissions anyway, and we need to be dumpable for
+    // prefork to work
+    prctl::set_dumpable(true).context("Failed to make the process dumpable")?;
 
     Ok(())
 }

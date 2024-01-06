@@ -132,6 +132,8 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to mkdir /tmp/sunwalker_box/emptydir")?;
     std::fs::write("/tmp/sunwalker_box/emptyfile", [])
         .context("Failed to touch /tmp/sunwalker_box/emptyfile")?;
+    std::fs::write("/tmp/sunwalker_box/stdiosubst", [])
+        .context("Failed to touch /tmp/sunwalker_box/stdiosubst")?;
 
     // Move old root and pivot_root
     std::fs::create_dir("/tmp/sunwalker_box/oldroot")
