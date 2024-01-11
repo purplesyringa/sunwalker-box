@@ -14,6 +14,7 @@
 #include <sched.h>
 #include <signal.h>
 #include <sys/socket.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 struct State {
@@ -183,7 +184,7 @@ static Result<void> loop() {
 
         if (child_pid == 0) {
             state.result = init_child(fds);
-            (void)libc::kill(0, SIGSTOP);
+            (void)libc::kill(libc::getpid().unwrap(), SIGSTOP);
             __builtin_trap();
         }
     }
@@ -192,10 +193,11 @@ static Result<void> loop() {
 }
 
 extern "C" __attribute__((naked)) void _start() {
+    pid_t pid = libc::getpid().unwrap();
     state.result = run();
-    (void)libc::kill(0, SIGSTOP);
+    (void)libc::kill(pid, SIGSTOP);
     state.result = loop();
-    (void)libc::kill(0, SIGSTOP);
+    (void)libc::kill(pid, SIGSTOP);
     __builtin_trap();
 }
 
