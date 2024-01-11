@@ -47,8 +47,9 @@ static Result<void> run() {
 FINALIZE_CONTEXTS
 
 extern "C" __attribute__((section(".entry"))) __attribute__((naked)) void _start() {
+    pid_t pid = libc::getpid().unwrap();
     state.result = run();
-    (void)libc::kill(0, SIGSTOP);
+    (void)libc::kill(pid, SIGSTOP);
     // We could use __builtin_unreachable or __builtin_trap here. Ideally we'd use the one that's
     // likely to catch more bugs, but it's uncertain what the distribution actually is.
     // __builtin_unreachable is a pass-through; we're likely to modify memory (including the state)
