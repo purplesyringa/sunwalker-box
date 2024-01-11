@@ -9,6 +9,17 @@ namespace memory_maps {
 // Use the default value of sysctl vm.max_map_count
 static constexpr size_t MAX_MEMORY_MAPS = 65530;
 
+__attribute__((always_inline)) inline Result<void> mmap_thp(uintptr_t base, size_t length, int prot,
+                                                            int flags, int fd, off_t offset) {
+    // We want THP, because we're going to clone lots of page tables, and they better be small. The
+    // "correct" solution is enabling THP in "always" mode as opposed to "madvise" system-wide, but
+    // let's at least try to handle the worse case gracefully
+    // FIXME: This is only valid for x86-64
+    libc::mmap(base, length, prot, flags, fd, offset).CONTEXT("Failed to mmap section").TRY();
+    libc::madvise(base, length, MADV_HUGEPAGE).CONTEXT("Failed to madvise huge pages").TRY();
+    return {};
+}
+
 struct MemoryMap {
     uintptr_t base;
     uintptr_t end;
@@ -17,8 +28,8 @@ struct MemoryMap {
     int fd;
     off_t offset;
 
-    inline Result<void> do_map(int orig_mem_fd) const {
-        libc::mmap(base, end - base, (prot & 0x7fffffff) | PROT_WRITE, flags, fd, offset)
+    __attribute__((always_inline)) inline Result<void> do_map(int orig_mem_fd) const {
+        mmap_thp(base, end - base, (prot & 0x7fffffff) | PROT_WRITE, flags, fd, offset)
             .CONTEXT("Failed to mmap section")
             .TRY();
 
@@ -62,7 +73,7 @@ static Result<void> load_before_fork(const State &state) {
             map.do_map(state.orig_mem_fd).TRY();
         } else if (!(map.prot & 0x80000000)) {
             // Shared maps to everything but /dev/zero can be mapped just like this
-            libc::mmap(map.base, map.end - map.base, map.prot, map.flags, map.fd, map.offset)
+            mmap_thp(map.base, map.end - map.base, map.prot, map.flags, map.fd, map.offset)
                 .CONTEXT("Failed to mmap section")
                 .TRY();
         }

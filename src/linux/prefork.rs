@@ -1061,7 +1061,20 @@ impl<'a> Suspender<'a> {
                 alloced.flags |= libc::MAP_GROWSDOWN | libc::MAP_STACK;
             }
 
-            if map.inode == 0 {
+            // Private file-backed mappings differ from private anonymous mappings in three major
+            // ways:
+            // - they are pre-populated with the file contents as opposed to zeroes,
+            // - they are indicated differently in procfs, and
+            // - they don't support transparent huge pages.
+            // The former doesn't matter to us, because we always read-out pages of private mappings
+            // from the original process into the stemcell. The latter is a major setback: PyPy, for
+            // instance, maps 60 MB of .text/.data, which makes significantly slows down clone and
+            // exit unless huge pages are used. Therefore, we have to make a compromise between
+            // identical replication (including procfs state) and efficiency. We chose the latter.
+            // If this turns out to be the wrong decision, toggle this constant.
+            const REMAP_PRIVATE_AS_ANONYMOUS: bool = true;
+
+            if map.inode == 0 || (REMAP_PRIVATE_AS_ANONYMOUS && !map.shared) {
                 alloced.flags |= libc::MAP_ANONYMOUS;
                 alloced.fd = -1;
                 continue;
