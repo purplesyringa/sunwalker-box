@@ -798,8 +798,9 @@ impl TracedProcess {
         })
     }
 
-    pub fn wait(&self, flag: system::WaitPidFlag) -> Result<system::WaitStatus> {
-        system::waitpid(Some(self.get_pid()), flag).context("Failed to wait for traced process")
+    pub fn wait(&self) -> Result<system::WaitStatus> {
+        system::waitpid(Some(self.get_pid()), system::WaitPidFlag::empty())
+            .context("Failed to wait for traced process")
     }
 }
 
