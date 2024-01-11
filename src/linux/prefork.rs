@@ -826,6 +826,11 @@ impl<'a> Suspender<'a> {
         self.orig
             .resume_signal(libc::SIGSTOP)
             .context("Failed to send SIGSTOP to parasite")?;
+        let wait_status = self.orig.wait()?;
+        ensure!(
+            matches!(wait_status, system::WaitStatus::Stopped(_, libc::SIGSTOP)),
+            "Expected SIGSTOP, got {wait_status:?}",
+        );
         self.orig
             .detach()
             .context("Failed to detach from parasite")?;

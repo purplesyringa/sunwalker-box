@@ -1238,7 +1238,7 @@ impl SingleRun<'_> {
                     "Got ESRCH during event handling. This indicates either a race condition when \
                      a process is killed by OOM killer or an external actor while sunwalker is \
                      working on it, or a mishandling of PIDs. If this happens more than \
-                     occasionally, report this as a bug."
+                     occasionally, report this as a bug. The error is:\n\n{e:?}"
                 );
                 return Ok(false);
             }
