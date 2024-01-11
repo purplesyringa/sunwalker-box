@@ -7,6 +7,7 @@ use crossmist::Object;
 use nix::libc::pid_t;
 use rand::Rng;
 use std::io::{BufRead, BufReader, Read, Write};
+use std::os::fd::OwnedFd;
 use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 
@@ -180,6 +181,15 @@ impl ProcCgroup {
 }
 
 impl BoxCgroup {
+    // TODO: rewrite this to store one box fd directly
+    pub fn get_fd(&self) -> Result<OwnedFd> {
+        Ok(self
+            .proc_cgroup_fd
+            .open_file(format!("box-{}", self.box_id))
+            .context("Failed to open directory")?
+            .into())
+    }
+
     pub fn add_process(&self, pid: pid_t) -> Result<()> {
         self.proc_cgroup_fd
             .write_file(format!("box-{}/cgroup.procs", self.box_id), 0o700)

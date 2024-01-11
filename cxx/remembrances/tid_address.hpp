@@ -11,9 +11,4 @@ static Result<void> save(State &state) {
     return {};
 }
 
-static Result<void> load(const State &state) {
-    libc::set_tid_address(state).TRY();
-    return {};
-}
-
 } // namespace tid_address

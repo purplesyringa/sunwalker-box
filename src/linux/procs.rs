@@ -1,5 +1,6 @@
 use crate::{linux::system, log};
 use anyhow::{Context, Result};
+use nix::unistd::Pid;
 use std::path::PathBuf;
 
 pub fn mount_procfs(proc_path: &str) -> Result<()> {
@@ -127,8 +128,13 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn reset_pidns() -> Result<()> {
-    std::fs::write("/proc/sys/kernel/ns_last_pid", "1\n")
-        .context("Failed to sysctl kernel.ns_last_pid=1")?;
+pub fn set_next_pid(pid: Pid) -> Result<()> {
+    let last_pid = pid.as_raw() - 1;
+    std::fs::write("/proc/sys/kernel/ns_last_pid", format!("{last_pid}\n"))
+        .with_context(|| format!("Failed to sysctl kernel.ns_last_pid={last_pid}"))?;
     Ok(())
+}
+
+pub fn reset_pidns() -> Result<()> {
+    set_next_pid(Pid::from_raw(2))
 }

@@ -6,6 +6,7 @@
     maybe_uninit_slice,
     never_type,
     try_blocks,
+    unix_socket_ancillary_data,
     unwrap_infallible
 )]
 

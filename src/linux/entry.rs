@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, controller, ids, kmodule, manager, rootfs, running, sandbox},
+    linux::{cgroups, controller, ids, kmodule, manager, reaper, rootfs, running, sandbox},
     log,
     log::LogLevel,
 };
@@ -337,6 +337,7 @@ impl CliCommand for Run {
                 memory_limit: self.memory_limit,
                 processes_limit: self.processes_limit,
                 env: self.env,
+                prefork_id: 0,
             },
         })
     }
@@ -370,6 +371,39 @@ impl CliCommand for Prefork {
                 memory_limit: self.memory_limit,
                 processes_limit: self.processes_limit,
                 env: self.env,
+                prefork_id: 0,
+            },
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct Resume {
+    stdin: Option<String>,
+    stdout: Option<String>,
+    stderr: Option<String>,
+    prefork_id: i64,
+}
+
+impl CliCommand for Resume {
+    fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
+        let dev_null = || "/dev/null".to_owned();
+
+        controller.run_reaper_command(reaper::Command::StartResume(self.prefork_id))?;
+        controller.run_manager_command(manager::Command::Run {
+            options: running::Options {
+                mode: running::Mode::Resume,
+                argv: Vec::new(),
+                stdin: self.stdin.unwrap_or_else(dev_null),
+                stdout: self.stdout.unwrap_or_else(dev_null),
+                stderr: self.stderr.unwrap_or_else(dev_null),
+                real_time_limit: None,
+                cpu_time_limit: None,
+                idleness_time_limit: None,
+                memory_limit: None,
+                processes_limit: None,
+                env: None,
+                prefork_id: self.prefork_id,
             },
         })
     }
@@ -437,6 +471,10 @@ fn handle_command(
         ),
         "prefork" => CliCommand::execute(
             json::from_str::<Prefork>(arg).context("Invalid JSON")?,
+            controller,
+        ),
+        "resume" => CliCommand::execute(
+            json::from_str::<Resume>(arg).context("Invalid JSON")?,
             controller,
         ),
         _ => bail!("Unknown command {command}"),
