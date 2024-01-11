@@ -909,8 +909,8 @@ impl<'a> Suspender<'a> {
                     }
                     "flags" => {
                         flags = Some(
-                            i32::from_str_radix(value, 16)
-                                .context("'flags' is not a hexadecimal number")?,
+                            i32::from_str_radix(value, 8)
+                                .context("'flags' is not an octal number")?,
                         );
                     }
                     "eventfd-count" => {
