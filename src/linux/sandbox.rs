@@ -147,7 +147,7 @@ pub fn enter_working_area() -> Result<()> {
     system::bind_mount("/oldroot/proc", "/proc")
         .context("Failed to bind-mount /oldroot/proc to /proc")?;
 
-    system::change_propagation("/", system::MS_SHARED | system::MS_REC)
+    system::change_propagation("/", libc::MS_SHARED | libc::MS_REC)
         .expect("Failed to change propagation to shared");
 
     Ok(())
@@ -189,7 +189,7 @@ pub fn create_dev_copy() -> Result<()> {
         "devpts",
         "/dev/pts",
         "devpts",
-        system::MS_NOSUID | system::MS_NOEXEC,
+        libc::MS_NOSUID | libc::MS_NOEXEC,
         Some("mode=666,ptmxmode=666"),
     )
     .context("Failed to mount devpts at /dev/pts")?;

@@ -3,6 +3,7 @@ use crate::{
     log,
 };
 use anyhow::{anyhow, ensure, Context, Result};
+use nix::libc;
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, ErrorKind};
@@ -75,7 +76,7 @@ pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<Rootf
 
             system::bind_mount(&source_path, &target_path)
                 .with_context(|| format!("Failed to bind-mount {source_path} to {target_path}"))?;
-            system::bind_mount_opt("none", &target_path, system::MS_REMOUNT | system::MS_RDONLY)
+            system::bind_mount_opt("none", &target_path, libc::MS_REMOUNT | libc::MS_RDONLY)
                 .with_context(|| format!("Failed to remount {target_path} read-only"))?;
         }
     }
@@ -91,14 +92,10 @@ pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<Rootf
         std::fs::create_dir(path).with_context(|| format!("Failed to mkdir {path}"))?;
     }
     // Mount /dev
-    system::bind_mount_opt("/dev", "/newroot/dev", system::MS_REC)
+    system::bind_mount_opt("/dev", "/newroot/dev", libc::MS_REC)
         .context("Failed to bind-mount /newroot/dev")?;
-    system::bind_mount_opt(
-        "none",
-        "/newroot/dev",
-        system::MS_REMOUNT | system::MS_RDONLY,
-    )
-    .context("Failed to remount /newroot/dev read-only")?;
+    system::bind_mount_opt("none", "/newroot/dev", libc::MS_REMOUNT | libc::MS_RDONLY)
+        .context("Failed to remount /newroot/dev read-only")?;
 
     // Remember current mounts so that we can restore the state on reset
     let mut state = RootfsState {
@@ -118,9 +115,9 @@ pub fn configure_rootfs() -> Result<()> {
     // We want to unmount /oldroot and others, so we need to switch to a new mount namespace. But we
     // don't want mounts to get locked, so the user namespace has to stay the same.
     mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
-    system::change_propagation("/oldroot", system::MS_PRIVATE)
+    system::change_propagation("/oldroot", libc::MS_PRIVATE)
         .context("Failed to change propagation of /oldroot")?;
-    system::umount_opt("/oldroot", system::MNT_DETACH).context("Failed to unmount /oldroot")?;
+    system::umount_opt("/oldroot", libc::MNT_DETACH).context("Failed to unmount /oldroot")?;
 
     Ok(())
 }
@@ -190,7 +187,7 @@ pub fn commit(state: &mut RootfsState) -> Result<()> {
         "none",
         "/newroot/space",
         "tmpfs",
-        system::MS_REMOUNT | system::MS_RDONLY | system::MS_NOSUID,
+        libc::MS_REMOUNT | libc::MS_RDONLY | libc::MS_NOSUID,
         Some(
             format!(
                 "size={},nr_inodes={}",
@@ -275,7 +272,7 @@ fn mount_user_dir(state: &RootfsState, path: &str) -> Result<()> {
         "none",
         path,
         "tmpfs",
-        system::MS_NOSUID,
+        libc::MS_NOSUID,
         Some(
             format!(
                 "size={},nr_inodes={}",
@@ -335,7 +332,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
         "none",
         "/staging",
         "tmpfs",
-        system::MS_NOSUID,
+        libc::MS_NOSUID,
         Some(
             format!(
                 "size={},nr_inodes={}",
@@ -352,7 +349,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
         std::fs::create_dir("/staging/work").context("Failed to mkdir /staging/work")?;
         system::umount("/newroot/dev/shm").context("Failed to unmount /newroot/dev/shm")?;
         system::umount("/newroot/tmp").context("Failed to unmount /newroot/tmp")?;
-        system::umount_opt("/newroot/space", system::MNT_DETACH)
+        system::umount_opt("/newroot/space", libc::MNT_DETACH)
             .context("Failed to unmount /newroot/space")?;
         system::mount(
             "none",
