@@ -74,11 +74,11 @@ fn execute_command(command: Command, runner: &running::Runner) -> Result<Option<
             match results.verdict {
                 running::Verdict::ExitCode(exit_code_) => {
                     limit_verdict = "OK";
-                    exit_code = exit_code_;
+                    exit_code = exit_code_ as i64;
                 }
                 running::Verdict::Signaled(signal_number) => {
                     limit_verdict = "Signaled";
-                    exit_code = -signal_number;
+                    exit_code = -signal_number as i64;
                 }
                 running::Verdict::CPUTimeLimitExceeded => {
                     limit_verdict = "CPUTimeLimitExceeded";
@@ -92,16 +92,16 @@ fn execute_command(command: Command, runner: &running::Runner) -> Result<Option<
                 running::Verdict::MemoryLimitExceeded => {
                     limit_verdict = "MemoryLimitExceeded";
                 }
-                running::Verdict::Suspended(pid) => {
+                running::Verdict::Suspended(prefork_id) => {
                     limit_verdict = "Suspended";
-                    exit_code = pid;
+                    exit_code = prefork_id;
                 }
             }
 
             #[derive(Serialize)]
             struct Results {
                 limit_verdict: &'static str,
-                exit_code: i32,
+                exit_code: i64,
                 real_time: f64,
                 cpu_time: f64,
                 idleness_time: f64,
