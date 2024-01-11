@@ -595,11 +595,7 @@ impl PreForkRun<'_> {
                 };
 
                 if writable {
-                    log!(
-                        "Suspending on writable file {} {:?}",
-                        fd_stat.st_rdev,
-                        self.manager.white_list_rdev
-                    );
+                    log!("Suspending on writable file");
                     return Ok(Some(SuspendOptions::new_after_open(fd)));
                 }
             }
@@ -633,25 +629,16 @@ impl<'a> Suspender<'a> {
         let started = Instant::now();
         log!("Suspend started on {started:?}");
 
-        let syscall_info = self
-            .orig
-            .get_syscall_info()
-            .context("Failed to get syscall info")?;
-        let syscall_info = unsafe { syscall_info.u.seccomp };
-        log!(
-            "Suspending on {}",
-            tracing::SyscallArgs {
-                syscall_no: syscall_info.nr as i32,
-                args: syscall_info.args.map(|arg| arg as usize)
-            }
-        );
-
         // Save register state
         let mut registers = self.orig.get_registers()?;
         // Jump back to the syscall instruction
         registers.rip -= self.orig.get_syscall_insn_length() as u64;
         // Change the -ENOSYS placed by seccomp to the real syscall number
-        registers.rax = syscall_info.nr;
+        let syscall_info = self
+            .orig
+            .get_syscall_info()
+            .context("Failed to get syscall info")?;
+        registers.rax = unsafe { syscall_info.u.seccomp }.nr;
 
         // It's important to get the kernel messing with IP due to rseq out of the way as fast as
         // possible
