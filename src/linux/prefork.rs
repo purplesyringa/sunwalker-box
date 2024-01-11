@@ -349,16 +349,7 @@ impl PreForkManager {
 
         if child_pid != data.orig_pid {
             child.resume_signal(libc::SIGKILL)?;
-            child.wait()?;
-
-            loop {
-                let wait_status = child.wait()?;
-                match wait_status {
-                    system::WaitStatus::Signaled(_, libc::SIGKILL) => break,
-                    _ => bail!("Expected SIGKILL, got {wait_status:?}"),
-                }
-            }
-
+            wait_for_sigkill(&mut child)?;
             bail!("Pid {} has already been taken", data.orig_pid);
         }
 
@@ -374,7 +365,7 @@ impl PreForkManager {
                 .context("Failed to read-out error from child")?;
             let error = u64::from_ne_bytes(error);
             child.resume_signal(libc::SIGKILL)?;
-            child.wait()?;
+            wait_for_sigkill(&mut child)?;
             return Err(recover_cxx_error(error, STEMCELL_CONTEXTS).context("In child"));
         }
 
@@ -384,7 +375,7 @@ impl PreForkManager {
             .context("Failed to get child registers")?;
         if regs.rsp != 0x5afec0def1e1d {
             child.resume_signal(libc::SIGKILL)?;
-            child.wait()?;
+            wait_for_sigkill(&mut child)?;
             bail!("Child terminated with SIGSEGV");
         }
 
@@ -1356,7 +1347,7 @@ fn wait_for_raised_sigstop(
                     return Ok(false);
                 } else {
                     process.resume_signal(libc::SIGKILL)?;
-                    process.wait()?;
+                    wait_for_sigkill(process)?;
                     bail_signal(info)?;
                 }
             }
@@ -1384,6 +1375,15 @@ fn bail_signal(info: siginfo_t) -> Result<!> {
     } else {
         bail!("Unexpected stop with signal {}", info.si_signo);
     }
+}
+
+fn wait_for_sigkill(process: &mut tracing::TracedProcess) -> Result<()> {
+    let wait_status = process.wait()?;
+    ensure!(
+        matches!(wait_status, system::WaitStatus::Signaled(_, libc::SIGKILL)),
+        "Expected SIGKILL, got {wait_status:?}"
+    );
+    Ok(())
 }
 
 #[crossmist::func]
