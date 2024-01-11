@@ -440,6 +440,14 @@ impl SingleRun<'_> {
     }
 
     fn wait_for_event(&mut self) -> Result<system::WaitStatus> {
+        let timeout_ms = self.compute_wait_timeout_ms();
+
+        if timeout_ms == -1 {
+            // Wait for infinity
+            return system::waitpid(None, system::WaitPidFlag::__WALL)
+                .context("Failed to waitpid for process");
+        }
+
         let wait_status = system::waitpid(
             None,
             system::WaitPidFlag::__WALL | system::WaitPidFlag::WNOHANG,
@@ -449,7 +457,6 @@ impl SingleRun<'_> {
             return Ok(wait_status);
         }
 
-        let timeout_ms = self.compute_wait_timeout_ms();
         let mut events = [epoll::EpollEvent::empty()];
         let n_events = self
             .runner
