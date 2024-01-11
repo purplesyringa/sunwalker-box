@@ -10,9 +10,4 @@ static Result<void> save(State &state) {
     return {};
 }
 
-static Result<void> load(const State &state) {
-    libc::set_tid_address(reinterpret_cast<int *>(state)).TRY();
-    return {};
-}
-
 } // namespace tid_address

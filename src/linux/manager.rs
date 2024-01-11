@@ -95,7 +95,7 @@ fn execute_command(
                 Exited { exit_code: i32 },
                 Signaled { signal_number: i32 },
                 LimitExceeded { limit: Limit },
-                Suspended { prefork_id: i32 },
+                Suspended { prefork_id: i64 },
             }
 
             #[derive(Serialize)]

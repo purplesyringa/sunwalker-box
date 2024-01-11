@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, controller, kmodule, manager, rootfs, running, sandbox},
+    linux::{cgroups, controller, kmodule, manager, reaper, rootfs, running, sandbox},
     log,
     log::LogLevel,
 };
@@ -175,6 +175,7 @@ impl CliCommand for Run {
                 memory_limit: limits.memory,
                 processes_limit: limits.processes,
                 env: self.env,
+                prefork_id: 0,
             },
         });
 
@@ -219,6 +220,53 @@ impl CliCommand for Prefork {
                 memory_limit: limits.memory,
                 processes_limit: limits.processes,
                 env: self.env,
+                prefork_id: 0,
+            },
+        });
+
+        match result {
+            Ok(Some(thing)) => thing,
+            Ok(None) => Response::success(&()),
+            Err(error) => Response::error(&error),
+        }
+    }
+
+    #[allow(refining_impl_trait)]
+    fn execute(self, _: &mut controller::Controller) -> Result<()> {
+        bail!("Not meant to be called like this")
+    }
+}
+
+#[derive(Deserialize)]
+struct Resume {
+    stdio: Option<Stdio>,
+    prefork_id: i64,
+}
+
+impl CliCommand for Resume {
+    fn execute_to_str(self, controller: &mut controller::Controller) -> String {
+        let dev_null = || "/dev/null".to_owned();
+        let stdio = self.stdio.unwrap_or_default();
+
+        if let Err(e) = controller.run_reaper_command(reaper::Command::StartResume(self.prefork_id))
+        {
+            return Response::error(&e);
+        }
+
+        let result = controller.run_manager_command(manager::Command::Run {
+            options: running::Options {
+                mode: running::Mode::Resume,
+                argv: Vec::new(),
+                stdin: stdio.stdin.unwrap_or_else(dev_null),
+                stdout: stdio.stdout.unwrap_or_else(dev_null),
+                stderr: stdio.stderr.unwrap_or_else(dev_null),
+                real_time_limit: None,
+                cpu_time_limit: None,
+                idleness_time_limit: None,
+                memory_limit: None,
+                processes_limit: None,
+                env: None,
+                prefork_id: self.prefork_id,
             },
         });
 
@@ -280,6 +328,8 @@ enum Command {
     Run(Run),
     #[serde(rename = "prefork")]
     Prefork(Prefork),
+    #[serde(rename = "resume")]
+    Resume(Resume),
 }
 
 impl Command {
@@ -291,6 +341,7 @@ impl Command {
             Command::Commit => Commit.execute_to_str(controller),
             Command::Run(run) => run.execute_to_str(controller),
             Command::Prefork(prefork) => prefork.execute_to_str(controller),
+            Command::Resume(resume) => resume.execute_to_str(controller),
         }
     }
 }

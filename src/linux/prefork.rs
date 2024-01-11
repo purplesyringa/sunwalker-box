@@ -1,27 +1,26 @@
 use crate::{
-    linux::{ids, string_table, system, timens, tracing, userns},
+    linux::{cgroups, ids, string_table, system, timens, tracing, userns},
     log, syscall,
 };
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use crossmist::{Object, Sender};
 use nix::{
     fcntl, libc,
-    libc::{dev_t, off_t},
+    libc::{dev_t, mode_t, off_t, pid_t},
     sys::{prctl, ptrace, signal, stat, wait},
     unistd,
     unistd::Pid,
 };
 use std::cell::Cell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ffi::CStr;
 use std::fs::File;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, IoSlice};
 use std::mem::MaybeUninit;
-use std::os::fd::{AsRawFd, FromRawFd, RawFd};
-use std::path::PathBuf;
+use std::os::fd::{AsRawFd, FromRawFd, OwnedFd, RawFd};
+use std::os::unix::net::{SocketAncillary, UnixStream};
+use std::path::{Path, PathBuf};
 use std::time::Instant;
-
-use super::tracing::TracedProcess;
 
 pub struct PreForkManager {
     pub stdio_subst: File,
@@ -41,12 +40,21 @@ pub struct SuspendOptions {
     inside_syscall: bool,
 }
 
-#[derive(Clone, Copy, Debug)]
 enum State {
     NotStarted,
     Alive,
     WaitingOnOpen,
-    Suspended(Pid),
+    Suspended(SuspendData),
+}
+
+pub struct SuspendData {
+    master: tracing::TracedProcess,
+    pub orig_pid: Pid,
+    inject_location: usize,
+    cwd: PathBuf,
+    control_tx: UnixStream,
+    registers: tracing::Registers,
+    signal_mask: u64,
 }
 
 // MaybeUninit is used to avoid data leaks via padding
@@ -55,10 +63,10 @@ pub struct Suspender<'a> {
     options: SuspendOptions,
     inject_location: usize,
     master: Option<tracing::TracedProcess>,
-    manual_state: Option<ManualState>,
-    transferred_files: Vec<File>,
+    transferred_fds: Vec<OwnedFd>,
+    forbidden_transferred_fds: HashSet<RawFd>,
     stemcell_state: MaybeUninit<StemcellState>,
-    // registers: tracing::Registers,
+    control_tx: Option<UnixStream>,
     // rseq_info: Option<RSeqInfo>,
     // started: Instant,
 }
@@ -155,14 +163,9 @@ struct ParasiteState {
     pending_signals: u64,
     personality: usize,
     signal_handlers: [kernel_sigaction; 64],
-    signal_mask: u64,
     thp_options: usize,
     tid_address: usize,
     umask: libc::mode_t,
-}
-
-struct ManualState {
-    cwd: PathBuf,
 }
 
 #[repr(C)]
@@ -178,7 +181,8 @@ struct StemcellState {
     signal_handlers: [kernel_sigaction; 64],
     thp_options: usize,
     tid_address: usize,
-    umask: libc::mode_t,
+    umask: mode_t,
+    controlling_fd: RawFd,
 }
 
 // The default value of sysctl fs.nr_open = 1048576 is too large to allocate a static array for, so
@@ -204,6 +208,7 @@ struct SavedFd {
 enum SavedFdKind {
     EventFd { count: u32, padding: u64 },
     Regular { cloned_fd: RawFd, position: u64 },
+    Directory { cloned_fd: RawFd, position: u64 },
 }
 
 // Use the default value of sysctl vm.max_map_count
@@ -275,18 +280,140 @@ impl PreForkManager {
             state: Cell::new(State::NotStarted),
         })
     }
+
+    pub fn resume(
+        &self,
+        data: &mut SuspendData,
+        stdio: [File; 3],
+        cgroup: &mut cgroups::BoxCgroup,
+    ) -> Result<tracing::TracedProcess> {
+        log!("Resuming process");
+
+        // 128 bytes ought to be enough for anyone
+        // https://github.com/rust-lang/rust/issues/76915#issuecomment-1875845773
+        #[repr(align(8))]
+        struct AncillaryBuffer([u8; 128]);
+
+        // Trigger clone
+        let cwd = std::fs::File::open(&data.cwd).context("Failed to open cwd")?;
+        let raw_fds = [
+            stdio[0].as_raw_fd(),
+            stdio[1].as_raw_fd(),
+            stdio[2].as_raw_fd(),
+            cwd.as_raw_fd(),
+        ];
+        let mut ancillary_buffer = AncillaryBuffer([0u8; 128]);
+        let mut ancillary = SocketAncillary::new(&mut ancillary_buffer.0);
+        assert!(ancillary.add_fds(&raw_fds));
+        let control_data = [0];
+        data.control_tx
+            .send_vectored_with_ancillary(&[IoSlice::new(&control_data)], &mut ancillary)
+            .context("Failed to send command to control socket")?;
+
+        let wait_status = data.master.wait(system::WaitPidFlag::__WALL)?;
+        match wait_status {
+            system::WaitStatus::Stopped(..) => {
+                // Only treat SIGSTOP as a success signal if it was sent explicitly, rather than
+                // triggered by any sort of delayed mechanism
+                let info = data.master.get_signal_info()?;
+                if info.si_signo == libc::SIGSTOP && info.si_code == libc::SI_USER {
+                    // Likely an error
+                    let mut error = [0u8; 8];
+                    data.master
+                        .read_memory(data.inject_location + STEMCELL_STATE_OFFSET, &mut error)
+                        .context("Failed to read-out error from stemcell")?;
+                    let error = u64::from_ne_bytes(error);
+                    return Err(recover_cxx_error(error, STEMCELL_CONTEXTS).context("In stemcell"));
+                } else {
+                    data.master.resume_signal(info.si_signo)?;
+                    bail!("Master unexpectedly stopped with signal {}", info.si_signo);
+                }
+            }
+            system::WaitStatus::PtraceEvent(_, _, libc::PTRACE_EVENT_CLONE) => {}
+            _ => {
+                data.master.detach()?;
+                bail!("Unexpected status {wait_status:?} on master");
+            }
+        }
+
+        let child_pid = Pid::from_raw(data.master.get_event_msg()? as pid_t);
+        log!("Child spawned with pid {child_pid}");
+        data.master.resume()?;
+
+        let mut child = tracing::TracedProcess::new(child_pid)?;
+        let wait_status = child.wait(system::WaitPidFlag::__WALL)?;
+        ensure!(
+            matches!(wait_status, system::WaitStatus::Stopped(_, libc::SIGSTOP)),
+            "Expected SIGSTOP, got {wait_status:?}",
+        );
+
+        if child_pid != data.orig_pid {
+            child.resume_signal(libc::SIGKILL)?;
+            child.wait(system::WaitPidFlag::__WALL)?;
+
+            loop {
+                let wait_status = child.wait(system::WaitPidFlag::__WALL)?;
+                match wait_status {
+                    system::WaitStatus::Signaled(_, libc::SIGKILL) => break,
+                    _ => bail!("Expected SIGKILL, got {wait_status:?}"),
+                }
+            }
+
+            bail!("Pid {} has already been taken", data.orig_pid);
+        }
+
+        child.init().context("Failed to init child")?;
+        child.resume().context("Failed to resume child")?;
+
+        let had_sigstop = wait_for_raised_sigstop(&mut child, true)
+            .context("Failed to wait for raise(SIGSTOP) in child")?;
+        if had_sigstop {
+            let mut error = [0u8; 8];
+            child
+                .read_memory(data.inject_location + STEMCELL_STATE_OFFSET, &mut error)
+                .context("Failed to read-out error from child")?;
+            let error = u64::from_ne_bytes(error);
+            child.resume_signal(libc::SIGKILL)?;
+            child.wait(system::WaitPidFlag::__WALL)?;
+            return Err(recover_cxx_error(error, STEMCELL_CONTEXTS).context("In child"));
+        }
+
+        // Verify that the SIGSEGV was intentional
+        let regs = child
+            .get_registers()
+            .context("Failed to get child registers")?;
+        if regs.rsp != 0x5afec0def1e1d {
+            child.resume_signal(libc::SIGKILL)?;
+            child.wait(system::WaitPidFlag::__WALL)?;
+            bail!("Child terminated with SIGSEGV");
+        }
+
+        // Only restore signal mask after the child unmaps itself, so that we don't handle signals
+        // while it's mapped
+        child
+            .set_signal_mask(data.signal_mask)
+            .context("Failed to restore signal mask")?;
+
+        // Finally, restore CPU state
+        child.set_registers(data.registers.clone());
+
+        // I dare you
+        child.resume().context("Failed to resume child")?;
+
+        Ok(child)
+    }
 }
 
 impl PreForkRun<'_> {
     fn suspend(&self, orig: &mut tracing::TracedProcess, options: SuspendOptions) -> Result<()> {
-        let pid = Suspender::new(orig, options).suspend()?;
-        self.state.set(State::Suspended(pid));
+        self.state
+            .set(State::Suspended(Suspender::new(orig, options).suspend()?));
         Ok(())
     }
 
-    pub fn get_suspended_pid(&self) -> Result<Pid> {
-        if let State::Suspended(pid) = self.state.get() {
-            Ok(pid)
+    pub fn get_suspend_data(self) -> Result<SuspendData> {
+        if let State::Suspended(data) = self.state.into_inner() {
+            Ok(data)
         } else {
             bail!("Process has not been suspended")
         }
@@ -435,7 +562,7 @@ impl PreForkRun<'_> {
         &mut self,
         orig: &mut tracing::TracedProcess,
     ) -> Result<Option<SuspendOptions>> {
-        match self.state.get() {
+        match self.state.get_mut() {
             State::WaitingOnOpen => {
                 self.state.set(State::Alive);
 
@@ -486,7 +613,7 @@ impl PreForkRun<'_> {
                 }
             }
 
-            _ => bail!("PtraceSyscall on unexpected state {:?}", self.state.get()),
+            _ => bail!("PtraceSyscall on unexpected state"),
         }
 
         Ok(None)
@@ -500,13 +627,14 @@ impl<'a> Suspender<'a> {
             options,
             inject_location: 0,
             master: None,
-            manual_state: None,
-            transferred_files: Vec::new(),
+            transferred_fds: Vec::new(),
+            forbidden_transferred_fds: HashSet::new(),
             stemcell_state: MaybeUninit::zeroed(),
+            control_tx: None,
         }
     }
 
-    pub fn suspend(&mut self) -> Result<Pid> {
+    pub fn suspend(mut self) -> Result<SuspendData> {
         // We would like to detach the restricted seccomp filter and attach the normal one.
         // Unfortunately, seccomp filters cannot be removed, so we have to cheat and create a new
         // process, effectively running fork() in userland.
@@ -528,20 +656,25 @@ impl<'a> Suspender<'a> {
         );
 
         // Save register state
-        let registers = self.orig.get_registers()?;
-
-        if self.options.restart_syscall {
-            // Jump back to the syscall instruction
-            let ip = self.orig.get_instruction_pointer()? - self.orig.get_syscall_insn_length();
-            self.orig.set_instruction_pointer(ip)?;
-        }
+        let mut registers = self.orig.get_registers()?;
+        // Jump back to the syscall instruction
+        registers.rip -= self.orig.get_syscall_insn_length() as u64;
+        // Change the -ENOSYS placed by seccomp to the real syscall number
+        registers.rax = syscall_info.nr;
 
         // It's important to get the kernel messing with IP due to rseq out of the way as fast as
         // possible
         let rseq_info = self.save_rseq_info()?;
 
-        self.collect_info_manually()
-            .context("Failed to collect information manually")?;
+        // The working directory always exists because we don't allow deleting files before suspend
+        let pid = self.orig.get_pid();
+        let cwd = std::fs::read_link(format!("/proc/{pid}/cwd"))
+            .with_context(|| format!("Failed to readlink /proc/{pid}/cwd"))?;
+
+        let signal_mask = self
+            .orig
+            .get_signal_mask()
+            .context("Failed to get signal mask")?;
 
         self.collect_file_descriptors()
             .context("Failed to collect file descriptors")?;
@@ -565,6 +698,9 @@ impl<'a> Suspender<'a> {
         self.collect_info_via_parasite()
             .context("Failed to collect information via parasite")?;
 
+        self.create_controlling_socket()
+            .context("Failed to create controlling socket")?;
+
         self.start_master().context("Failed to start master copy")?;
 
         self.restore_via_master()
@@ -572,7 +708,15 @@ impl<'a> Suspender<'a> {
 
         log!("Suspend finished in {:?}", started.elapsed());
 
-        Ok(self.master.as_ref().unwrap().get_pid())
+        Ok(SuspendData {
+            master: self.master.unwrap(),
+            orig_pid: self.orig.get_pid(),
+            inject_location: self.inject_location,
+            cwd,
+            control_tx: self.control_tx.unwrap(),
+            registers,
+            signal_mask,
+        })
     }
 
     fn save_rseq_info(&self) -> Result<Option<RSeqInfo>> {
@@ -684,8 +828,16 @@ impl<'a> Suspender<'a> {
         self.orig.init()?;
         self.orig.resume()?;
 
-        Self::wait_for_raised_sigstop(&mut self.orig)
+        wait_for_raised_sigstop(&mut self.orig, false)
             .context("Failed to wait for raise(SIGSTOP) in parasite")?;
+
+        // Don't detach until after delivering SIGSTOP as to not corrupt memory
+        self.orig
+            .resume_signal(libc::SIGSTOP)
+            .context("Failed to send SIGSTOP to parasite")?;
+        self.orig
+            .detach()
+            .context("Failed to detach from parasite")?;
 
         let mut parasite_state = MaybeUninit::<ParasiteState>::zeroed();
         self.orig
@@ -696,9 +848,9 @@ impl<'a> Suspender<'a> {
         let parasite_state = unsafe { parasite_state.assume_init_ref() };
 
         if parasite_state.result != 0 {
-            return Err(self
-                .recover_cxx_error(parasite_state.result, PARASITE_CONTEXTS)
-                .context("In parasite"));
+            return Err(
+                recover_cxx_error(parasite_state.result, PARASITE_CONTEXTS).context("In parasite")
+            );
         }
 
         // Perform a bitwise copy as opposed to copy that might leak data in padding bytes
@@ -732,87 +884,6 @@ impl<'a> Suspender<'a> {
         }
 
         Ok(())
-    }
-
-    fn recover_cxx_error(&self, mut error: u64, context_map: &[&'static str]) -> anyhow::Error {
-        let mut contexts = Vec::new();
-        while error >= 0x10000 {
-            let context = (error & 0xff) as usize;
-            error >>= 8;
-            if context >= context_map.len() {
-                log!(
-                    impossible,
-                    "C++ code returned an error that could not successfully be decoded. This \
-                     indicates the process has reached user code. This should not cause any \
-                     vulnerabilities per se, but is a highly unexpected event that might trigger \
-                     corner cases or indicate prefork support is lacking."
-                );
-                return anyhow!("C++ error has invalid context ID");
-            }
-            contexts.push(context_map[context]);
-        }
-        let mut error = if error == 0x8000 {
-            anyhow!("Generic error")
-        } else {
-            let errno = (error as u16).wrapping_neg() as i32;
-            anyhow!("Syscall error {}", string_table::errno_to_name(errno))
-        };
-        for &context in contexts.iter().rev() {
-            error = error.context(context);
-        }
-        error
-    }
-
-    fn wait_for_raised_sigstop(process: &mut TracedProcess) -> Result<()> {
-        // We must consider that in the original process, at any point in time, a signal may arrive,
-        // delayed from the user's code. The only signal we want to handle in a special way is
-        // SIGSTOP, which the parasite sends when it successfully captures the state and the
-        // stemcell sends when it successfully restores the state.
-        loop {
-            let wait_status = process.wait(system::WaitPidFlag::__WALL)?;
-            // If we don't detach from the process, it won't be able to receive SIGKILL and
-            // terminate. So do that, even though that technically allows the process to do weird
-            // stuff in the meantime.
-            match wait_status {
-                system::WaitStatus::Exited(_, code) => {
-                    bail!("Process unexpectedly exited with code {code}");
-                }
-                system::WaitStatus::Signaled(_, signal) => {
-                    bail!("Process unexpectedly killed with signal {signal}");
-                }
-                system::WaitStatus::Stopped(..) => {
-                    // Only treat SIGSTOP as a success signal if it was sent explicitly, rather than
-                    // triggered by any sort of delayed mechanism
-                    let info = process.get_signal_info()?;
-                    process.detach()?;
-                    const SI_USER: i32 = 0;
-                    if info.si_signo == libc::SIGSTOP && info.si_code == SI_USER {
-                        return Ok(());
-                    } else {
-                        bail!("Unexpected stop with signal {}", info.si_signo);
-                    }
-                }
-                system::WaitStatus::PtraceEvent(..) => process.resume()?,
-                _ => {
-                    process.detach()?;
-                    bail!("Unexpected status");
-                }
-            }
-        }
-    }
-
-    fn collect_info_manually(&mut self) -> Result<()> {
-        self.manual_state = Some(ManualState {
-            cwd: self.collect_cwd()?,
-        });
-        Ok(())
-    }
-
-    fn collect_cwd(&self) -> Result<PathBuf> {
-        // The working directory always exists because we don't allow deleting files before suspend
-        let pid = self.orig.get_pid();
-        std::fs::read_link(format!("/proc/{pid}/cwd"))
-            .with_context(|| format!("Failed to readlink /proc/{pid}/cwd"))
     }
 
     fn collect_file_descriptors(&mut self) -> Result<()> {
@@ -883,18 +954,31 @@ impl<'a> Suspender<'a> {
                 continue;
             }
 
+            let position = pos.context("'pos' missing on regular/directory fd")?;
+
             let file = unsafe {
-                File::from_raw_fd(fcntl::open(
+                OwnedFd::from_raw_fd(fcntl::open(
                     &fd_entry.path(),
                     fcntl::OFlag::from_bits_retain(flags & !(libc::O_CREAT | libc::O_TMPFILE)),
                     stat::Mode::empty(),
                 )?)
             };
-            saved_fd.kind = SavedFdKind::Regular {
-                cloned_fd: self.transferred_files.len() as RawFd,
-                position: pos.context("'pos' missing on regular fd")?,
+            let stat = stat::fstat(file.as_raw_fd()).context("Failed to stat file")?;
+            let cloned_fd = self.transferred_fds.len() as RawFd;
+            self.transferred_fds.push(file);
+            self.forbidden_transferred_fds.insert(fd);
+
+            saved_fd.kind = if stat.st_mode & libc::S_IFMT == libc::S_IFDIR {
+                SavedFdKind::Directory {
+                    cloned_fd,
+                    position,
+                }
+            } else {
+                SavedFdKind::Regular {
+                    cloned_fd,
+                    position,
+                }
             };
-            self.transferred_files.push(file);
         }
 
         Ok(())
@@ -926,12 +1010,13 @@ impl<'a> Suspender<'a> {
     fn translate_memory_maps(&mut self, memory_maps: &[tracing::MemoryMap]) -> Result<()> {
         let translated_maps_mut = &mut unsafe { self.stemcell_state.assume_init_mut() }.memory_maps;
 
-        translated_maps_mut.orig_mem_fd = self.transferred_files.len() as RawFd;
-        self.transferred_files.push(
+        translated_maps_mut.orig_mem_fd = self.transferred_fds.len() as RawFd;
+        self.transferred_fds.push(
             self.orig
                 .get_mem()
                 .try_clone()
-                .context("Failed to clone /proc/.../mem of original process")?,
+                .context("Failed to clone /proc/.../mem of original process")?
+                .into(),
         );
 
         let mut file_indices = HashMap::new();
@@ -943,29 +1028,6 @@ impl<'a> Suspender<'a> {
             }
             // This segment is mapped as a part of ARCH_MAP_VDSO_64
             if map.desc == "[vdso]" {
-                continue;
-            }
-
-            if map.shared {
-                // Shared memory is always backed by a writable file (anonymous mappings are backed
-                // by /dev/zero), of which we only allow a short idempotent whitelist. Out of those,
-                // /dev/zero is the only file that can be mmap'ed. Therefore, we can just mmap (and
-                // populate) shared memory on every fork.
-
-                // One problem is that two virtual addresses can be mmapped to the same physical
-                // address, e.g. if we do memfd_create() and then mmap() it at two addresses.
-                // Luckily, we have disabled memfd_create() in prefork mode, so that doesn't bother
-                // us.
-
-                // TODO: handle non-zero offset
-                // TODO: actually handle this
-                // shared_mappings
-                //     .try_push(SavedMapping {
-                //         base,
-                //         end,
-                //         prot: map.prot,
-                //     })
-                //     .map_err(|_| Error::custom(libc::ENOMEM, "Too many shared mappings"))?;
                 continue;
             }
 
@@ -988,8 +1050,23 @@ impl<'a> Suspender<'a> {
             }
 
             alloced.prot = map.prot;
-            alloced.flags = libc::MAP_FIXED_NOREPLACE | libc::MAP_PRIVATE;
+            alloced.flags = libc::MAP_FIXED_NOREPLACE;
             alloced.offset = map.offset;
+
+            if map.shared {
+                // Shared memory is either backed by a read-only file or /dev/zero (anonymous
+                // mappings are backed by the latter). Therefore, we can mmap (and populate)
+                // read-only files before fork, and /dev/zero after fork.
+
+                // One problem is that two virtual addresses can be mmapped to the same physical
+                // address, e.g. if we do memfd_create() and then mmap() it at two addresses.
+                // Luckily, we have disabled memfd_create() in prefork mode, so that doesn't bother
+                // us.
+
+                alloced.flags |= libc::MAP_SHARED;
+            } else {
+                alloced.flags |= libc::MAP_PRIVATE;
+            }
 
             if map.desc == "[stack]" {
                 // FIXME: This assumes that a) only [stack] uses MAP_GROWSDOWN, b) no one has
@@ -1019,19 +1096,64 @@ impl<'a> Suspender<'a> {
             // requires capabilities in the root userns, which we don't have. Instead, we abuse the
             // fact that the file system is immutable during prefork, and thus the path reported by
             // readlink (as opposed to /proc/.../maps, which may corrupt special characters) is
-            // always valid. Moreover, we know that the file was opened with O_RDONLY, and thus we
-            // can do the same here
-            let file_path = self.orig.get_memory_mapped_file_path(&map)?;
-            let file = File::open(&file_path).with_context(|| {
-                format!(
-                    "Failed to open {file_path:?}, mapped to {:x}-{:x}",
-                    map.base, map.end,
-                )
-            })?;
-            alloced.fd = self.transferred_files.len() as RawFd;
-            file_indices.insert(key, alloced.fd);
-            self.transferred_files.push(file);
+            // always valid. Moreover, we know that the file was opened with O_RDONLY (save for
+            // /dev/zero, but that's an exception for which O_RDONLY works just as well), and thus
+            // we can do the same here
+            match self.orig.get_memory_mapped_file_path(&map)? {
+                Some(file_path) => {
+                    if file_path == Path::new("/dev/zero") {
+                        alloced.prot |= -0x80000000;
+                    }
+                    let file = File::open(&file_path)
+                        .with_context(|| {
+                            format!(
+                                "Failed to open {file_path:?}, mapped to {:x}-{:x}",
+                                map.base, map.end,
+                            )
+                        })?
+                        .into();
+                    alloced.fd = self.transferred_fds.len() as RawFd;
+                    file_indices.insert(key, alloced.fd);
+                    self.transferred_fds.push(file);
+                }
+                None => {
+                    // Anonymous mapping
+                    alloced.flags |= libc::MAP_ANONYMOUS;
+                    alloced.fd = -1;
+                }
+            }
         }
+
+        Ok(())
+    }
+
+    fn create_controlling_socket(&mut self) -> Result<()> {
+        log!("Creating controller socket");
+
+        let (tx, rx) = unsafe {
+            let mut fds = [0, 0];
+            if libc::socketpair(
+                libc::AF_UNIX,
+                libc::SOCK_SEQPACKET | libc::SOCK_CLOEXEC,
+                0,
+                fds.as_mut_ptr(),
+            ) == -1
+            {
+                return Err(std::io::Error::last_os_error())
+                    .context("Failed to create socket pair");
+            }
+            (
+                UnixStream::from_raw_fd(fds[0]),
+                OwnedFd::from_raw_fd(fds[1]),
+            )
+        };
+
+        let stemcell_state = unsafe { self.stemcell_state.assume_init_mut() };
+
+        stemcell_state.controlling_fd = self.transferred_fds.len() as i32;
+        self.transferred_fds.push(rx);
+
+        self.control_tx = Some(tx);
 
         Ok(())
     }
@@ -1046,7 +1168,8 @@ impl<'a> Suspender<'a> {
             .spawn(
                 theirs,
                 self.inject_location,
-                std::mem::take(&mut self.transferred_files),
+                std::mem::take(&mut self.transferred_fds),
+                std::mem::take(&mut self.forbidden_transferred_fds),
                 transferred_fds_tx,
             )
             .context("Failed to spawn the child")?;
@@ -1056,7 +1179,8 @@ impl<'a> Suspender<'a> {
             .recv()
             .context("Failed to receive transferred fds from master copy")?
             .context("Master didn't deliver any transferred fds")?;
-        self.patch_transferred_fds(&transferred_fds);
+        self.patch_transferred_fds(&transferred_fds)
+            .context("Failed to to patch transferred fds")?;
 
         // The child will either exit or trigger SIGTRAP on execve() to stemcell due to ptrace
         let wait_status =
@@ -1076,21 +1200,52 @@ impl<'a> Suspender<'a> {
             }
         }
 
-        self.master = Some(tracing::TracedProcess::new(master_pid)?);
+        let master = tracing::TracedProcess::new(master_pid)?;
+        master.init().context("Failed to init master")?;
+        self.master = Some(master);
 
         Ok(())
     }
 
-    fn patch_transferred_fds(&mut self, fds: &[RawFd]) {
+    fn patch_transferred_fds(&mut self, fds: &[RawFd]) -> Result<()> {
         log!("Patching transferred fds");
 
-        let memory_maps_mut = &mut unsafe { self.stemcell_state.assume_init_mut() }.memory_maps;
-        memory_maps_mut.orig_mem_fd = fds[memory_maps_mut.orig_mem_fd as usize];
-        for map in &mut memory_maps_mut.maps[..memory_maps_mut.count] {
+        let state = unsafe { self.stemcell_state.assume_init_mut() };
+
+        state.memory_maps.orig_mem_fd = fds[state.memory_maps.orig_mem_fd as usize];
+        for map in &mut state.memory_maps.maps[..state.memory_maps.count] {
             if map.fd != -1 {
                 map.fd = fds[map.fd as usize];
             }
         }
+
+        for fd in &mut state.file_descriptors.fds[..state.file_descriptors.count] {
+            match fd.kind {
+                SavedFdKind::EventFd { .. } => {}
+                SavedFdKind::Regular {
+                    cloned_fd,
+                    position,
+                } => {
+                    fd.kind = SavedFdKind::Regular {
+                        cloned_fd: fds[cloned_fd as usize],
+                        position,
+                    }
+                }
+                SavedFdKind::Directory {
+                    cloned_fd,
+                    position,
+                } => {
+                    fd.kind = SavedFdKind::Directory {
+                        cloned_fd: fds[cloned_fd as usize],
+                        position,
+                    }
+                }
+            }
+        }
+
+        state.controlling_fd = fds[state.controlling_fd as usize];
+
+        Ok(())
     }
 
     fn restore_via_master(&mut self) -> Result<()> {
@@ -1107,7 +1262,7 @@ impl<'a> Suspender<'a> {
         log!("Resuming stemcell");
         master.resume().context("Failed to resume stemcell")?;
 
-        Self::wait_for_raised_sigstop(master)
+        wait_for_raised_sigstop(master, false)
             .context("Failed to wait for raise(SIGSTOP) in stemcell")?;
 
         let mut stemcell_result = [0u8; 8];
@@ -1120,12 +1275,108 @@ impl<'a> Suspender<'a> {
         let stemcell_result = u64::from_ne_bytes(stemcell_result);
 
         if stemcell_result != 0 {
-            return Err(self
-                .recover_cxx_error(stemcell_result, STEMCELL_CONTEXTS)
-                .context("In stemcell"));
+            master.detach()?;
+            return Err(
+                recover_cxx_error(stemcell_result, STEMCELL_CONTEXTS).context("In stemcell")
+            );
         }
 
+        log!("Entering fork loop");
+        master
+            .resume_signal(libc::SIGCONT)
+            .context("Failed to resume stemcell with SIGCONT")?;
+
         Ok(())
+    }
+}
+
+fn recover_cxx_error(mut error: u64, context_map: &[&'static str]) -> anyhow::Error {
+    let mut contexts = Vec::new();
+    while error >= 0x10000 {
+        let context = (error & 0xff) as usize;
+        error >>= 8;
+        if context >= context_map.len() {
+            log!(
+                impossible,
+                "C++ code returned an error that could not successfully be decoded. This \
+                 indicates the process has reached user code. This should not cause any \
+                 vulnerabilities per se, but is a highly unexpected event that might trigger \
+                 corner cases or indicate prefork support is lacking."
+            );
+            return anyhow!("C++ error has invalid context ID");
+        }
+        contexts.push(context_map[context]);
+    }
+    let mut error = if error == 0x8000 {
+        anyhow!("Generic error")
+    } else {
+        let errno = (error as u16).wrapping_neg() as i32;
+        anyhow!("Syscall error {}", string_table::errno_to_name(errno))
+    };
+    for &context in contexts.iter().rev() {
+        error = error.context(context);
+    }
+    error
+}
+
+fn wait_for_raised_sigstop(
+    process: &mut tracing::TracedProcess,
+    allow_sigsegv: bool,
+) -> Result<bool> {
+    // We must consider that in the original process, at any point in time, a signal may arrive,
+    // delayed from the user's code. The only signal we want to handle in a special way is SIGSTOP,
+    // which the parasite sends when it successfully captures the state and the stemcell sends when
+    // it successfully restores the state.
+    loop {
+        let wait_status = process.wait(system::WaitPidFlag::__WALL)?;
+        // If we don't detach from the process, it won't be able to receive SIGKILL and
+        // terminate. So do that, even though that technically allows the process to do weird
+        // stuff in the meantime.
+        match wait_status {
+            system::WaitStatus::Exited(_, code) => {
+                bail!("Process unexpectedly exited with code {code}");
+            }
+            system::WaitStatus::Signaled(_, signal) => {
+                bail!("Process unexpectedly killed with signal {signal}");
+            }
+            system::WaitStatus::Stopped(..) => {
+                // Only treat SIGSTOP as a success signal if it was sent explicitly, rather than
+                // triggered by any sort of delayed mechanism
+                let info = process.get_signal_info()?;
+                if info.si_signo == libc::SIGSTOP && info.si_code == libc::SI_USER {
+                    return Ok(true);
+                } else if info.si_signo == libc::SIGSEGV && allow_sigsegv {
+                    log!(
+                        "SIGSEGV at address {:?}; this might be expected, only worry about this \
+                         if an error appears later",
+                        unsafe { info.si_addr() },
+                    );
+                    return Ok(false);
+                } else {
+                    process.resume_signal(libc::SIGKILL)?;
+                    process.wait(system::WaitPidFlag::__WALL)?;
+                    // For ease of debugging
+                    let signal_name = match info.si_signo {
+                        libc::SIGILL => Some("SIGILL"),
+                        libc::SIGSEGV => Some("SIGSEGV"),
+                        libc::SIGBUS => Some("SIGBUS"),
+                        _ => None,
+                    };
+                    if let Some(name) = signal_name {
+                        bail!("Unexpected {name} at address {:?}", unsafe {
+                            info.si_addr()
+                        });
+                    } else {
+                        bail!("Unexpected stop with signal {}", info.si_signo);
+                    }
+                }
+            }
+            system::WaitStatus::PtraceEvent(..) => process.resume()?,
+            _ => {
+                process.detach()?;
+                bail!("Unexpected status");
+            }
+        }
     }
 }
 
@@ -1133,20 +1384,39 @@ impl<'a> Suspender<'a> {
 fn prefork_master(
     mut pipe: crossmist::Sender<String>,
     inject_location: usize,
-    transferred_files: Vec<File>,
+    mut transferred_fds: Vec<OwnedFd>,
+    forbidden_transferred_fds: HashSet<RawFd>,
     mut transferred_fds_tx: Sender<Vec<RawFd>>,
 ) {
     let result: Result<()> = try {
-        // Transfer fds of mapped files to parent and make them non-CLOEXEC
-        for file in &transferred_files {
-            fcntl::fcntl(
-                file.as_raw_fd(),
-                fcntl::FcntlArg::F_SETFD(fcntl::FdFlag::empty()),
-            )
-            .context("Failed to make mapped file fd non-CLOEXEC")?;
+        // Make sure transferred fds are not forbidden and make them all non-CLOEXEC
+        let mut target_fd = 3;
+        for fd in &mut transferred_fds {
+            if !forbidden_transferred_fds.contains(&fd.as_raw_fd()) {
+                // Easy case
+                fcntl::fcntl(
+                    fd.as_raw_fd(),
+                    fcntl::FcntlArg::F_SETFD(fcntl::FdFlag::empty()),
+                )
+                .context("Failed to make transferred fd non-CLOEXEC")?;
+                continue;
+            }
+            // Without closing the current fd, open a new one at an allowed location
+            while forbidden_transferred_fds.contains(&target_fd)
+                || fcntl::fcntl(target_fd, fcntl::FcntlArg::F_GETFD).is_ok()
+            {
+                target_fd += 1;
+            }
+            *fd = unsafe {
+                OwnedFd::from_raw_fd(
+                    unistd::dup2(fd.as_raw_fd(), target_fd)
+                        .context("Failed to clone transferred fd")?,
+                )
+            };
+            target_fd += 1;
         }
         transferred_fds_tx
-            .send(&transferred_files.iter().map(AsRawFd::as_raw_fd).collect())
+            .send(&transferred_fds.iter().map(AsRawFd::as_raw_fd).collect())
             .context("Failed to send transferred fds to manager")?;
 
         // We don't want to bother about emulating setsid() in userspace fork, so use it by default
