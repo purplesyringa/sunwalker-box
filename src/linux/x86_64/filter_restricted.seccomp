@@ -6,6 +6,7 @@ A = sys_number
 
 A == mmap ? mmap : next
 A == prctl ? prctl : next
+A == sysinfo ? trace : next
 
 A == stat ? allow : next
 A == fstat ? allow : next

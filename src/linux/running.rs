@@ -647,21 +647,6 @@ impl SingleRun<'_> {
     }
 
     fn on_seccomp(&self, process: &mut ProcessInfo) -> Result<bool> {
-        match self.options.mode {
-            Mode::Run | Mode::Resume => {
-                self.on_seccomp_run(process)?;
-                Ok(false)
-            }
-            Mode::PreFork => self
-                .prefork
-                .as_ref()
-                .unwrap()
-                .on_seccomp(&mut process.traced_process)
-                .context("Failed to handle seccomp in prefork mode"),
-        }
-    }
-
-    fn on_seccomp_run(&self, process: &mut ProcessInfo) -> Result<()> {
         let pid = process.traced_process.get_pid();
 
         let syscall_info = process
@@ -674,14 +659,58 @@ impl SingleRun<'_> {
             syscall_no: syscall_info.nr as i32,
             args: syscall_info.args.map(|arg| arg as usize),
         };
+        log!("seccomp triggered on <pid {pid}> {syscall_args}");
 
-        match self.emulate_syscall(process, syscall_info)? {
+        match self.options.mode {
+            Mode::Run | Mode::Resume => self
+                .on_seccomp_run(process, syscall_info)
+                .context("Failed to handle seccomp in run mode"),
+            Mode::PreFork => self
+                .on_seccomp_prefork(process, syscall_info)
+                .context("Failed to handle seccomp in prefork mode"),
+        }
+    }
+
+    fn on_seccomp_run(
+        &self,
+        process: &mut ProcessInfo,
+        syscall_info: tracing::ptrace_syscall_info_seccomp,
+    ) -> Result<bool> {
+        let syscall = self.emulate_syscall_run(process, syscall_info)?;
+        self.commit_syscall_emulation(process, syscall)?;
+        Ok(false)
+    }
+
+    fn on_seccomp_prefork(
+        &self,
+        process: &mut ProcessInfo,
+        syscall_info: tracing::ptrace_syscall_info_seccomp,
+    ) -> Result<bool> {
+        match self.emulate_syscall_prefork(process, syscall_info)? {
+            Some(syscall) => {
+                self.commit_syscall_emulation(process, syscall)?;
+                Ok(false)
+            }
+            None => self
+                .prefork
+                .as_ref()
+                .unwrap()
+                .on_seccomp(&mut process.traced_process),
+        }
+    }
+
+    fn commit_syscall_emulation(
+        &self,
+        process: &mut ProcessInfo,
+        syscall: EmulatedSyscall,
+    ) -> Result<()> {
+        match syscall {
             EmulatedSyscall::Result(result) => {
                 if result as isize >= 0 {
-                    log!("Emulating <pid {pid}> {syscall_args} = {result}");
+                    log!("Emulating = {result}");
                 } else {
                     log!(
-                        "Emulating <pid {pid}> {syscall_args} = -{}",
+                        "Emulating = -{}",
                         string_table::errno_to_name(-(result as i32))
                     );
                 }
@@ -690,7 +719,7 @@ impl SingleRun<'_> {
                 process.state = ProcessState::Alive;
             }
             EmulatedSyscall::Redirect(args, state) => {
-                log!("Emulating <pid {pid}> {syscall_args} -> {args} (redirect)");
+                log!("Emulating -> {args} (redirect)");
                 process.traced_process.set_syscall(args)?;
                 process.state = state;
             }
@@ -705,7 +734,7 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn emulate_syscall(
+    fn emulate_syscall_run(
         &self,
         process: &mut ProcessInfo,
         syscall_info: tracing::ptrace_syscall_info_seccomp,
@@ -872,62 +901,7 @@ impl SingleRun<'_> {
                     },
                 ))
             }
-            libc::SYS_sysinfo => {
-                let our_sysinfo = sysinfo::sysinfo().context("Failed to get sysinfo")?;
-
-                // Don't leak sunwalker's memory in padding bytes
-                let mut user_sysinfo = MaybeUninit::<libc::sysinfo>::zeroed();
-                let user_sysinfo_mut = unsafe { user_sysinfo.assume_init_mut() };
-
-                let mem = self
-                    .box_cgroup
-                    .as_ref()
-                    .unwrap()
-                    .get_memory_stats()
-                    .context("Failed to get memory stats")?;
-
-                user_sysinfo_mut.uptime = (our_sysinfo.uptime()
-                    - Duration::from_secs(
-                        self.runner.timens_controller.borrow().get_uptime_shift(),
-                    ))
-                .as_secs();
-                user_sysinfo_mut.loads = [0; 3]; // there's no practical way to replicate LA
-                if let Some(limit) = self.options.memory_limit {
-                    user_sysinfo_mut.totalram = limit as u64;
-                } else {
-                    user_sysinfo_mut.totalram = our_sysinfo.ram_total();
-                }
-                user_sysinfo_mut.freeram =
-                    user_sysinfo_mut.totalram - (mem.anon + mem.file + mem.kernel) as u64;
-                user_sysinfo_mut.sharedram = mem.shmem as u64;
-                user_sysinfo_mut.bufferram = mem.file as u64;
-                user_sysinfo_mut.totalswap = 0;
-                user_sysinfo_mut.freeswap = 0;
-                user_sysinfo_mut.procs = self
-                    .box_cgroup
-                    .as_ref()
-                    .unwrap()
-                    .get_current_processes()
-                    .context("Failed to get count of runnning processes")?
-                    as u16;
-                user_sysinfo_mut.totalhigh = 0;
-                user_sysinfo_mut.freehigh = 0;
-                user_sysinfo_mut.mem_unit = 1;
-
-                if process
-                    .traced_process
-                    .write_memory(syscall_info.args[0] as usize, unsafe {
-                        // We have to force the size to 112 bytes because musl's sysinfo is much
-                        // larger, and we don't want to override user's data
-                        MaybeUninit::slice_assume_init_ref(&user_sysinfo.as_bytes()[..112])
-                    })
-                    .is_ok()
-                {
-                    Ok(EmulatedSyscall::Result(0))
-                } else {
-                    Ok(EmulatedSyscall::Result(-libc::EFAULT as usize))
-                }
-            }
+            libc::SYS_sysinfo => self.emulate_sysinfo(process, syscall_info),
             _ => {
                 log!(
                     impossible,
@@ -941,6 +915,75 @@ impl SingleRun<'_> {
                 );
                 Ok(EmulatedSyscall::Result(-libc::ENOSYS as usize))
             }
+        }
+    }
+
+    fn emulate_syscall_prefork(
+        &self,
+        process: &mut ProcessInfo,
+        syscall_info: tracing::ptrace_syscall_info_seccomp,
+    ) -> Result<Option<EmulatedSyscall>> {
+        match syscall_info.nr as i64 {
+            libc::SYS_sysinfo => Ok(Some(self.emulate_sysinfo(process, syscall_info)?)),
+            _ => Ok(None),
+        }
+    }
+
+    fn emulate_sysinfo(
+        &self,
+        process: &mut ProcessInfo,
+        syscall_info: tracing::ptrace_syscall_info_seccomp,
+    ) -> Result<EmulatedSyscall> {
+        let our_sysinfo = sysinfo::sysinfo().context("Failed to get sysinfo")?;
+
+        // Don't leak sunwalker's memory in padding bytes
+        let mut user_sysinfo = MaybeUninit::<libc::sysinfo>::zeroed();
+        let user_sysinfo_mut = unsafe { user_sysinfo.assume_init_mut() };
+
+        let mem = self
+            .box_cgroup
+            .as_ref()
+            .unwrap()
+            .get_memory_stats()
+            .context("Failed to get memory stats")?;
+
+        user_sysinfo_mut.uptime = (our_sysinfo.uptime()
+            - Duration::from_secs(self.runner.timens_controller.borrow().get_uptime_shift()))
+        .as_secs();
+        user_sysinfo_mut.loads = [0; 3]; // there's no practical way to replicate LA
+        if let Some(limit) = self.options.memory_limit {
+            user_sysinfo_mut.totalram = limit as u64;
+        } else {
+            user_sysinfo_mut.totalram = our_sysinfo.ram_total();
+        }
+        user_sysinfo_mut.freeram =
+            user_sysinfo_mut.totalram - (mem.anon + mem.file + mem.kernel) as u64;
+        user_sysinfo_mut.sharedram = mem.shmem as u64;
+        user_sysinfo_mut.bufferram = mem.file as u64;
+        user_sysinfo_mut.totalswap = 0;
+        user_sysinfo_mut.freeswap = 0;
+        user_sysinfo_mut.procs =
+            self.box_cgroup
+                .as_ref()
+                .unwrap()
+                .get_current_processes()
+                .context("Failed to get count of runnning processes")? as u16;
+        user_sysinfo_mut.totalhigh = 0;
+        user_sysinfo_mut.freehigh = 0;
+        user_sysinfo_mut.mem_unit = 1;
+
+        if process
+            .traced_process
+            .write_memory(syscall_info.args[0] as usize, unsafe {
+                // We have to force the size to 112 bytes because musl's sysinfo is much
+                // larger, and we don't want to override user's data
+                MaybeUninit::slice_assume_init_ref(&user_sysinfo.as_bytes()[..112])
+            })
+            .is_ok()
+        {
+            Ok(EmulatedSyscall::Result(0))
+        } else {
+            Ok(EmulatedSyscall::Result(-libc::EFAULT as usize))
         }
     }
 
