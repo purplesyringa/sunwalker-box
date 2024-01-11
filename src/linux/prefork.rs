@@ -6,7 +6,7 @@ use anyhow::{anyhow, bail, ensure, Context, Result};
 use crossmist::{Object, Sender};
 use nix::{
     fcntl, libc,
-    libc::{dev_t, mode_t, off_t, pid_t},
+    libc::{dev_t, mode_t, off_t, pid_t, siginfo_t},
     sys::{prctl, ptrace, signal, stat, wait},
     unistd,
     unistd::Pid,
@@ -310,7 +310,7 @@ impl PreForkManager {
             .send_vectored_with_ancillary(&[IoSlice::new(&control_data)], &mut ancillary)
             .context("Failed to send command to control socket")?;
 
-        let wait_status = data.master.wait(system::WaitPidFlag::__WALL)?;
+        let wait_status = data.master.wait()?;
         match wait_status {
             system::WaitStatus::Stopped(..) => {
                 // Only treat SIGSTOP as a success signal if it was sent explicitly, rather than
@@ -326,7 +326,7 @@ impl PreForkManager {
                     return Err(recover_cxx_error(error, STEMCELL_CONTEXTS).context("In stemcell"));
                 } else {
                     data.master.resume_signal(info.si_signo)?;
-                    bail!("Master unexpectedly stopped with signal {}", info.si_signo);
+                    bail_signal(info).context("Master is acting weird")?;
                 }
             }
             system::WaitStatus::PtraceEvent(_, _, libc::PTRACE_EVENT_CLONE) => {}
@@ -341,7 +341,7 @@ impl PreForkManager {
         data.master.resume()?;
 
         let mut child = tracing::TracedProcess::new(child_pid)?;
-        let wait_status = child.wait(system::WaitPidFlag::__WALL)?;
+        let wait_status = child.wait()?;
         ensure!(
             matches!(wait_status, system::WaitStatus::Stopped(_, libc::SIGSTOP)),
             "Expected SIGSTOP, got {wait_status:?}",
@@ -349,10 +349,10 @@ impl PreForkManager {
 
         if child_pid != data.orig_pid {
             child.resume_signal(libc::SIGKILL)?;
-            child.wait(system::WaitPidFlag::__WALL)?;
+            child.wait()?;
 
             loop {
-                let wait_status = child.wait(system::WaitPidFlag::__WALL)?;
+                let wait_status = child.wait()?;
                 match wait_status {
                     system::WaitStatus::Signaled(_, libc::SIGKILL) => break,
                     _ => bail!("Expected SIGKILL, got {wait_status:?}"),
@@ -374,7 +374,7 @@ impl PreForkManager {
                 .context("Failed to read-out error from child")?;
             let error = u64::from_ne_bytes(error);
             child.resume_signal(libc::SIGKILL)?;
-            child.wait(system::WaitPidFlag::__WALL)?;
+            child.wait()?;
             return Err(recover_cxx_error(error, STEMCELL_CONTEXTS).context("In child"));
         }
 
@@ -384,7 +384,7 @@ impl PreForkManager {
             .context("Failed to get child registers")?;
         if regs.rsp != 0x5afec0def1e1d {
             child.resume_signal(libc::SIGKILL)?;
-            child.wait(system::WaitPidFlag::__WALL)?;
+            child.wait()?;
             bail!("Child terminated with SIGSEGV");
         }
 
@@ -1328,7 +1328,7 @@ fn wait_for_raised_sigstop(
     // which the parasite sends when it successfully captures the state and the stemcell sends when
     // it successfully restores the state.
     loop {
-        let wait_status = process.wait(system::WaitPidFlag::__WALL)?;
+        let wait_status = process.wait()?;
         // If we don't detach from the process, it won't be able to receive SIGKILL and
         // terminate. So do that, even though that technically allows the process to do weird
         // stuff in the meantime.
@@ -1344,6 +1344,8 @@ fn wait_for_raised_sigstop(
                 // triggered by any sort of delayed mechanism
                 let info = process.get_signal_info()?;
                 if info.si_signo == libc::SIGSTOP && info.si_code == libc::SI_USER {
+                    let ip = process.get_instruction_pointer()?;
+                    log!("SIGSTOP at {ip:x}");
                     return Ok(true);
                 } else if info.si_signo == libc::SIGSEGV && allow_sigsegv {
                     log!(
@@ -1354,21 +1356,8 @@ fn wait_for_raised_sigstop(
                     return Ok(false);
                 } else {
                     process.resume_signal(libc::SIGKILL)?;
-                    process.wait(system::WaitPidFlag::__WALL)?;
-                    // For ease of debugging
-                    let signal_name = match info.si_signo {
-                        libc::SIGILL => Some("SIGILL"),
-                        libc::SIGSEGV => Some("SIGSEGV"),
-                        libc::SIGBUS => Some("SIGBUS"),
-                        _ => None,
-                    };
-                    if let Some(name) = signal_name {
-                        bail!("Unexpected {name} at address {:?}", unsafe {
-                            info.si_addr()
-                        });
-                    } else {
-                        bail!("Unexpected stop with signal {}", info.si_signo);
-                    }
+                    process.wait()?;
+                    bail_signal(info)?;
                 }
             }
             system::WaitStatus::PtraceEvent(..) => process.resume()?,
@@ -1377,6 +1366,23 @@ fn wait_for_raised_sigstop(
                 bail!("Unexpected status");
             }
         }
+    }
+}
+
+fn bail_signal(info: siginfo_t) -> Result<!> {
+    // For ease of debugging
+    let signal_name = match info.si_signo {
+        libc::SIGILL => Some("SIGILL"),
+        libc::SIGSEGV => Some("SIGSEGV"),
+        libc::SIGBUS => Some("SIGBUS"),
+        _ => None,
+    };
+    if let Some(name) = signal_name {
+        bail!("Unexpected {name} at address {:?}", unsafe {
+            info.si_addr()
+        });
+    } else {
+        bail!("Unexpected stop with signal {}", info.si_signo);
     }
 }
 

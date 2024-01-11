@@ -394,7 +394,7 @@ impl SingleRun<'_> {
         traced_process.resume()?;
 
         // The child will either exit or trigger SIGTRAP on execve() to the real program
-        let wait_status = traced_process.wait(wait::WaitPidFlag::empty())?;
+        let wait_status = traced_process.wait()?;
         log!("Worker has stopped on execve with {wait_status:?}");
 
         match wait_status {
