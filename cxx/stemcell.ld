@@ -15,6 +15,8 @@ SECTIONS {
     .bss : {
         *(.bss .bss.* .gnu.linkonce.b.*)
         *(COMMON)
+        . = ALIGN(4096);
+        end_of_bss = .;
     }
     /DISCARD/ : {
         *(.dynsym .dynstr .gnu.hash .note.* .dynamic .comment)

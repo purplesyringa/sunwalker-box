@@ -19,6 +19,7 @@ use std::fs::File;
 use std::io;
 use std::mem::MaybeUninit;
 use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt, io::AsRawFd};
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 pub struct Runner {
@@ -28,6 +29,7 @@ pub struct Runner {
     epoll: epoll::Epoll,
     exec_wrapper: File,
     proc_cgroup: cgroups::ProcCgroup,
+    suspended_runs: RefCell<Vec<SuspendedRun>>,
 }
 
 #[derive(Debug, Object)]
@@ -43,12 +45,14 @@ pub struct Options {
     pub memory_limit: Option<usize>,
     pub processes_limit: Option<usize>,
     pub env: Option<HashMap<String, String>>,
+    pub prefork_id: i64,
 }
 
 #[derive(Clone, Copy, Debug, Object)]
 pub enum Mode {
     Run,
     PreFork,
+    Resume,
 }
 
 #[derive(PartialEq, Eq)]
@@ -59,7 +63,7 @@ pub enum Verdict {
     RealTimeLimitExceeded,
     IdlenessTimeLimitExceeded,
     MemoryLimitExceeded,
-    Suspended(i32),
+    Suspended(i64),
 }
 
 pub struct RunResults {
@@ -76,6 +80,15 @@ enum ProcessState {
     JustStarted,
     Alive,
     AfterOpenMemfd(Vec<u8>),
+}
+
+struct SuspendedRun {
+    data: Rc<RefCell<prefork::SuspendData>>,
+    real_time_limit: Option<Duration>,
+    cpu_time_limit: Option<Duration>,
+    idleness_time_limit: Option<Duration>,
+    memory_limit: Option<usize>,
+    processes_limit: Option<usize>,
 }
 
 struct ProcessInfo {
@@ -97,6 +110,7 @@ struct SingleRun<'a> {
     msg_next_id: Cell<isize>,
     shm_next_id: Cell<isize>,
     prefork: Option<prefork::PreForkRun<'a>>,
+    suspend_data: Option<Rc<RefCell<prefork::SuspendData>>>,
 }
 
 enum EmulatedSyscall {
@@ -118,6 +132,28 @@ impl EmulatedSyscall {
             Err(err) => Self::Result(-err.raw_os_error().unwrap_or(libc::EINVAL) as usize),
         }
     }
+}
+
+// This is a leaky abstraction. The ID should be an opaque reference to the suspended state, which
+// suffices for the outer world in all ways save for configuration of the pid namespace, which has
+// to be performed in the reaper as opposed to the manager due to how permissions are configured.
+// Thus, the entry (that communicates with the reaper) has to be made aware of the pid of the
+// process currently resumed. To achieve that, pack the PID *into* the prefork ID.
+
+// The additive constant will hopefully dissuade people from using too small datatypes or unpacking
+// the ID for nefarious purposes
+const PREFORK_PACKED_SHIFT: i64 = 0x600dc0ffee;
+
+fn pack_prefork_id(index: usize, pid: Pid) -> i64 {
+    PREFORK_PACKED_SHIFT + ((index as i64) << 32) + (pid.as_raw() as i64)
+}
+pub fn unpack_prefork_id(id: i64) -> Result<(usize, Pid)> {
+    ensure!(id >= PREFORK_PACKED_SHIFT);
+    let unshifted_id = id - PREFORK_PACKED_SHIFT;
+    Ok((
+        (unshifted_id >> 32) as usize,
+        Pid::from_raw(unshifted_id as i32),
+    ))
 }
 
 impl Runner {
@@ -166,14 +202,39 @@ impl Runner {
             )
             .context("Failed to create memfd for exec_wrapper")?,
             proc_cgroup,
+            suspended_runs: RefCell::new(Vec::new()),
         })
     }
 
-    pub fn run(&self, options: Options) -> Result<RunResults> {
-        let prefork = match options.mode {
-            Mode::Run => None,
-            Mode::PreFork => Some(self.prefork_manager.run()?),
-        };
+    pub fn run(&self, mut options: Options) -> Result<RunResults> {
+        let prefork;
+        let suspend_data;
+        match options.mode {
+            Mode::Run => {
+                prefork = None;
+                suspend_data = None;
+            }
+            Mode::PreFork => {
+                prefork = Some(self.prefork_manager.run()?);
+                suspend_data = None;
+            }
+            Mode::Resume => {
+                prefork = None;
+                let (index, orig_pid) = unpack_prefork_id(options.prefork_id)?;
+                let suspended_runs = self.suspended_runs.borrow();
+                let suspended_run = suspended_runs.get(index).context("Invalid prefork_id")?;
+                ensure!(
+                    suspended_run.data.borrow().orig_pid == orig_pid,
+                    "Invalid prefork_id"
+                );
+                options.real_time_limit = suspended_run.real_time_limit;
+                options.cpu_time_limit = suspended_run.cpu_time_limit;
+                options.idleness_time_limit = suspended_run.idleness_time_limit;
+                options.memory_limit = suspended_run.memory_limit;
+                options.processes_limit = suspended_run.processes_limit;
+                suspend_data = Some(suspended_run.data.clone());
+            }
+        }
         let mut single_run = SingleRun {
             runner: self,
             options,
@@ -194,6 +255,7 @@ impl Runner {
             msg_next_id: Cell::new(0),
             shm_next_id: Cell::new(0),
             prefork,
+            suspend_data,
         };
         single_run.run()?;
         Ok(single_run.results)
@@ -205,7 +267,7 @@ impl SingleRun<'_> {
         log!("Opening standard streams");
 
         match self.options.mode {
-            Mode::Run => {
+            Mode::Run | Mode::Resume => {
                 let stdin = File::open(&self.options.stdin).context("Failed to open stdin file")?;
                 let stdout = File::options()
                     .write(true)
@@ -417,7 +479,7 @@ impl SingleRun<'_> {
             || Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time)
     }
 
-    fn compute_verdict(&self, wait_status: system::WaitStatus) -> Result<Verdict> {
+    fn compute_verdict(&mut self, wait_status: system::WaitStatus) -> Result<Verdict> {
         if Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time) {
             if let system::WaitStatus::Stopped(_, libc::SIGPROF) = wait_status {
             } else {
@@ -480,14 +542,31 @@ impl SingleRun<'_> {
             return Ok(Verdict::MemoryLimitExceeded);
         }
         match wait_status {
-            system::WaitStatus::Exited(_, exit_code) => Ok(Verdict::ExitCode(exit_code)),
-            system::WaitStatus::Signaled(_, signal) => Ok(Verdict::Signaled(signal)),
-            _ => match self.options.mode {
-                Mode::Run => bail!("waitpid returned unexpected status: {wait_status:?}"),
-                Mode::PreFork => Ok(Verdict::Suspended(
-                    self.prefork.as_ref().unwrap().get_suspended_pid()?.as_raw(),
-                )),
-            },
+            system::WaitStatus::Exited(_, exit_code) => return Ok(Verdict::ExitCode(exit_code)),
+            system::WaitStatus::Signaled(_, signal) => return Ok(Verdict::Signaled(signal)),
+            _ => {}
+        }
+        match self.options.mode {
+            Mode::Run | Mode::Resume => {
+                bail!("waitpid returned unexpected status: {wait_status:?}")
+            }
+            Mode::PreFork => {
+                let data = self.prefork.take().unwrap().get_suspend_data()?;
+                let orig_pid = data.orig_pid;
+                let mut suspended_runs = self.runner.suspended_runs.borrow_mut();
+                suspended_runs.push(SuspendedRun {
+                    data: Rc::new(RefCell::new(data)),
+                    real_time_limit: self.options.real_time_limit,
+                    cpu_time_limit: self.options.cpu_time_limit,
+                    idleness_time_limit: self.options.idleness_time_limit,
+                    memory_limit: self.options.memory_limit,
+                    processes_limit: self.options.processes_limit,
+                });
+                Ok(Verdict::Suspended(pack_prefork_id(
+                    suspended_runs.len() - 1,
+                    orig_pid,
+                )))
+            }
         }
     }
 
@@ -569,7 +648,7 @@ impl SingleRun<'_> {
 
     fn on_seccomp(&self, process: &mut ProcessInfo) -> Result<bool> {
         match self.options.mode {
-            Mode::Run => {
+            Mode::Run | Mode::Resume => {
                 self.on_seccomp_run(process)?;
                 Ok(false)
             }
@@ -1116,7 +1195,7 @@ impl SingleRun<'_> {
                     .with_context(|| format!("Unknown pid {pid} while handling syscall"))?
                     .get_mut();
                 match self.options.mode {
-                    Mode::Run => match &process.state {
+                    Mode::Run | Mode::Resume => match &process.state {
                         ProcessState::AfterOpenMemfd(path) => {
                             std::fs::remove_file(OsStr::from_bytes(path))
                                 .context("Failed to unlink /memfd:...")?;
@@ -1224,19 +1303,52 @@ impl SingleRun<'_> {
             .reset_system_time_for_children()
             .context("Failed to virtualize boot time")?;
 
-        let traced_process = self.start_worker().context("Failed to start worker")?;
+        match self.options.mode {
+            Mode::Run | Mode::PreFork => {
+                let traced_process = self.start_worker().context("Failed to start worker")?;
 
-        // execve has just happened
-        self.start_time = Some(Instant::now());
+                // execve has just happened
+                self.start_time = Some(Instant::now());
 
-        let mut main_process = ProcessInfo {
-            state: ProcessState::Alive,
-            traced_process,
-        };
-        self.on_after_execve(&mut main_process)?;
-        self.on_after_fork(&mut main_process)?;
-        self.processes
-            .insert(self.main_pid, RefCell::new(main_process));
+                let mut main_process = ProcessInfo {
+                    state: ProcessState::Alive,
+                    traced_process,
+                };
+                self.on_after_execve(&mut main_process)?;
+                self.on_after_fork(&mut main_process)?;
+                self.processes
+                    .insert(self.main_pid, RefCell::new(main_process));
+            }
+            Mode::Resume => {
+                log!("Resuming suspended process");
+
+                let stdio = self.open_standard_streams()?;
+
+                self.create_box_cgroup()?;
+
+                let traced_process = self
+                    .runner
+                    .prefork_manager
+                    .resume(
+                        &mut self.suspend_data.take().unwrap().borrow_mut(),
+                        stdio,
+                        self.box_cgroup.as_mut().unwrap(),
+                    )
+                    .context("Failed to resume preforked process")?;
+
+                // clone has just happened
+                self.start_time = Some(Instant::now());
+
+                self.main_pid = traced_process.get_pid();
+                self.processes.insert(
+                    self.main_pid,
+                    RefCell::new(ProcessInfo {
+                        state: ProcessState::Alive,
+                        traced_process,
+                    }),
+                );
+            }
+        }
 
         // If SIGPROF fires because of our actions, we capture Stopped(SIGPROF), continue the
         // process with the signal, immediately recognize that the limit has been exceeded on the
@@ -1263,8 +1375,6 @@ impl SingleRun<'_> {
                 .context("Failed to compute verdict")?;
         };
 
-        // match self.options.mode {
-        //     Mode::Run => {
         if let Err(ref e) = result {
             log!(
                 warn,
@@ -1273,10 +1383,6 @@ impl SingleRun<'_> {
             );
         }
         self.cleanup()?;
-        //     }
-        //     Mode::PreFork => {
-        //     }
-        // }
 
         result
     }
@@ -1361,6 +1467,7 @@ fn executor_worker_impl(
     tracing::apply_seccomp_filter(match mode {
         Mode::Run => false,
         Mode::PreFork => true,
+        Mode::Resume => unreachable!(),
     })
     .context("Failed to apply seccomp filter")?;
 

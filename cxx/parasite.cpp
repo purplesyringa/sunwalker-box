@@ -6,7 +6,6 @@
 #include "remembrances/personality.hpp"
 #include "remembrances/program_break.hpp"
 #include "remembrances/signal_handlers.hpp"
-#include "remembrances/signal_mask.hpp"
 #include "remembrances/thp_options.hpp"
 #include "remembrances/tid_address.hpp"
 #include "remembrances/umask.hpp"
@@ -20,7 +19,6 @@ struct State {
     pending_signals::State pending_signals;
     personality::State personality;
     signal_handlers::State signal_handlers;
-    signal_mask::State signal_mask;
     thp_options::State thp_options;
     tid_address::State tid_address;
     umask::State umask;
@@ -38,7 +36,6 @@ static Result<void> run() {
     pending_signals::save(state.pending_signals).CONTEXT("Failed to save pending signals").TRY();
     personality::save(state.personality).CONTEXT("Failed to save personality").TRY();
     signal_handlers::save(state.signal_handlers).CONTEXT("Failed to save signal handlers").TRY();
-    signal_mask::save(state.signal_mask).CONTEXT("Failed to save signal mask").TRY();
     thp_options::save(state.thp_options)
         .CONTEXT("Failed to save transparent huge pages options")
         .TRY();
@@ -52,5 +49,11 @@ FINALIZE_CONTEXTS
 extern "C" __attribute__((section(".entry"))) __attribute__((naked)) void _start() {
     state.result = run();
     (void)libc::kill(0, SIGSTOP);
-    __builtin_unreachable();
+    // We could use __builtin_unreachable or __builtin_trap here. Ideally we'd use the one that's
+    // likely to catch more bugs, but it's uncertain what the distribution actually is.
+    // __builtin_unreachable is a pass-through; we're likely to modify memory (including the state)
+    // if it is actually executed, thus an error will propagate to the stemcell or be delivered as
+    // a errno (perhaps an invalid one). But __builtin_trap is somewhat less dangerous if there's
+    // actually a bug and will likely trigger SIGSEGV.
+    __builtin_trap();
 }

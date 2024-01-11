@@ -16,6 +16,31 @@ struct MemoryMap {
     int flags;
     int fd;
     off_t offset;
+
+    inline Result<void> do_map(int orig_mem_fd) const {
+        libc::mmap(base, end - base, (prot & 0x7fffffff) | PROT_WRITE, flags, fd, offset)
+            .CONTEXT("Failed to mmap section")
+            .TRY();
+
+        // We could use vmsplice here. Unfortunately, that isn't going to be zero-copy, so any
+        // performance improvements are unlikely. https://lwn.net/Articles/571748/ would have fixed
+        // this, but it hasn't ever been merged
+        uintptr_t cur_base = base;
+        while (cur_base < end) {
+            cur_base += libc::pread64(orig_mem_fd, reinterpret_cast<char *>(cur_base),
+                                      end - cur_base, cur_base)
+                            .CONTEXT("Failed to read memory from original process")
+                            .TRY();
+        }
+
+        if (!(prot & PROT_WRITE)) {
+            libc::mprotect(base, end - base, prot & 0x7fffffff)
+                .CONTEXT("Failed to remap section read-only")
+                .TRY();
+        }
+
+        return {};
+    }
 };
 
 struct State {
@@ -24,36 +49,33 @@ struct State {
     std::array<MemoryMap, MAX_MEMORY_MAPS> maps;
 };
 
-static Result<void> load(const State &state) {
+static Result<void> load_before_fork(const State &state) {
     for (size_t i = 0; i < state.count; i++) {
         const MemoryMap &map = state.maps[i];
-
         if (map.prot == -1) {
             // Start of [vvar]
             libc::arch_prctl(ARCH_MAP_VDSO_64, map.base).CONTEXT("Failed to mmap vdso").TRY();
             continue;
         }
 
-        libc::mmap(map.base, map.end - map.base, map.prot | PROT_WRITE, map.flags, map.fd,
-                   map.offset)
-            .CONTEXT("Failed to mmap section")
-            .TRY();
-
-        // We could use vmsplice here. Unfortunately, that isn't going to be zero-copy, so any
-        // performance improvements are unlikely. https://lwn.net/Articles/571748/ would have fixed
-        // this, but it hasn't ever been merged
-        uintptr_t cur_base = map.base;
-        while (cur_base < map.end) {
-            cur_base += libc::pread64(state.orig_mem_fd, reinterpret_cast<char *>(cur_base),
-                                      map.end - cur_base, cur_base)
-                            .CONTEXT("Failed to read memory from original process")
-                            .TRY();
-        }
-
-        if (!(map.prot & PROT_WRITE)) {
-            libc::mprotect(map.base, map.end - map.base, map.prot)
-                .CONTEXT("Failed to remap section read-only")
+        if ((map.flags & MAP_TYPE) == MAP_PRIVATE) {
+            map.do_map(state.orig_mem_fd).TRY();
+        } else if (!(map.prot & 0x80000000)) {
+            // Shared maps to everything but /dev/zero can be mapped just like this
+            libc::mmap(map.base, map.end - map.base, map.prot, map.flags, map.fd, map.offset)
+                .CONTEXT("Failed to mmap section")
                 .TRY();
+        }
+    }
+
+    return {};
+}
+
+static Result<void> load_after_fork(const State &state) {
+    for (size_t i = 0; i < state.count; i++) {
+        const MemoryMap &map = state.maps[i];
+        if ((map.flags & MAP_TYPE) == MAP_SHARED && (map.prot & 0x80000000)) {
+            map.do_map(state.orig_mem_fd).TRY();
         }
     }
 
@@ -62,7 +84,6 @@ static Result<void> load(const State &state) {
 
     for (size_t i = 0; i < state.count; i++) {
         const MemoryMap &map = state.maps[i];
-
         if (map.fd != -1) {
             // Ignore EBADF. It may arise if two mappings share an fd. We could keep track of what
             // fds we've removed, but we choose to use simpler code

@@ -24,9 +24,18 @@ struct State {
     thp_options::State thp_options;
     tid_address::State tid_address;
     umask::State umask;
+    int controlling_fd;
 } state;
 
+struct ControlMessage {};
+
+struct ControlMessageFds {
+    std::array<int, 3> stdio;
+    int cwd;
+};
+
 extern char start_of_text;
+extern char end_of_bss;
 
 static Result<void> run() {
     // Unmap everything the kernel has mapped for us, including stack, because we aren't using it
@@ -34,9 +43,11 @@ static Result<void> run() {
     libc::munmap(0, reinterpret_cast<size_t>(&start_of_text))
         .CONTEXT("Failed to munmap memory prefix")
         .TRY();
-    uintptr_t end = reinterpret_cast<uintptr_t>(&start_of_text) + 0x1000000;
     // FIXME: This is only valid for x86-64
-    libc::munmap(end, 0x7ffffffff000 - end).CONTEXT("Failed to munmap memory suffix").TRY();
+    libc::munmap(reinterpret_cast<unsigned long>(&end_of_bss),
+                 0x7ffffffff000 - reinterpret_cast<size_t>(&end_of_bss))
+        .CONTEXT("Failed to munmap memory suffix")
+        .TRY();
 
     // We aren't going to trigger any signals in the stemcell, so this is safe to perform
     alternative_stack::load(state.alternative_stack)
@@ -47,21 +58,13 @@ static Result<void> run() {
         .CONTEXT("Failed to load arch_prctl options")
         .TRY();
 
-    // Block signals delivered by interval times. These are going to cause problems if sent while in
-    // stemcell, so avoid them entirely
-    // Use static to avoid stack
-    static uint64_t sigset = SIGALRM | SIGVTALRM | SIGPROF;
-    libc::rt_sigprocmask(SIG_SETMASK, &sigset, nullptr, sizeof(sigset))
-        .CONTEXT("Failed to disable interval timers signals")
-        .TRY();
-    itimers::load(state.itimers).CONTEXT("Failed to load interval timers").TRY();
-
     // Transparent huge pages should be enabled before mapping memory
     thp_options::load(state.thp_options)
         .CONTEXT("Failed to load transparent huge pages options")
         .TRY();
-    // Memory maps can be restored almost completely, except for removing the stemcell pages
-    memory_maps::load(state.memory_maps).CONTEXT("Failed to load memory maps").TRY();
+    // Memory maps can be restored almost completely, except for shared memory and removing the
+    // stemcell pages
+    memory_maps::load_before_fork(state.memory_maps).CONTEXT("Failed to load memory maps").TRY();
     // Memory options can be restored after memory has been mapped
     mm_options::load(state.mm_options).CONTEXT("Failed to load memory map options").TRY();
     // Some personality options are unlikely to cause issues, others are iffy (e.g.
@@ -74,54 +77,124 @@ static Result<void> run() {
     // The only potential issue is SIGCONT, which we'll trigger inadvertently when starting user
     // code. FIXME: can we do anything about this?
     signal_handlers::load(state.signal_handlers).CONTEXT("Failed to load signal handlers").TRY();
-    // This is fine to load after memory has been mapped. The thread is not going to die until after
-    // stemcell is unmapped unless the stemcell itself dies, so there is no issue if clear_child_tid
-    // points at the stemcell
-    tid_address::load(state.tid_address).CONTEXT("Failed to load TID address").TRY();
     umask::load(state.umask).CONTEXT("Failed to load umask").TRY();
 
-    // By now, five things aren't replicated:
-    // - fds
-    // - pid
-    // - signal mask
-    // - unmap stemcell
-    // - cwd
-
-    // File descriptors have to be restored after fork, as dup2 doesn't clone the underlying file
-    // descriptor but uses the same one, and thus updates to file offset and other information would
-    // be shared between runs
-    // file_descriptors::load(state.file_descriptors).CONTEXT("Failed to load file
-    //     descriptors").TRY();
-
-    // Working directory has to be restored after fork, as it might have been changed to a different
-    // mount during reset, even though the path stays the same
+    // Block signals delivered by interval timers. These are going to cause problems if sent while
+    // in stemcell
+    static uint64_t sigset = SIGALRM | SIGVTALRM | SIGPROF;
+    libc::rt_sigprocmask(SIG_SETMASK, &sigset, nullptr, sizeof(sigset))
+        .CONTEXT("Failed to disable interval timers signals")
+        .TRY();
 
     return {};
 }
 
-FINALIZE_CONTEXTS
+static Result<void> init_child(const ControlMessageFds &fds) {
+    // Remap stdio
+    for (int i = 0; i < 3; i++) {
+        int fd = fds.stdio[i];
+        libc::dup2(fd, i).CONTEXT("Failed to dup2 standard stream").TRY();
+        libc::close(fd).CONTEXT("Failed to close standard stream").TRY();
+    }
+
+    // Working directory has to be restored after fork, as it might have been changed to a different
+    // mount during reset, even though the path stays the same. We pass cwd to each instantiation of
+    // the resumed process as opposed to reopening it manually for simplicity
+    libc::fchdir(fds.cwd).CONTEXT("Failed to set cwd").TRY();
+    libc::close(fds.cwd).CONTEXT("Failed to close cwd").TRY();
+
+    // At this point, all fds save for 0-2 are controlled by remembrances and have been made
+    // available in the stemcell via sunwalker_box transferred_fds facility. This guarantees that
+    // they don't intersect the fds used by the original process (again, save for 0-2) that we shall
+    // restore later
+
+    libc::close(state.controlling_fd).CONTEXT("Failed to close controlling fd").TRY();
+
+    // Shared pages have to be unshared between instances of clones, so do this after fork
+    memory_maps::load_after_fork(state.memory_maps)
+        .CONTEXT("Failed to load shared memory maps")
+        .TRY();
+
+    // File descriptors have to be restored after fork, as dup2 doesn't clone the underlying file
+    // descriptor but uses the same one, and thus updates to file offset and other information would
+    // be shared between runs
+    file_descriptors::load(state.file_descriptors).CONTEXT("Failed to load file descriptors").TRY();
+
+    // Loading itimers has to happen at each run to preserve expiration times so that time doesn't
+    // flow between suspend and resume
+    itimers::load(state.itimers).CONTEXT("Failed to load interval timers").TRY();
+
+    // Unmap self, finally. We have to somehow specify we're ready for that and the SIGSEGV is not
+    // just a bug, so put a magic value to a register beforehand. We can't put it to memory (say,
+    // state) because, duh, we're going to unmap it, and sending a signal would require a syscall,
+    // and at that point it'd be more efficient to do munmap from manager, which is pretty
+    // inefficient in comparison to this workaround
+    asm volatile("mov $0x5afec0def1e1d, %rsp");
+    libc::munmap(reinterpret_cast<unsigned long>(&start_of_text), &end_of_bss - &start_of_text)
+        .CONTEXT("Failed to munmap stemcell")
+        .TRY();
+    __builtin_trap();
+
+    // By now, two things aren't replicated:
+    // - signal mask
+    // - CPU state
+}
+
+static Result<void> loop() {
+    static ControlMessage control_message;
+
+    static iovec iov;
+    iov.iov_base = &control_message;
+    iov.iov_len = sizeof(control_message);
+
+    alignas(cmsghdr) static char cmsg[CMSG_SPACE(sizeof(ControlMessageFds))];
+
+    static msghdr msg;
+    msg.msg_iov = &iov;
+    msg.msg_iovlen = 1;
+    msg.msg_control = cmsg;
+
+    for (;;) {
+        msg.msg_controllen = sizeof(cmsg);
+
+        ssize_t n_received = libc::recvmsg(state.controlling_fd, &msg, 0)
+                                 .CONTEXT("Failed to receive messagr from controlling fd")
+                                 .TRY();
+        ENSURE(n_received != 0, "Unexpected EOF on controlling fd");
+        ENSURE(n_received == sizeof(control_message), "Unexpected size of control message");
+
+        cmsghdr *cmsgp = CMSG_FIRSTHDR(&msg);
+        ENSURE(cmsgp != nullptr, "No ancillary data in control message");
+        ENSURE(cmsgp->cmsg_len == CMSG_LEN(sizeof(ControlMessageFds)),
+               "Invalid size of ancillary data in control message");
+        ENSURE(cmsgp->cmsg_level == SOL_SOCKET, "Unexpected cmsg level");
+        ENSURE(cmsgp->cmsg_type == SCM_RIGHTS, "Unexpected cmsg type");
+
+        static ControlMessageFds fds;
+        __builtin_memcpy(&fds, CMSG_DATA(cmsgp), sizeof(fds));
+
+        static clone_args cl_args;
+        cl_args.flags = CLONE_CHILD_CLEARTID | CLONE_PARENT;
+        cl_args.child_tid = state.tid_address;
+        pid_t child_pid =
+            libc::clone3(&cl_args, sizeof(cl_args)).CONTEXT("Failed to clone self").TRY();
+
+        if (child_pid == 0) {
+            state.result = init_child(fds);
+            (void)libc::kill(0, SIGSTOP);
+            __builtin_trap();
+        }
+    }
+
+    return {};
+}
 
 extern "C" __attribute__((naked)) void _start() {
     state.result = run();
     (void)libc::kill(0, SIGSTOP);
-
-    // // Avoid stack use with static
-    // static clone_args cl_args;
-    // cl_args.flags = ...;
-    // cl_args.pidfd = nullptr;
-    // cl_args.child_tid = nullptr;
-    // cl_args.parent_tid = nullptr;
-    // // Avoid subscribing to signals so that there are no monotonic counters
-    // cl_args.exit_signal = 0;
-    // // rsp is set in the manager
-    // cl_args.stack = nullptr;
-    // cl_args.stack_size = 0;
-    // // TLS has already been restored
-    // cl_args.tls = nullptr;
-    // cl_args.set_tid = ...;
-    // cl_args.set_tid_size = ...;
-    // cl_args.cgroup = ...;
-    // libc::clone3(&cl_args, sizeof(cl_args));
-
-    __builtin_unreachable();
+    state.result = loop();
+    (void)libc::kill(0, SIGSTOP);
+    __builtin_trap();
 }
+
+FINALIZE_CONTEXTS

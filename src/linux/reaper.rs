@@ -1,6 +1,6 @@
 use crate::{
     entry,
-    linux::{cgroups, ipc, manager, procs},
+    linux::{cgroups, ipc, manager, procs, running},
     log,
 };
 use anyhow::{bail, Context, Result};
@@ -23,6 +23,7 @@ extern "C" fn pid1_signal_handler(signo: c_int) {
 pub enum Command {
     Init,
     Reset,
+    StartResume(i64),
 }
 
 #[derive(Object)]
@@ -300,6 +301,13 @@ fn execute_command(command: Command, child_pid: pid_t) -> Result<Option<String>>
         Command::Reset => {
             procs::reset_pidns().context("Failed to reset pidns")?;
             ipc::reset().context("Failed to reset IPC namespace")?;
+            Ok(None)
+        }
+        Command::StartResume(prefork_id) => {
+            let pid = running::unpack_prefork_id(prefork_id)
+                .context("Invalid prefork_id")?
+                .1;
+            procs::set_next_pid(pid).context("Failed to set next pid")?;
             Ok(None)
         }
     }

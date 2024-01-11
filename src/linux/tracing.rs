@@ -11,9 +11,10 @@ use nix::{
     unistd::Pid,
 };
 use std::ffi::CString;
+use std::fmt::Debug;
 use std::fs::File;
 use std::io;
-use std::io::{BufRead, BufReader};
+use std::io::{BufRead, BufReader, ErrorKind};
 use std::os::unix::fs::FileExt;
 use std::path::PathBuf;
 
@@ -617,6 +618,20 @@ impl TracedProcess {
         2
     }
 
+    pub fn get_signal_mask(&self) -> Result<u64> {
+        let mut mask = 0;
+        if unsafe { libc::ptrace(libc::PTRACE_GETSIGMASK, self.pid.as_raw(), 8, &mut mask) } == -1 {
+            return Err(std::io::Error::last_os_error())?;
+        }
+        Ok(mask)
+    }
+    pub fn set_signal_mask(&self, mask: u64) -> Result<()> {
+        if unsafe { libc::ptrace(libc::PTRACE_SETSIGMASK, self.pid.as_raw(), 8, &mask) } == -1 {
+            return Err(std::io::Error::last_os_error())?;
+        }
+        Ok(())
+    }
+
     pub fn wait_for_ptrace_syscall(&self) -> Result<()> {
         let wait_status = wait::waitpid(self.pid, None).context("Failed to waitpid for process")?;
         if let wait::WaitStatus::PtraceSyscall(..) = wait_status {
@@ -715,9 +730,13 @@ impl TracedProcess {
         Ok(maps)
     }
 
-    pub fn get_memory_mapped_file_path(&self, map: &MemoryMap) -> Result<PathBuf> {
+    pub fn get_memory_mapped_file_path(&self, map: &MemoryMap) -> Result<Option<PathBuf>> {
         let path = self.get_procfs_path(&format!("map_files/{:x}-{:x}", map.base, map.end));
-        std::fs::read_link(&path).with_context(|| format!("Failed to readlink {path}"))
+        match std::fs::read_link(&path) {
+            Ok(path) => Ok(Some(path)),
+            Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
+            Err(e) => Err(e).context(format!("Failed to readlink {path}")),
+        }
     }
 
     pub fn get_rseq_configuration(&self) -> Result<ptrace_rseq_configuration> {
@@ -781,6 +800,12 @@ impl TracedProcess {
 
     pub fn wait(&self, flag: system::WaitPidFlag) -> Result<system::WaitStatus> {
         system::waitpid(Some(self.get_pid()), flag).context("Failed to wait for traced process")
+    }
+}
+
+impl Debug for TracedProcess {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(fmt, "traced process {}", self.pid)
     }
 }
 
