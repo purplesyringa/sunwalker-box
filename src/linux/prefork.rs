@@ -206,9 +206,20 @@ struct SavedFd {
 // leaks via padding, so we have to resort to zero-initializing padding bytes manually
 #[repr(u32)]
 enum SavedFdKind {
-    EventFd { count: u32, padding: u64 },
-    Regular { cloned_fd: RawFd, position: u64 },
-    Directory { cloned_fd: RawFd, position: u64 },
+    // EventFd is read in C code
+    #[allow(unused)]
+    EventFd {
+        count: u32,
+        padding: u64,
+    },
+    Regular {
+        cloned_fd: RawFd,
+        position: u64,
+    },
+    Directory {
+        cloned_fd: RawFd,
+        position: u64,
+    },
 }
 
 // Use the default value of sysctl vm.max_map_count
