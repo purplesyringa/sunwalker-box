@@ -77,10 +77,14 @@ pub union ptrace_syscall_info_data {
     pub seccomp: ptrace_syscall_info_seccomp,
 }
 
+#[cfg(target_arch = "x86_64")]
+#[derive(Clone)]
+pub struct Registers(libc::user_regs_struct);
+
 #[cfg(target_arch = "aarch64")]
 #[repr(C)]
 #[derive(Clone)]
-pub struct user_pt_regs {
+pub struct Registers {
     pub regs: [u64; 31],
     pub sp: u64,
     pub pc: u64,
@@ -88,9 +92,18 @@ pub struct user_pt_regs {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub type Registers = libc::user_regs_struct;
-#[cfg(target_arch = "aarch64")]
-pub type Registers = user_pt_regs;
+impl std::ops::Deref for Registers {
+    type Target = libc::user_regs_struct;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+#[cfg(target_arch = "x86_64")]
+impl std::ops::DerefMut for Registers {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
 
 pub trait SyscallArgs {
     const N: usize;
@@ -415,7 +428,7 @@ impl TracedProcess {
 
     #[cfg(target_arch = "x86_64")]
     fn _get_registers(pid: Pid) -> Result<Registers, Errno> {
-        ptrace::getregs(pid)
+        ptrace::getregs(pid).map(Registers)
     }
     #[cfg(target_arch = "aarch64")]
     fn _get_registers(pid: Pid) -> Result<Registers, Errno> {
@@ -443,7 +456,7 @@ impl TracedProcess {
 
     #[cfg(target_arch = "x86_64")]
     fn _set_registers(&self, regs: Registers) -> Result<()> {
-        ptrace::setregs(self.pid, regs).context("Failed to store registers of the child")
+        ptrace::setregs(self.pid, *regs).context("Failed to store registers of the child")
     }
     #[cfg(target_arch = "aarch64")]
     fn _set_registers(&self, regs: Registers) -> Result<()> {
