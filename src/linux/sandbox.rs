@@ -89,12 +89,7 @@ pub fn unshare_persistent_namespaces() -> Result<()> {
     // then there is a problem with IPv6--::1 cannot be assigned to anything but lo due to a quirk
     // in the interpretation of the IPv6 RFC by the Linux kernel.
 
-    // Bring lo down
-    interfaces::Interface::get_by_name("lo")
-        .context("Failed to get lo interface")?
-        .context("lo interface is missing")?
-        .set_up(false)
-        .context("Failed to bring lo down")?;
+    // We don't need to bring lo down explicitly because unsharing netns does that for us
 
     Ok(())
 }
