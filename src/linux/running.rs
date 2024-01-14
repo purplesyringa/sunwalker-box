@@ -1298,7 +1298,10 @@ impl SingleRun<'_> {
             .kill()
             .context("Failed to kill user cgroup")?;
 
-        // We don't really care what happens after, but we have to waitpid() anyway
+        // We don't really care what happens after, but we have to waitpid() anyway to collect PIDs.
+        // We used to waitpid() till ECHILD, but this breaks in presence of preforked processes.
+        // Indeed, whenever a prefork process is alive, waitpid() will hang after collecting all
+        // processes of the current run.
         while !self.processes.is_empty() {
             match system::waitpid(None, system::WaitPidFlag::__WALL) {
                 Ok(wait_status) => {
