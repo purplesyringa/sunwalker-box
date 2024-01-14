@@ -885,6 +885,14 @@ impl SingleRun<'_> {
             system::WaitStatus::StillAlive => {}
 
             system::WaitStatus::Exited(pid, _) | system::WaitStatus::Signaled(pid, _) => {
+                // We used to listen to PTRACE_EVENT_EXIT to detect process termination. We would
+                // wait for the event, remove the process from `self.processes`, and then swallow
+                // Exited/Signaled for everyone but the main process. This is error-prone:
+                // PTRACE_EVENT_EXIT is not always delivered when the process is terminated by
+                // SIGKILL, which means a process could have died while we think it's alive.
+                // Therefore, avoid PTRACE_EVENT_EXIT like a plague and rely on Exited/Signaled
+                // only.
+                self.processes.remove(&pid);
                 if pid == self.main_pid {
                     log!("Main process exited");
                     return Ok(true);
@@ -1027,11 +1035,6 @@ impl SingleRun<'_> {
                                 );
                             }
                         }
-                    }
-                    libc::PTRACE_EVENT_EXIT => {
-                        process.traced_process.resume()?;
-                        drop(process);
-                        self.processes.remove(&pid);
                     }
                     _ => process.traced_process.resume()?,
                 }

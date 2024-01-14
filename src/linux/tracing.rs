@@ -174,7 +174,6 @@ impl TracedProcess {
             ptrace::Options::PTRACE_O_TRACECLONE
                 | ptrace::Options::PTRACE_O_TRACEFORK
                 | ptrace::Options::PTRACE_O_TRACEVFORK
-                | ptrace::Options::PTRACE_O_TRACEEXIT
                 | ptrace::Options::PTRACE_O_TRACEEXEC
                 | ptrace::Options::PTRACE_O_TRACESECCOMP
                 | ptrace::Options::PTRACE_O_TRACESYSGOOD,
