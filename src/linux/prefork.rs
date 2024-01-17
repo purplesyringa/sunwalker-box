@@ -817,7 +817,7 @@ impl<'a> Suspender<'a> {
         self.orig.init()?;
         self.orig.resume()?;
 
-        wait_for_raised_sigstop(&mut self.orig, false)
+        wait_for_raised_sigstop(self.orig, false)
             .context("Failed to wait for raise(SIGSTOP) in parasite")?;
 
         // Don't detach until after delivering SIGSTOP as to not corrupt memory
@@ -1106,7 +1106,7 @@ impl<'a> Suspender<'a> {
             // always valid. Moreover, we know that the file was opened with O_RDONLY (save for
             // /dev/zero, but that's an exception for which O_RDONLY works just as well), and thus
             // we can do the same here
-            match self.orig.get_memory_mapped_file_path(&map)? {
+            match self.orig.get_memory_mapped_file_path(map)? {
                 Some(file_path) => {
                     if file_path == Path::new("/dev/zero") {
                         alloced.prot |= -0x80000000;
