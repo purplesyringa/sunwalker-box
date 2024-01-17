@@ -1036,108 +1036,126 @@ fn executor_worker(
     mut pipe: crossmist::Sender<String>,
     cpu_time_limit: Option<Duration>,
     exec_wrapper: File,
-) {
-    let result: Result<()> = try {
-        // We want to disable rdtsc. Turns out, ld.so always calls rdtsc when it starts and keeps
-        // using it as if it's always available. Bummer. This means we'll have to simulate rdtsc.
-        timens::disable_native_instructions()
-            .context("Failed to disable native timens instructions")?;
+) -> ! {
+    let e = executor_worker_impl(
+        argv,
+        env,
+        stdin,
+        stdout,
+        stderr,
+        cpu_time_limit,
+        exec_wrapper,
+    )
+    .into_err();
 
-        // Only apply seccomp filter after disabling the possibility to turn rdtsc back on
-        tracing::apply_seccomp_filter().context("Failed to apply seccomp filter")?;
+    // Ignore errors while sending error as we can't really do anything with them. stderr is now broken, so, silent death is the best solution
+    let _ = pipe.send(&format!("{e:?}"));
+    std::process::exit(1)
+}
 
-        userns::drop_privileges().context("Failed to drop privileges")?;
+fn executor_worker_impl(
+    argv: Vec<String>,
+    env: Option<HashMap<String, String>>,
+    stdin: File,
+    stdout: File,
+    stderr: File,
+    cpu_time_limit: Option<Duration>,
+    exec_wrapper: File,
+) -> Result<!> {
+    // We want to disable rdtsc. Turns out, ld.so always calls rdtsc when it starts and keeps
+    // using it as if it's always available. Bummer. This means we'll have to simulate rdtsc.
+    timens::disable_native_instructions()
+        .context("Failed to disable native timens instructions")?;
 
-        std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
+    // Only apply seccomp filter after disabling the possibility to turn rdtsc back on
+    tracing::apply_seccomp_filter().context("Failed to apply seccomp filter")?;
 
-        unistd::dup2(stdin.as_raw_fd(), libc::STDIN_FILENO).context("dup2 for stdin failed")?;
-        unistd::dup2(stdout.as_raw_fd(), libc::STDOUT_FILENO).context("dup2 for stdout failed")?;
-        unistd::dup2(stderr.as_raw_fd(), libc::STDERR_FILENO).context("dup2 for stderr failed")?;
+    userns::drop_privileges().context("Failed to drop privileges")?;
 
-        let mut args = Vec::with_capacity(argv.len() + 1);
-        args.push(CString::new("exec_wrapper")?);
-        for arg in argv {
-            args.push(CString::new(arg.into_bytes()).context("Argument contains null character")?);
-        }
+    std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
 
-        let mut envp;
-        match env {
-            Some(env) => {
-                envp = Vec::with_capacity(env.len());
-                for (name, value) in env {
-                    envp.push(
-                        CString::new(format!("{name}={value}").into_bytes())
-                            .context("Environment variable contains null character")?,
-                    );
-                }
-            }
-            None => {
-                envp = Vec::new();
-                for (name, value) in std::env::vars() {
-                    envp.push(
-                        CString::new(format!("{name}={value}").into_bytes())
-                            .context("Environment variable contains null character")?,
-                    );
-                }
-            }
-        }
+    unistd::dup2(stdin.as_raw_fd(), libc::STDIN_FILENO).context("dup2 for stdin failed")?;
+    unistd::dup2(stdout.as_raw_fd(), libc::STDOUT_FILENO).context("dup2 for stdout failed")?;
+    unistd::dup2(stderr.as_raw_fd(), libc::STDERR_FILENO).context("dup2 for stderr failed")?;
 
-        ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
-
-        if let Some(cpu_time_limit) = cpu_time_limit {
-            // An additional optimization for finer handling of cpu time limit. An ITIMER_PROF timer
-            // can emit a signal when the given limit is exceeded and is not reset upon execve. This
-            // only applies to a single process, not a cgroup, and can be overwritten by the user
-            // program, but this feature is not mission-critical. It merely saves us a few precious
-            // milliseconds due to the (somewhat artificially deliberate) inefficiency of polling.
-            //
-            // We set itimer after adding the process to the cgroup so that when SIGPROF fires, it
-            // is guaranteed that the cgroup limit has indeed been exceeded.
-
-            // rusage is preserved across execve, so we have to account for the CPU time we have
-            // already spent
-            let rusage = resource::getrusage(resource::UsageWho::RUSAGE_SELF)
-                .context("Failed to getrusage")?;
-            let delay = rusage.user_time()
-                + rusage.system_time()
-                + time::TimeVal::new(
-                    cpu_time_limit.as_secs() as i64,
-                    cpu_time_limit.subsec_micros() as i64,
-                );
-
-            let timer = libc::itimerval {
-                it_interval: libc::timeval {
-                    tv_sec: 0,
-                    tv_usec: 0,
-                },
-                it_value: *delay.as_ref(),
-            };
-            if unsafe {
-                libc::syscall(
-                    libc::SYS_setitimer,
-                    libc::ITIMER_PROF,
-                    &timer as *const libc::itimerval,
-                    std::ptr::null_mut::<libc::itimerval>(),
-                )
-            } == -1
-            {
-                Err(std::io::Error::last_os_error()).context("Failed to set interval timer")?;
-            }
-        }
-
-        // We don't need to reset signals because we didn't configure them inside executor_worker()
-
-        // If we executed the user program directly, we wouldn't be able to catch the right moment
-        // to add the process to the cgroup. If we did that too early, sunwalker's memory usage
-        // would be included. If we did that too late, the kernel might have loaded too big an
-        // executable to memory already. Instead, we load a dummy executable that's only going to
-        // use a tiny bit of memory (at most 172 KiB in practice), enforce the limits, and then let
-        // the dummy execute the user program.
-        unistd::fexecve(exec_wrapper.as_raw_fd(), &args, &envp).context("execv failed")?;
-    };
-
-    if let Err(e) = result {
-        pipe.send(&format!("{e:?}"))
-            .expect("Failed to report error to parent");
+    let mut args = Vec::with_capacity(argv.len() + 1);
+    args.push(CString::new("exec_wrapper")?);
+    for arg in argv {
+        args.push(CString::new(arg.into_bytes()).context("Argument contains null character")?);
     }
+
+    let mut envp;
+    match env {
+        Some(env) => {
+            envp = Vec::with_capacity(env.len());
+            for (name, value) in env {
+                envp.push(
+                    CString::new(format!("{name}={value}").into_bytes())
+                        .context("Environment variable contains null character")?,
+                );
+            }
+        }
+        None => {
+            envp = Vec::new();
+            for (name, value) in std::env::vars() {
+                envp.push(
+                    CString::new(format!("{name}={value}").into_bytes())
+                        .context("Environment variable contains null character")?,
+                );
+            }
+        }
+    }
+
+    ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
+
+    if let Some(cpu_time_limit) = cpu_time_limit {
+        // An additional optimization for finer handling of cpu time limit. An ITIMER_PROF timer
+        // can emit a signal when the given limit is exceeded and is not reset upon execve. This
+        // only applies to a single process, not a cgroup, and can be overwritten by the user
+        // program, but this feature is not mission-critical. It merely saves us a few precious
+        // milliseconds due to the (somewhat artificially deliberate) inefficiency of polling.
+        //
+        // We set itimer after adding the process to the cgroup so that when SIGPROF fires, it
+        // is guaranteed that the cgroup limit has indeed been exceeded.
+
+        // rusage is preserved across execve, so we have to account for the CPU time we have
+        // already spent
+        let rusage =
+            resource::getrusage(resource::UsageWho::RUSAGE_SELF).context("Failed to getrusage")?;
+        let delay = rusage.user_time()
+            + rusage.system_time()
+            + time::TimeVal::new(
+                cpu_time_limit.as_secs() as i64,
+                cpu_time_limit.subsec_micros() as i64,
+            );
+
+        let timer = libc::itimerval {
+            it_interval: libc::timeval {
+                tv_sec: 0,
+                tv_usec: 0,
+            },
+            it_value: *delay.as_ref(),
+        };
+        if unsafe {
+            libc::syscall(
+                libc::SYS_setitimer,
+                libc::ITIMER_PROF,
+                &timer as *const libc::itimerval,
+                std::ptr::null_mut::<libc::itimerval>(),
+            )
+        } == -1
+        {
+            Err(std::io::Error::last_os_error()).context("Failed to set interval timer")?;
+        }
+    }
+
+    // We don't need to reset signals because we didn't configure them inside executor_worker()
+
+    // If we executed the user program directly, we wouldn't be able to catch the right moment
+    // to add the process to the cgroup. If we did that too early, sunwalker's memory usage
+    // would be included. If we did that too late, the kernel might have loaded too big an
+    // executable to memory already. Instead, we load a dummy executable that's only going to
+    // use a tiny bit of memory (at most 172 KiB in practice), enforce the limits, and then let
+    // the dummy execute the user program.
+    match unistd::fexecve(exec_wrapper.as_raw_fd(), &args, &envp).context("execv failed")? {}
 }

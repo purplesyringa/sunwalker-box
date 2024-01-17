@@ -10,7 +10,7 @@ use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::{FileTypeExt, PermissionsExt};
 use std::time::Duration;
 
-pub fn main(cli_args: entry::CLIArgs) {
+pub fn main(cli_args: entry::CLIArgs) -> Result<()> {
     let log_level = cli_args
         .log_level
         .or_else(|| std::env::var("SUNWALKER_BOX_LOG").ok());
@@ -20,25 +20,28 @@ pub fn main(cli_args: entry::CLIArgs) {
         "warn" => LogLevel::Warn,
         "impossible" => LogLevel::Impossible,
         "none" => LogLevel::None,
-        _ => panic!("Unknown log level {log_level}"),
+        _ => bail!("Unknown log level {log_level}"),
     };
     log::enable_diagnostics("main", log_level);
 
-    sandbox::sanity_checks().expect("Sanity checks failed");
+    sandbox::sanity_checks().context("Sanity checks failed")?;
 
     match cli_args.command {
         entry::CLICommand::Isolate(command) => {
-            kmodule::install().expect("Failed to install kernel module");
-            cgroups::Cgroup::new(command.core).expect("Failed to create cgroup for core");
+            kmodule::install().context("Failed to install kernel module")?;
+            cgroups::Cgroup::new(command.core).context("Failed to create cgroup for core")?;
         }
         entry::CLICommand::Free(command) => {
-            cgroups::revert_core_isolation(command.core).expect("Failed to core revert isolation");
+            cgroups::revert_core_isolation(command.core)
+                .context("Failed to core revert isolation")?;
         }
         entry::CLICommand::Start(command) => {
-            kmodule::install().expect("Failed to install kernel module");
-            start(command).expect("Failed to start box");
+            kmodule::install().context("Failed to install kernel module")?;
+            start(command).context("Failed to start box")?;
         }
     }
+
+    Ok(())
 }
 
 fn start(cli_command: entry::CLIStartCommand) -> Result<()> {

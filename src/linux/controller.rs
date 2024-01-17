@@ -93,9 +93,14 @@ impl Controller {
         // pidns, so we create the thread beforehand.
         let (thread_tx, thread_rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let child: crossmist::Child<!> =
-                thread_rx.recv().expect("Failed to receive child in thread");
-            panic!("Child failed: {}", child.join().into_err());
+            let res: Result<!> = try {
+                let child: crossmist::Child<!> = thread_rx
+                    .recv()
+                    .context("Failed to receive child in thread")?;
+                child.join().context("Child failed")?
+            };
+            eprintln!("{:?}", res.into_err());
+            std::process::exit(1);
         });
 
         let (reaper_ours, reaper_theirs) =

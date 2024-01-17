@@ -1,3 +1,4 @@
+use anyhow::Result;
 use argh::FromArgs;
 use crossmist::Object;
 
@@ -65,7 +66,7 @@ pub struct CLIStartCommand {
 }
 
 #[cfg(target_os = "linux")]
-pub fn main() {
+pub fn main() -> Result<()> {
     let cli_args = argh::from_env();
-    crate::linux::entry::main(cli_args);
+    crate::linux::entry::main(cli_args)
 }

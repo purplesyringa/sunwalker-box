@@ -14,31 +14,44 @@ pub enum Command {
 #[crossmist::func]
 pub fn manager(
     proc_cgroup: cgroups::ProcCgroup,
-    mut channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
     log_level: log::LogLevel,
 ) {
+    if let Err(e) = manager_impl(proc_cgroup, channel, log_level) {
+        eprintln!("{e:?}");
+        std::process::exit(1);
+    }
+}
+
+fn manager_impl(
+    proc_cgroup: cgroups::ProcCgroup,
+    mut channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    log_level: log::LogLevel,
+) -> Result<()> {
     log::enable_diagnostics("manager", log_level);
 
     log!("Manager started");
 
-    let mut runner = running::Runner::new(proc_cgroup).expect("Failed to create runner");
+    let mut runner = running::Runner::new(proc_cgroup).context("Failed to create runner")?;
 
     log!("Ready to receive commands");
     channel
         .send(&Ok(None))
-        .expect("Failed to notify parent about readiness");
+        .context("Failed to notify parent about readiness")?;
 
     while let Some(command) = channel
         .recv()
-        .expect("Failed to receive message from channel")
+        .context("Failed to receive message from channel")?
     {
         channel
             .send(&match execute_command(command, &mut runner) {
                 Ok(value) => Ok(value),
                 Err(e) => Err(format!("{e:?}")),
             })
-            .expect("Failed to send reply to channel")
+            .context("Failed to send reply to channel")?
     }
+
+    Ok(())
 }
 
 fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Option<String>> {

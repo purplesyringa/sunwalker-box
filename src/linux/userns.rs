@@ -25,10 +25,17 @@ pub fn enter_user_namespace() -> Result<()> {
 }
 
 #[crossmist::func]
-fn configure_ns(mut rx: crossmist::Receiver<()>) {
+fn configure_ns(rx: crossmist::Receiver<()>) {
+    if let Err(e) = configure_ns_impl(rx) {
+        eprintln!("{e:?}");
+        std::process::exit(1);
+    }
+}
+
+fn configure_ns_impl(mut rx: crossmist::Receiver<()>) -> Result<()> {
     rx.recv()
-        .expect("Failed to recv")
-        .expect("Parent terminated");
+        .context("Failed to recv")?
+        .context("Parent terminated")?;
 
     let ppid = nix::unistd::getppid();
 
@@ -40,10 +47,10 @@ fn configure_ns(mut rx: crossmist::Receiver<()>) {
              1\n{NOBODY_UID} {NOBODY_UID} 1\n"
         ),
     )
-    .expect("Failed to fill uid_map");
+    .context("Failed to fill uid_map")?;
 
     std::fs::write(format!("/newroot/proc/{ppid}/setgroups"), "allow\n")
-        .expect("Failed to fill setgroups");
+        .context("Failed to fill setgroups")?;
 
     std::fs::write(
         format!("/newroot/proc/{ppid}/gid_map"),
@@ -52,7 +59,9 @@ fn configure_ns(mut rx: crossmist::Receiver<()>) {
              1\n{NOGRP_GID} {NOGRP_GID} 1\n"
         ),
     )
-    .expect("Failed to fill gid_map");
+    .context("Failed to fill gid_map")?;
+
+    Ok(())
 }
 
 pub fn drop_privileges() -> Result<()> {

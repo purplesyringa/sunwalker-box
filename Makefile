@@ -18,7 +18,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	strip $^ -o $@
 target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko target/syscall_table.offsets
-	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features= --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(CC)\"
+	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(CC)\"
 
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
 	mkdir -p target && seccomp-tools asm $^ -o $@ -f raw

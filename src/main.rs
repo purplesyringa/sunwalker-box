@@ -1,4 +1,7 @@
 #[crossmist::main]
 fn main() {
-    sunwalker_box::entry::main();
+    if let Err(e) = sunwalker_box::entry::main() {
+        eprintln!("{e:?}");
+        std::process::exit(1);
+    }
 }

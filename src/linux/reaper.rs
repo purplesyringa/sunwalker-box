@@ -3,12 +3,12 @@ use crate::{
     linux::{cgroups, ipc, manager, procs},
     log,
 };
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use crossmist::Object;
 use nix::{
     fcntl, libc,
-    libc::{c_int, pid_t, PR_SET_PDEATHSIG},
-    sys::{signal, wait},
+    libc::{c_int, pid_t},
+    sys::{prctl, signal, wait},
 };
 use std::os::unix::io::{AsRawFd, OwnedFd, RawFd};
 
@@ -30,19 +30,48 @@ pub fn reaper(
     ppidfd: OwnedFd,
     cli_command: entry::CLIStartCommand,
     cgroup: cgroups::Cgroup,
-    mut reaper_channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    reaper_channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
     manager_channel: crossmist::Duplex<
         std::result::Result<Option<String>, String>,
         manager::Command,
     >,
     log_level: log::LogLevel,
 ) -> ! {
+    std::process::exit(
+        match reaper_impl(
+            ppidfd,
+            cli_command,
+            cgroup,
+            reaper_channel,
+            manager_channel,
+            log_level,
+        ) {
+            Ok(()) => 0,
+            Err(e) => {
+                eprintln!("{e:?}");
+                1
+            }
+        },
+    )
+}
+
+fn reaper_impl(
+    ppidfd: OwnedFd,
+    cli_command: entry::CLIStartCommand,
+    cgroup: cgroups::Cgroup,
+    mut reaper_channel: crossmist::Duplex<std::result::Result<Option<String>, String>, Command>,
+    manager_channel: crossmist::Duplex<
+        std::result::Result<Option<String>, String>,
+        manager::Command,
+    >,
+    log_level: log::LogLevel,
+) -> Result<()> {
     log::enable_diagnostics("reaper", log_level);
 
     log!("Reaper started");
 
     if nix::unistd::getpid().as_raw() != 1 {
-        panic!("Reaper must have PID 1");
+        bail!("Reaper must have PID 1");
     }
 
     // We want to receive some signals, but not handle them immediately
@@ -50,16 +79,14 @@ pub fn reaper(
     mask.add(signal::Signal::SIGUSR1);
     mask.add(signal::Signal::SIGIO);
     mask.add(signal::Signal::SIGCHLD);
-    if let Err(e) = mask.thread_block() {
-        eprintln!("Failed to configure signal mask: {e}");
-        std::process::exit(1);
-    }
+    mask.thread_block()
+        .context("Failed to configure signal mask: {e}")?;
 
     // PID 1 can't be killed, not even by suicide. Unfortunately, that's exactly what panic! does,
     // so every time panic! is called, it attempts to call abort(2), silently fails and gets stuck
     // in a SIGSEGV loop. That's not what we what, so we set handlers manually.
     for sig in [signal::Signal::SIGSEGV, signal::Signal::SIGABRT] {
-        if let Err(e) = unsafe {
+        unsafe {
             signal::sigaction(
                 sig,
                 &signal::SigAction::new(
@@ -68,19 +95,13 @@ pub fn reaper(
                     signal::SigSet::empty(),
                 ),
             )
-        } {
-            eprintln!("Failed to configure sigaction: {e}");
-            std::process::exit(1);
         }
+        .context("Failed to configure sigaction")?;
     }
 
     // We want to terminate when parent dies
-    if unsafe { libc::prctl(PR_SET_PDEATHSIG, signal::Signal::SIGUSR1) } == -1 {
-        panic!(
-            "Failed to prctl(PR_SET_PDEATHSIG): {}",
-            std::io::Error::last_os_error()
-        );
-    }
+    prctl::set_pdeathsig(signal::Signal::SIGUSR1).context("Failed to prctl(PR_SET_PDEATHSIG)")?;
+
     // In the unlikely case when the parent terminated before or during prctl was called, check if
     // the parent is dead by now. pidfd_send_signal does not work across PID namespaces (not in this
     // case, anyway), so we have to resort to polling.
@@ -91,29 +112,30 @@ pub fn reaper(
         )],
         0,
     )
-    .expect("Failed to poll parent pidfd")
+    .context("Failed to poll parent pidfd")?
         != 0
     {
         log!("Parent already dead");
-        std::process::exit(0);
+        return Ok(());
     }
 
     if !cli_command.ignore_non_cloexec {
         // O_CLOEXEC is great and all, but better safe than sorry. We make sure all streams except
         // the standard ones are closed on exec.
-        for entry in std::fs::read_dir("/proc/self/fd").expect("Failed to read /proc/self/fd") {
-            let entry = entry.expect("Failed to read /proc/self/fd");
+        for entry in std::fs::read_dir("/proc/self/fd").context("Failed to read /proc/self/fd")? {
+            let entry = entry.context("Failed to read /proc/self/fd")?;
             let fd: RawFd = entry
                 .file_name()
                 .into_string()
-                .expect("Invalid filename in /proc/self/fd")
+                .ok()
+                .context("Invalid filename in /proc/self/fd")?
                 .parse()
-                .expect("Invalid filename in /proc/self/fd");
+                .context("Invalid filename in /proc/self/fd")?;
             if fd < 3 {
                 continue;
             }
             let flags = fcntl::fcntl(fd, fcntl::FcntlArg::F_GETFD)
-                .expect("Failed to fcntl a file descriptor");
+                .context("Failed to fcntl a file descriptor")?;
             if !fcntl::FdFlag::from_bits_truncate(flags).intersects(fcntl::FdFlag::FD_CLOEXEC) {
                 log!(
                     warn,
@@ -122,7 +144,7 @@ pub fn reaper(
                      this check with --ignore-non-cloexec. THERE IS SECURITY RISK ATTACHED TO \
                      THIS OPTION -- ONLY USE IT IF YOU ARE SPECIFICALLY DEBUGGING SUNWALKER-BOX."
                 );
-                panic!("File descriptor {fd} is not CLOEXEC");
+                bail!("File descriptor {fd} is not CLOEXEC");
             }
         }
     }
@@ -130,7 +152,7 @@ pub fn reaper(
     // We don't want to terminate immediately if someone sends Ctrl-C via the controlling terminal,
     // but instead wait for the parent's termination and quit after that. This also prevents command
     // injection via ioctl(TIOCSTI).
-    nix::unistd::setsid().expect("Failed to setsid");
+    nix::unistd::setsid().context("Failed to setsid")?;
     log!("Reaper is now running in a detached controlling terminal");
 
     // Send a signal whenever a new message appears on a channel
@@ -158,13 +180,13 @@ pub fn reaper(
     }
 
     enable_async(&reaper_channel, signal::Signal::SIGIO)
-        .expect("Failed to enable SIGIO on reaper channel");
+        .context("Failed to enable SIGIO on reaper channel")?;
 
     // We have to separate reaping and sandbox management, because we need to spawn processes, and
     // reaping all of them continuously is going to be confusing to stdlib.
     let proc_cgroup = cgroup
         .create_proc_cgroup()
-        .expect("Failed to create box cgroup");
+        .context("Failed to create box cgroup")?;
     let child = manager::manager
         .spawn(
             proc_cgroup
@@ -173,15 +195,15 @@ pub fn reaper(
             manager_channel,
             log_level,
         )
-        .expect("Failed to start child");
+        .context("Failed to start child")?;
     // We purposefully don't join manager here, as it may die unexpectedly
 
     'main: loop {
-        match mask.wait().expect("Failed to wait for signal") {
+        match mask.wait().context("Failed to wait for signal")? {
             signal::Signal::SIGUSR1 => {
                 // Parent died
                 // NOTE: Every log from now on is being sent to stderr after the main process has
-                // died. If you are running sunwalker-box from terminal, this might mean your
+                // died. If you are running sunwalker-box fromt terminal, this might mean your
                 // shell's prompt is interleaved with log messages. If you are running sunwalker-box
                 // under sudo, these logs might be hidden, because sudo redirects stdio, and when
                 // sudo dies, output is no longer piped to the user.
@@ -194,7 +216,7 @@ pub fn reaper(
             }
             signal::Signal::SIGIO => {
                 // Incoming command
-                let Some(command) = reaper_channel.recv().expect("Failed to read command") else {
+                let Some(command) = reaper_channel.recv().context("Failed to read command")? else {
                     // SIGIO is also sent when reaper_channel is dropped, which happens just before
                     // the parent dies. However, if we terminate before SIGUSR1, the parent will
                     // believe we crashed. Therefore, just wait for SIGUSR1.
@@ -207,7 +229,7 @@ pub fn reaper(
                 let result = execute_command(command, child.id()).map_err(|e| format!("{e:?}"));
                 reaper_channel
                     .send(&result)
-                    .expect("Failed to report result");
+                    .context("Failed to report result")?;
             }
             signal::Signal::SIGCHLD => {
                 // Child (or several) died
@@ -233,14 +255,14 @@ pub fn reaper(
                                 );
                                 break 'main;
                             } else {
-                                panic!("Failed to waitpid: {e:?}");
+                                bail!("Failed to waitpid: {e:?}");
                             }
                         }
                     }
                 }
             }
             _ => {
-                panic!("Unexpected signal");
+                bail!("Unexpected signal");
             }
         }
     }
@@ -253,7 +275,7 @@ pub fn reaper(
 
     // Don't send the result to the parent
     log!("Terminating");
-    std::process::exit(0)
+    Ok(())
 }
 
 fn execute_command(command: Command, child_pid: pid_t) -> Result<Option<String>> {

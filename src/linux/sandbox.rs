@@ -143,7 +143,7 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to bind-mount /oldroot/proc to /proc")?;
 
     system::change_propagation("/", libc::MS_SHARED | libc::MS_REC)
-        .expect("Failed to change propagation to shared");
+        .context("Failed to change propagation to shared")?;
 
     Ok(())
 }
