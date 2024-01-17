@@ -55,8 +55,7 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
     for line in std::io::BufReader::new(std::io::stdin()).lines() {
         let line = line.context("Failed to read from stdin")?;
         let (command, arg) = line.split_once(' ').unwrap_or((&line, ""));
-        let command = command.to_lowercase();
-        match handle_command(&mut controller, &command, arg) {
+        match handle_command(&mut controller, command, arg) {
             Ok(None) => {
                 println!("ok");
             }
