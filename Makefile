@@ -16,7 +16,7 @@ all: sunwalker_box
 sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
-	cp $^ $@
+	strip $^ -o $@
 target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko target/syscall_table.offsets
 	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features= --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(CC)\"
 
