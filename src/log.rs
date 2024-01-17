@@ -67,11 +67,13 @@ macro_rules! log {
         log!(notice, $format $($rest)*);
     };
     ($level:ident, $($args:tt)*) => {
-        $crate::log::do_log(
-            $crate::log_level!($level),
-            file!(),
-            || format!($($args)*),
-        );
+        if $crate::log_level!($level) >= $crate::log::get_diagnostics_config().level {
+            $crate::log::do_log(
+                $crate::log_level!($level),
+                file!(),
+                format!($($args)*),
+            );
+        }
     };
 }
 
@@ -106,11 +108,8 @@ static COLORS: [(u8, u8, u8); 23] = [
     (255, 0, 85),
 ];
 
-pub fn do_log(level: LogLevel, file: &'static str, args: impl FnOnce() -> String) {
+pub fn do_log(level: LogLevel, file: &'static str, text: String) {
     let config = get_diagnostics_config();
-    if level < config.level {
-        return;
-    }
 
     let context = file.strip_suffix(".rs").unwrap();
     let context = context.rsplit_once('/').map(|(_, x)| x).unwrap_or(context);
@@ -121,7 +120,7 @@ pub fn do_log(level: LogLevel, file: &'static str, args: impl FnOnce() -> String
     let hash = hasher.finish() as usize;
     let (r, g, b) = COLORS[hash % COLORS.len()];
 
-    let text = word_wrap(&format!("{}{}", level.get_prefix_text(), args()));
+    let text = word_wrap(&format!("{}{text}", level.get_prefix_text()));
 
     // Failing to log is not considered a failure, because panicking in a critical section or a
     // cleanup procedure might lead to worse results
