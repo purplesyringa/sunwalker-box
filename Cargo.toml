@@ -9,7 +9,7 @@ description = "Sandbox for sunwalker judge system"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "1.0"
+anyhow = { git = "https://github.com/purplesyringa/anyhow", branch = "optout-backtrace", features = ["no_backtrace"]}
 argh = "0.1.9"
 json = "0.12.4"
 crossmist = "0.2.3"

@@ -4,9 +4,8 @@ version = 3
 
 [[package]]
 name = "anyhow"
-version = "1.0.75"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4668cab20f66d8d020e1fbc0ebe47217433c1b6c8f2040faf858554e394ace6"
+version = "1.0.79"
+source = "git+https://github.com/purplesyringa/anyhow?branch=optout-backtrace#c80e8ff2de90580e50a29850ad3072963f7e06f1"
 
 [[package]]
 name = "argh"
