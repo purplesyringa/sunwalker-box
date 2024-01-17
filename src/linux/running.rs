@@ -792,18 +792,14 @@ impl SingleRun<'_> {
     #[cfg(target_arch = "aarch64")]
     fn handle_sigsegv(&self, process: &mut ProcessInfo) -> Result<()> {
         log!("Delivering SIGSEGV");
-        process
-            .traced_process
-            .resume_signal(signal::Signal::SIGSEGV)?;
+        process.traced_process.resume_signal(libc::SIGSEGV)?;
         Ok(())
     }
 
     #[cfg(target_arch = "aarch64")]
     fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
         log!("Delivering SIGILL");
-        process
-            .traced_process
-            .resume_signal(signal::Signal::SIGILL)?;
+        process.traced_process.resume_signal(libc::SIGILL)?;
         Ok(())
     }
 
