@@ -5,8 +5,8 @@ use crate::{
     log::LogLevel,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
+use miniserde::{json, Serialize, Deserialize};
 use nix::libc::mode_t;
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
@@ -16,7 +16,7 @@ use std::os::unix::{
     fs as unix_fs,
     fs::{FileTypeExt, PermissionsExt},
 };
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process;
 use std::time::Duration;
 
@@ -76,7 +76,7 @@ fn start(cli_command: entry::CLIStartCommand) -> Result<()> {
                 println!("ok {s}");
             }
             Err(e) => {
-                println!("error {}", serde_json::to_string(&format!("{e:?}")).unwrap());
+                println!("error {}", json::to_string(&format!("{e:?}")));
             }
         }
     }
@@ -91,13 +91,12 @@ trait CliCommand {
 
 #[derive(Deserialize)]
 struct Mkdir {
-    path: PathBuf,
+    path: String,
     owner: Option<String>,
     mode: Option<mode_t>,
 }
 
 impl CliCommand for Mkdir {
-    #[inline(never)]
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
         let path = rootfs::resolve_abs_box_root(&self.path)?;
         controller.ensure_allowed_to_modify(&path)?;
@@ -113,7 +112,7 @@ impl CliCommand for Mkdir {
 
 #[derive(Deserialize)]
 struct Ls {
-    path: PathBuf,
+    path: String,
 }
 
 #[derive(Serialize)]
@@ -124,7 +123,6 @@ struct LsEntryMetadata {
 }
 
 impl CliCommand for Ls {
-    #[inline(never)]
     fn execute(self, _controller: &mut controller::Controller) -> Result<Option<String>> {
         let mut entries = HashMap::new();
         for entry in fs::read_dir(rootfs::resolve_abs_box_root(&self.path)?)? {
@@ -163,19 +161,18 @@ impl CliCommand for Ls {
                 )
                 .unwrap();
         }
-        Ok(Some(serde_json::to_string(&entries)?))
+        Ok(Some(json::to_string(&entries)))
     }
 }
 
 #[derive(Deserialize)]
 struct Cat {
-    path: PathBuf,
+    path: String,
     at: Option<usize>,
     len: Option<usize>,
 }
 
 impl CliCommand for Cat {
-    #[inline(never)]
     fn execute(self, _controller: &mut controller::Controller) -> Result<Option<String>> {
         let mut file =
             File::open(rootfs::resolve_abs_box_root(&self.path)?).context("Failed to open file")?;
@@ -193,7 +190,7 @@ impl CliCommand for Cat {
             // Might be a special file
             let mut buf = vec![];
             file.read_to_end(&mut buf)?;
-            return Ok(Some(serde_json::to_string(&buf)?));
+            return Ok(Some(json::to_string(&buf)));
         }
 
         ensure!(at <= file_len, "Offset after end of file");
@@ -215,17 +212,16 @@ impl CliCommand for Cat {
         }
         buf.truncate(ptr);
 
-        Ok(Some(serde_json::to_string(&buf)?))
+        Ok(Some(json::to_string(&buf)))
     }
 }
 
 #[derive(Deserialize)]
 struct Extpath {
-    path: PathBuf,
+    path: String,
 }
 
 impl CliCommand for Extpath {
-    #[inline(never)]
     fn execute(self, _controller: &mut controller::Controller) -> Result<Option<String>> {
         let path = rootfs::resolve_abs_box_root(&self.path)?;
         let pid = process::id();
@@ -233,20 +229,19 @@ impl CliCommand for Extpath {
             "/proc/{pid}/root{}",
             path.to_str().context("Path is not UTF-8")?
         );
-        Ok(Some(serde_json::to_string(&system_path)?))
+        Ok(Some(json::to_string(&system_path)))
     }
 }
 
 #[derive(Deserialize)]
 struct Mkfile {
-    path: PathBuf,
+    path: String,
     content: Vec<u8>,
     owner: Option<String>,
     mode: Option<mode_t>,
 }
 
 impl CliCommand for Mkfile {
-    #[inline(never)]
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
         let path = rootfs::resolve_abs_box_root(&self.path)?;
         controller.ensure_allowed_to_modify(&path)?;
@@ -263,12 +258,11 @@ impl CliCommand for Mkfile {
 
 #[derive(Deserialize)]
 struct Mksymlink {
-    link: PathBuf,
-    target: PathBuf,
+    link: String,
+    target: String,
 }
 
 impl CliCommand for Mksymlink {
-    #[inline(never)]
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
         let link = rootfs::resolve_abs_box_root(&self.link)?;
         controller.ensure_allowed_to_modify(&link)?;
@@ -279,15 +273,14 @@ impl CliCommand for Mksymlink {
 
 #[derive(Deserialize)]
 struct Bind {
-    external: PathBuf,
-    internal: PathBuf,
+    external: String,
+    internal: String,
 
     // This is plain cringe.
     ro: bool,
 }
 
 impl CliCommand for Bind {
-    #[inline(never)]
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
         controller.bind(&self.external, &self.internal, self.ro)?;
         Ok(None)
@@ -297,7 +290,6 @@ impl CliCommand for Bind {
 struct Reset;
 
 impl CliCommand for Reset {
-    #[inline(never)]
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
         controller.reset()?;
         Ok(None)
@@ -307,7 +299,6 @@ impl CliCommand for Reset {
 struct Commit;
 
 impl CliCommand for Commit {
-    #[inline(never)]
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
         controller.commit()?;
         Ok(None)
@@ -329,7 +320,6 @@ struct Run {
 }
 
 impl CliCommand for Run {
-    #[inline(never)]
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
         ensure!(self.argv.len() != 0, "argv must not be empty");
         let dev_null = || "/dev/null".to_owned();
@@ -358,57 +348,57 @@ fn handle_command(
 ) -> Result<Option<String>> {
     match command {
         "mkdir" => CliCommand::execute(
-            if let Ok(path) = serde_json::from_str(arg) {
+            if let Ok(path) = json::from_str(arg) {
                 Mkdir {
                     path,
                     owner: None,
                     mode: None,
                 }
             } else {
-                serde_json::from_str(arg).context("Invalid JSON")?
+                json::from_str(arg).context("Invalid JSON")?
             },
             controller,
         ),
         "ls" => CliCommand::execute(
             Ls {
-                path: serde_json::from_str(arg).context("Invalid JSON")?,
+                path: json::from_str(arg).context("Invalid JSON")?,
             },
             controller,
         ),
         "cat" => CliCommand::execute(
-            if let Ok(path) = serde_json::from_str(arg) {
+            if let Ok(path) = json::from_str(arg) {
                 Cat {
                     path,
                     at: None,
                     len: None,
                 }
             } else {
-                serde_json::from_str(arg).context("Invalid JSON")?
+                json::from_str(arg).context("Invalid JSON")?
             },
             controller,
         ),
         "extpath" => CliCommand::execute(
             Extpath {
-                path: serde_json::from_str(arg).context("Invalid JSON")?,
+                path: json::from_str(arg).context("Invalid JSON")?,
             },
             controller,
         ),
         "mkfile" => CliCommand::execute(
-            serde_json::from_str::<Mkfile>(arg).context("Invalid JSON")?,
+            json::from_str::<Mkfile>(arg).context("Invalid JSON")?,
             controller,
         ),
         "mksymlink" => CliCommand::execute(
-            serde_json::from_str::<Mksymlink>(arg).context("Invalid JSON")?,
+            json::from_str::<Mksymlink>(arg).context("Invalid JSON")?,
             controller,
         ),
         "bind" => CliCommand::execute(
-            serde_json::from_str::<Bind>(arg).context("Invalid JSON")?,
+            json::from_str::<Bind>(arg).context("Invalid JSON")?,
             controller,
         ),
         "reset" => CliCommand::execute(Reset, controller),
         "commit" => CliCommand::execute(Commit, controller),
         "run" => CliCommand::execute(
-            serde_json::from_str::<Run>(arg).context("Invalid JSON")?,
+            json::from_str::<Run>(arg).context("Invalid JSON")?,
             controller,
         ),
         _ => bail!("Unknown command {command}"),

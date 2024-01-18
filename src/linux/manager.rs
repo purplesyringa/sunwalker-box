@@ -4,6 +4,7 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use crossmist::Object;
+use miniserde::{json, Serialize};
 use std::path::PathBuf;
 
 #[derive(Debug, Object)]
@@ -93,16 +94,25 @@ fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Opt
                 }
             }
 
+            #[derive(Serialize)]
+            struct Results {
+                limit_verdict: &'static str,
+                exit_code: i32,
+                real_time: f64,
+                cpu_time: f64,
+                idleness_time: f64,
+                memory: usize
+            }
+
             Ok(Some(
-                serde_json::to_string(&serde_json::json!({
-                    "limit_verdict": limit_verdict,
-                    "exit_code": exit_code,
-                    "real_time": results.real_time.as_secs_f64(),
-                    "cpu_time": results.cpu_time.as_secs_f64(),
-                    "idleness_time": results.idleness_time.as_secs_f64(),
-                    "memory": results.memory,
-                }))
-                .unwrap(),
+                json::to_string(&Results {
+                    limit_verdict,
+                    exit_code,
+                    real_time: results.real_time.as_secs_f64(),
+                    cpu_time: results.cpu_time.as_secs_f64(),
+                    idleness_time: results.idleness_time.as_secs_f64(),
+                    memory: results.memory,
+                } ),
             ))
         }
     }

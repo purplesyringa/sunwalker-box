@@ -15,8 +15,7 @@ crossmist = "0.2.3"
 nix = { version = "0.27.1", features = ["resource", "sched", "kmod", "ptrace", "signal", "fs", "time", "user", "poll", "event", "process"] }
 openat = "0.1.21"
 rand = "0.8.5"
-serde = { version = "1.0.195", default-features = false, features = ["alloc"] }
-serde_json = { version = "1.0.111", default-features = false, features = ["alloc"] }
+miniserde = "0.1"
 
 [profile.release]
 codegen-units = 1

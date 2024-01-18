@@ -151,6 +151,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b4668fb0ea861c1df094127ac5f1da3409a82116a4ba74fca2e58ef927159bb3"
 
 [[package]]
+name = "mini-internal"
+version = "0.1.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "51c55587ac25c2d63a75e4171221b2803a9b9e83aeb7bdfde5833c4cd578b50d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.48",
+]
+
+[[package]]
+name = "miniserde"
+version = "0.1.36"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8621df4a46e5de4c1541242407da38281ea0e320b94e238477688a36a1a059f7"
+dependencies = [
+ "itoa",
+ "mini-internal",
+ "ryu",
+]
+
+[[package]]
 name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -257,17 +279,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_json"
-version = "1.0.111"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "176e46fa42316f18edd598015a5166857fc835ec732f5215eac6b7bdbf0a84f4"
-dependencies = [
- "itoa",
- "ryu",
- "serde",
-]
-
-[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -280,11 +291,10 @@ dependencies = [
  "anyhow",
  "argh",
  "crossmist",
+ "miniserde",
  "nix",
  "openat",
  "rand",
- "serde",
- "serde_json",
 ]
 
 [[package]]
