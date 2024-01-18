@@ -184,15 +184,20 @@ impl Controller {
         Ok(())
     }
 
-    pub fn bind(&mut self, external: &str, internal: &str, ro: bool) -> Result<()> {
-        let internal_abs = rootfs::resolve_abs_box_root(internal)?;
+    pub fn bind(
+        &mut self,
+        external: impl AsRef<Path>,
+        internal: impl AsRef<Path>,
+        ro: bool,
+    ) -> Result<()> {
+        let internal_abs = rootfs::resolve_abs_box_root(&internal)?;
         system::bind_mount(rootfs::resolve_abs_old_root(external)?, &internal_abs)?;
         system::change_propagation(&internal_abs, libc::MS_PRIVATE)?; // linux@d29216842a85
         if ro {
             system::remount_readonly(&internal_abs)
                 .with_context(|| format!("Failed to remount {internal_abs:?} read-only"))?;
             self.run_manager_command(manager::Command::RemountReadonly {
-                path: internal.to_string(),
+                path: internal.as_ref().to_owned(),
             })?;
         }
         Ok(())

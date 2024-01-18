@@ -11,11 +11,12 @@ description = "Sandbox for sunwalker judge system"
 [dependencies]
 anyhow = { git = "https://github.com/purplesyringa/anyhow", branch = "optout-backtrace", features = ["no_backtrace"]}
 argh = "0.1.9"
-json = "0.12.4"
 crossmist = "0.2.3"
 nix = { version = "0.27.1", features = ["resource", "sched", "kmod", "ptrace", "signal", "fs", "time", "user", "poll", "event", "process"] }
 openat = "0.1.21"
 rand = "0.8.5"
+serde = { version = "1.0.195", default-features = false, features = ["alloc"] }
+serde_json = { version = "1.0.111", default-features = false, features = ["alloc"] }
 
 [profile.release]
 codegen-units = 1

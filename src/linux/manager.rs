@@ -4,10 +4,11 @@ use crate::{
 };
 use anyhow::{Context, Result};
 use crossmist::Object;
+use std::path::PathBuf;
 
 #[derive(Debug, Object)]
 pub enum Command {
-    RemountReadonly { path: String },
+    RemountReadonly { path: PathBuf },
     Run { options: running::Options },
 }
 
@@ -60,7 +61,7 @@ fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Opt
     match command {
         Command::RemountReadonly { path } => {
             system::remount_readonly(&path)
-                .with_context(|| format!("Failed to remount {path} read-only"))?;
+                .with_context(|| format!("Failed to remount {path:?} read-only"))?;
             Ok(None)
         }
         Command::Run { options } => {
@@ -92,14 +93,17 @@ fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Opt
                 }
             }
 
-            Ok(Some(json::stringify(json::object! {
-                limit_verdict: limit_verdict,
-                exit_code: exit_code,
-                real_time: results.real_time.as_secs_f64(),
-                cpu_time: results.cpu_time.as_secs_f64(),
-                idleness_time: results.idleness_time.as_secs_f64(),
-                memory: results.memory,
-            })))
+            Ok(Some(
+                serde_json::to_string(&serde_json::json!({
+                    "limit_verdict": limit_verdict,
+                    "exit_code": exit_code,
+                    "real_time": results.real_time.as_secs_f64(),
+                    "cpu_time": results.cpu_time.as_secs_f64(),
+                    "idleness_time": results.idleness_time.as_secs_f64(),
+                    "memory": results.memory,
+                }))
+                .unwrap(),
+            ))
         }
     }
 }
