@@ -5,7 +5,7 @@ use crate::{
     log::LogLevel,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
-use miniserde::{json, Serialize, Deserialize};
+use miniserde::{json, Deserialize, Serialize};
 use nix::libc::mode_t;
 use std::collections::HashMap;
 use std::fs;
@@ -125,7 +125,7 @@ struct LsEntryMetadata {
 impl CliCommand for Ls {
     fn execute(self, _controller: &mut controller::Controller) -> Result<Option<String>> {
         let mut entries = HashMap::new();
-        for entry in fs::read_dir(rootfs::resolve_abs_box_root(&self.path)?)? {
+        for entry in fs::read_dir(rootfs::resolve_abs_box_root(self.path)?)? {
             let entry = entry?;
             let file_name = entry
                 .file_name()
@@ -223,7 +223,7 @@ struct Extpath {
 
 impl CliCommand for Extpath {
     fn execute(self, _controller: &mut controller::Controller) -> Result<Option<String>> {
-        let path = rootfs::resolve_abs_box_root(&self.path)?;
+        let path = rootfs::resolve_abs_box_root(self.path)?;
         let pid = process::id();
         let system_path = format!(
             "/proc/{pid}/root{}",
@@ -321,7 +321,7 @@ struct Run {
 
 impl CliCommand for Run {
     fn execute(self, controller: &mut controller::Controller) -> Result<Option<String>> {
-        ensure!(self.argv.len() != 0, "argv must not be empty");
+        ensure!(!self.argv.is_empty(), "argv must not be empty");
         let dev_null = || "/dev/null".to_owned();
 
         controller.run_manager_command(manager::Command::Run {

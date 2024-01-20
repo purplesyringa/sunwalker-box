@@ -89,19 +89,19 @@ impl Cgroup {
         // For core
         self.core_cgroup_fd
             .write_file("cgroup.subtree_control", 0o700)
-            .with_context(|| format!("Failed to open cgroup.subtree_control for writing"))?
+            .context("Failed to open cgroup.subtree_control for writing")?
             .write(b"+cpu +memory +pids\n")
             .context("Failed to enable cgroup controllers")?;
 
         // Set core
         self.core_cgroup_fd
             .write_file("cpuset.cpus", 0o700)
-            .with_context(|| format!("Failed to open cpuset.cpus for writing"))?
+            .context("Failed to open cpuset.cpus for writing")?
             .write(format!("{}", self.core).as_bytes())
             .context("Failed to set CPU")?;
         self.core_cgroup_fd
             .write_file("cpuset.cpus.partition", 0o700)
-            .with_context(|| format!("Failed to open cpuset.cpus.partition for writing"))?
+            .context("Failed to open cpuset.cpus.partition for writing")?
             .write(b"root")
             .context("Failed to switch partition type to 'root'")?;
 
