@@ -1,15 +1,19 @@
 ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
 TARGET := $(ARCH)-unknown-linux-musl
 
-SECCOMP_FILTERS := filter
-
 RUSTFLAGS := --remap-path-prefix ${HOME}/.rustup=~/.rustup --remap-path-prefix ${HOME}/.cargo=~/.cargo --remap-path-prefix $(shell pwd)=.
 
 ifeq ($(ARCH),aarch64)
 RUSTFLAGS += -C link-arg=-lgcc
 endif
 
-.PHONY: target/$(TARGET)/release/sunwalker_box test clean
+CARGO_TARGET := $(shell echo "$(TARGET)" | tr a-z- A-Z_)
+CARGO := CARGO_TARGET_$(CARGO_TARGET)_LINKER="$(CC)" RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly
+CARGO_OPTIONS := --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release
+
+SECCOMP_FILTERS := filter filter_restricted
+
+.PHONY: target/$(TARGET)/release/sunwalker_box test clean bloat check clippy
 
 all: sunwalker_box
 
@@ -17,8 +21,20 @@ sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	strip $^ -o $@
-target/$(TARGET)/release/sunwalker_box: $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko target/syscall_table.offsets
-	RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly build --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release --config target.$(ARCH)-unknown-linux-musl.linker=\"$(CC)\"
+
+DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko target/syscall_table.offsets
+
+target/$(TARGET)/release/sunwalker_box: $(DEPS)
+	$(CARGO) build $(CARGO_OPTIONS)
+
+bloat: $(DEPS)
+	$(CARGO) bloat $(CARGO_OPTIONS) $(OPTIONS)
+
+check: $(DEPS)
+	$(CARGO) check $(CARGO_OPTIONS) $(OPTIONS)
+
+clippy: $(DEPS)
+	$(CARGO) clippy $(CARGO_OPTIONS) $(OPTIONS)
 
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
 	mkdir -p target && seccomp-tools asm $^ -o $@ -f raw
