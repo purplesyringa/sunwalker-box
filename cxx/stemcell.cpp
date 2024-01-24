@@ -1,6 +1,8 @@
 #include "libc.hpp"
 #include "remembrances/alternative_stack.hpp"
+#ifdef __x86_64__
 #include "remembrances/arch_prctl_options.hpp"
+#endif
 #include "remembrances/file_descriptors.hpp"
 #include "remembrances/itimers.hpp"
 #include "remembrances/memory_maps.hpp"
@@ -14,7 +16,9 @@
 struct State {
     Result<void> result;
     alternative_stack::State alternative_stack;
+#ifdef __x86_64__
     arch_prctl_options::State arch_prctl_options;
+#endif
     file_descriptors::State file_descriptors;
     itimers::State itimers;
     memory_maps::State memory_maps;
@@ -53,10 +57,13 @@ Result<void> run() {
     alternative_stack::load(state.alternative_stack)
         .CONTEXT("Failed to load alternative stack")
         .TRY();
+
+#ifdef __x86_64__
     // We don't rely on limited CPU features or use TLS, so this is safe to perform
     arch_prctl_options::load(state.arch_prctl_options)
         .CONTEXT("Failed to load arch_prctl options")
         .TRY();
+#endif
 
     // Transparent huge pages should be enabled before mapping memory
     thp_options::load(state.thp_options)

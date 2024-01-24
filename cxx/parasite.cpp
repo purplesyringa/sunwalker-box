@@ -1,6 +1,8 @@
 #include "libc.hpp"
 #include "remembrances/alternative_stack.hpp"
+#ifdef __x86_64__
 #include "remembrances/arch_prctl_options.hpp"
+#endif
 #include "remembrances/itimers.hpp"
 #include "remembrances/pending_signals.hpp"
 #include "remembrances/personality.hpp"
@@ -13,7 +15,9 @@
 struct State {
     Result<void> result;
     alternative_stack::State alternative_stack;
+#ifdef __x86_64__
     arch_prctl_options::State arch_prctl_options;
+#endif
     itimers::State itimers;
     program_break::State program_break;
     pending_signals::State pending_signals;
@@ -28,9 +32,11 @@ Result<void> run() {
     alternative_stack::save(state.alternative_stack)
         .CONTEXT("Failed to save alternative stack")
         .TRY();
+#ifdef __x86_64__
     arch_prctl_options::save(state.arch_prctl_options)
         .CONTEXT("Failed to save arch_prctl options")
         .TRY();
+#endif
     itimers::save(state.itimers).CONTEXT("Failed to save interval timers").TRY();
     program_break::save(state.program_break).CONTEXT("Failed to save program break").TRY();
     pending_signals::save(state.pending_signals).CONTEXT("Failed to save pending signals").TRY();
