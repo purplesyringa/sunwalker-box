@@ -1,5 +1,6 @@
 #include "../libc.hpp"
 #include <asm/prctl.h>
+#include <errno.h>
 
 namespace arch_prctl_options {
 
@@ -23,7 +24,11 @@ static Result<void> save(State &state) {
 static Result<void> load(const State &state) {
     libc::arch_prctl(ARCH_SET_FS, state.fs_base).CONTEXT("Failed to set fsbase").TRY();
     libc::arch_prctl(ARCH_SET_GS, state.gs_base).CONTEXT("Failed to set gsbase").TRY();
-    libc::arch_prctl(ARCH_SET_CPUID, state.cpuid_status).CONTEXT("Failed to set cpuid").TRY();
+    // Oh, some hardware had seen the dinos and don't support faulting cpuid
+    libc::arch_prctl(ARCH_SET_CPUID, state.cpuid_status)
+        .swallow(ENODEV, 0)
+        .CONTEXT("Failed to set cpuid")
+        .TRY();
     return {};
 }
 
