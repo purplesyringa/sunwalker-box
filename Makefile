@@ -59,8 +59,10 @@ check: $(DEPS)
 clippy: $(DEPS)
 	$(CARGO) clippy $(CARGO_OPTIONS_DEBUG) $(OPTIONS)
 
-target/parasite.bin: target/parasite
-	objcopy -O binary --only-section=.text $< /dev/stdout | sed "$$ s/\x00*$$//g" >$@
+target/parasite.bin: target/parasite.text
+	sed "$$ s/\x00*$$//g" $< >$@
+target/parasite.text: target/parasite
+	objcopy -O binary --only-section=.text $< $@
 target/parasite.size: target/parasite
 	readelf -S $< | awk '/\.text/{ getline; print "0x" $$1 }' >$@
 target/parasite.result_context_map: target/parasite
