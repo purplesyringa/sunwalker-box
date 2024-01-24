@@ -645,11 +645,7 @@ impl<'a> Suspender<'a> {
         // Jump back to the syscall instruction
         registers.rip -= self.orig.get_syscall_insn_length() as u64;
         // Change the -ENOSYS placed by seccomp to the real syscall number
-        let syscall_info = self
-            .orig
-            .get_syscall_info()
-            .context("Failed to get syscall info")?;
-        registers.rax = unsafe { syscall_info.u.seccomp }.nr;
+        registers.rax = registers.orig_rax;
 
         // It's important to get the kernel messing with IP due to rseq out of the way as fast as
         // possible
