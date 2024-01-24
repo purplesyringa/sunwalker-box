@@ -1336,6 +1336,8 @@ fn wait_for_raised_sigstop(
     // it successfully restores the state.
     loop {
         let wait_status = process.wait()?;
+        log!("Got wait status {wait_status:?}");
+
         // If we don't detach from the process, it won't be able to receive SIGKILL and
         // terminate. So do that, even though that technically allows the process to do weird
         // stuff in the meantime.
