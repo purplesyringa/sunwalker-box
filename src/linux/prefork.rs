@@ -131,12 +131,16 @@ pub struct RSeqInfo {
     rseq_cs: usize,
 }
 
+#[cfg(target_arch = "x86_64")]
 #[repr(C)]
 struct ArchPrctlOptions {
     fs_base: usize,
     gs_base: usize,
     cpuid_status: usize,
 }
+
+#[cfg(not(target_arch = "x86_64"))]
+struct ArchPrctlOptions;
 
 #[repr(C)]
 struct ItimersState {
