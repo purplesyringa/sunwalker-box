@@ -52,9 +52,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "crossmist"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fe7cf14e823dcc6a3c3e987b3e6e1a73981cc4064d8477672652778fc27f3f8d"
+checksum = "dfffd02005f3c8d1b6db8cf02b63eef9325683bcc571aa679073a33943b8c5a9"
 dependencies = [
  "crossmist-derive",
  "lazy_static",
@@ -65,9 +65,9 @@ dependencies = [
 
 [[package]]
 name = "crossmist-derive"
-version = "0.2.3"
+version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7161bbe5e7fd45206cdfb7776e165a64f3a01d0c486b5af0ba5854fde6891a59"
+checksum = "153648fbf84beb9d610d5840f06cf30d1e5059d34f44f191c042b11429acf592"
 dependencies = [
  "darling",
  "quote",
