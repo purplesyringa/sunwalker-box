@@ -14,9 +14,9 @@ def overlap(s: str, t: str) -> int:
     return 0
 
 
-def save_table(table_name: str, table: list[tuple[str, int]]):
+def save_table(table_name: str, table: dict[str, int]):
     # Remove strings that are substrings of other strings
-    names = sorted((name for name, _ in table), key=lambda name: len(name))
+    names = sorted(table, key=lambda name: len(name))
     names = [name for i, name in enumerate(names) if not any(name in other for other in names[i + 1:])]
 
     # Find a short string containing all the names
@@ -47,10 +47,10 @@ def save_table(table_name: str, table: list[tuple[str, int]]):
 
     # Build reference table
     ref_table = []
-    for name, number in table:
+    for name, number in table.items():
         ref_table += [(0, 0)] * (number - len(ref_table) + 1)
-        assert ref_table[number] == (0, 0)
-        ref_table[number] = (strings.index(name), len(name))
+        if ref_table[number] == (0, 0):
+            ref_table[number] = (strings.index(name), len(name))
 
     max_offset = max(offset for offset, _ in ref_table)
     max_length = max(length for _, length in ref_table)
@@ -67,29 +67,47 @@ def save_table(table_name: str, table: list[tuple[str, int]]):
         f.write(strings)
 
 
-def save_table_from_defines(table_name: str, file_name: str, regex: str):
+def extract_table_from_defines(file_name: str, name_prefix: str) -> dict[str, int]:
+    # Determine macro names
     proc = subprocess.run(
         [CC, "-E", "-dM", "-"],
         input=f"#include <{file_name}>".encode(),
         check=True,
         capture_output=True
     )
-    compiled_regex = re.compile(regex)
-    table = []
+    tails = []
+    prefix = f"#define {name_prefix}"
     for line in proc.stdout.decode().splitlines():
-        match = compiled_regex.match(line)
-        if match:
-            name, number = match.groups()
-            number = int(number)
-            table.append((name, number))
-    save_table(table_name, table)
+        if line.startswith(prefix):
+            tails.append(line[len(prefix):].split()[0])
+
+    # Expand macros
+    proc = subprocess.run(
+        [CC, "-E", "-P", "-"],
+        input=(
+            f"#include <{file_name}>\n"
+            + "".join(f"let {name_tail!r} = {name_prefix}{name_tail}\n" for name_tail in tails)
+        ).encode(),
+        check=True,
+        capture_output=True
+    )
+    table = {}
+    for line in proc.stdout.decode().splitlines():
+        if line.startswith("let "):
+            _, name, _, number = line.split(None, 3)
+            table[eval(name)] = int(number)
+    return table
+
+
+def save_table_from_defines(table_name: str, file_name: str, name_prefix: str):
+    save_table(table_name, extract_table_from_defines(file_name, name_prefix))
 
 
 def save_syscall_table():
-    save_table_from_defines("syscall_table", "sys/syscall.h", r"^#define __NR_(.*) (\d+)$")
+    save_table_from_defines("syscall_table", "sys/syscall.h", "__NR_")
 
 def save_errno_table():
-    save_table_from_defines("errno_table", "errno.h", r"^#define E(.*) (\d+)$")
+    save_table_from_defines("errno_table", "errno.h", "E")
 
 
 save_syscall_table()
