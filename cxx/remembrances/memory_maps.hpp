@@ -37,10 +37,18 @@ struct MemoryMap {
         // this, but it hasn't ever been merged
         uintptr_t cur_base = base;
         while (cur_base < end) {
-            cur_base += libc::pread64(orig_mem_fd, reinterpret_cast<char *>(cur_base),
-                                      end - cur_base, cur_base)
-                            .CONTEXT("Failed to read memory from original process")
-                            .TRY();
+            auto result = libc::pread64(orig_mem_fd, reinterpret_cast<char *>(cur_base),
+                                        end - cur_base, cur_base)
+                              .CONTEXT("Failed to read memory from original process");
+            if (result.is_errno(EIO)) {
+                // If we're reading off the end of a memory mapped file, we might receive EIO. This
+                // condition indicates that the rest of the section is inaccessible and will trigger
+                // SIGBUS upon attempt to read it.
+                // XXX: There's ways to simulate this behavior, e.g. by maping a zero-sized file
+                // over the rest of the section, but swalling this should work for now.
+                break;
+            }
+            cur_base += result.TRY();
         }
 
         if (!(prot & PROT_WRITE)) {
