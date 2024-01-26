@@ -22,7 +22,7 @@ struct State {
     thp_options::State thp_options;
     tid_address::State tid_address;
     umask::State umask;
-} state;
+} state __attribute__((externally_visible));
 
 Result<void> run() {
     alternative_stack::save(state.alternative_stack)
@@ -46,7 +46,7 @@ Result<void> run() {
 
 FINALIZE_CONTEXTS
 
-extern "C" __attribute__((section(".entry"))) __attribute__((naked, flatten)) void _start() {
+extern "C" __attribute__((section(".entry"), naked, flatten, externally_visible)) void _start() {
     pid_t pid = libc::getpid().unwrap();
     state.result = run();
     (void)libc::kill(pid, SIGSTOP);
