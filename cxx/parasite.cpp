@@ -26,7 +26,7 @@ struct State {
     umask::State umask;
 } state;
 
-static Result<void> run() {
+Result<void> run() {
     alternative_stack::save(state.alternative_stack)
         .CONTEXT("Failed to save alternative stack")
         .TRY();
@@ -48,7 +48,7 @@ static Result<void> run() {
 
 FINALIZE_CONTEXTS
 
-extern "C" __attribute__((section(".entry"))) __attribute__((naked)) void _start() {
+extern "C" __attribute__((section(".entry"))) __attribute__((naked, flatten)) void _start() {
     pid_t pid = libc::getpid().unwrap();
     state.result = run();
     (void)libc::kill(pid, SIGSTOP);

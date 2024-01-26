@@ -10,7 +10,7 @@ struct State {
     itimerval prof;
 };
 
-static Result<void> save(State &state) {
+Result<void> save(State &state) {
     // This also saves alarm(2)
     libc::getitimer(ITIMER_REAL, &state.real).CONTEXT("Failed to get ITIMER_REAL").TRY();
     libc::getitimer(ITIMER_VIRTUAL, &state.virtual_).CONTEXT("Failed to get ITIMER_VIRTUAL").TRY();
@@ -18,7 +18,7 @@ static Result<void> save(State &state) {
     return {};
 }
 
-static Result<void> load(const State &state) {
+Result<void> load(const State &state) {
     libc::setitimer(ITIMER_REAL, &state.real, nullptr).CONTEXT("Failed to set ITIMER_REAL").TRY();
     libc::setitimer(ITIMER_VIRTUAL, &state.virtual_, nullptr)
         .CONTEXT("Failed to set ITIMER_VIRTUAL")
