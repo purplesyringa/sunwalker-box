@@ -25,7 +25,7 @@ struct State {
     tid_address::State tid_address;
     umask::State umask;
     int controlling_fd;
-} state;
+} state __attribute__((externally_visible));
 
 struct ControlMessage {};
 
@@ -196,7 +196,7 @@ Result<void> loop() {
     return {};
 }
 
-extern "C" __attribute__((naked, flatten)) void _start() {
+extern "C" __attribute__((naked, flatten, externally_visible)) void _start() {
     pid_t pid = libc::getpid().unwrap();
     state.result = run();
     (void)libc::kill(pid, SIGSTOP);
