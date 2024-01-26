@@ -135,6 +135,11 @@ class Limited(BaseVerdict):
 
 
 @dataclasses.dataclass
+class Suspended(BaseVerdict):
+    prefork_id: int
+
+
+@dataclasses.dataclass
 class CompletedRun:
     verdict: BaseVerdict
     metrics: Metrics
@@ -188,6 +193,12 @@ class Box:
     def command_run(self, run: Run, stdio: Optional[Stdio] = None, limits: Optional[Metrics] = None) -> dict[str, ...]:
         return self.cmd("run", run.as_dict() | limits.as_limits_dict() | stdio.as_dict())
 
+    def command_prefork(self, run: Run, limits: Optional[Metrics] = None) -> dict[str, ...]:
+        return self.cmd("prefork", run.as_dict() | limits.as_limits_dict())
+
+    def command_resume(self, prefork_id: int, stdio: Optional[Stdio] = None, limits: Optional[Metrics] = None) -> dict[str, ...]:
+        return self.cmd("resume", dict(prefork_id=prefork_id) | stdio.as_dict())
+
     def mkdir(self, path: str, owner: str = "root", mode: int = 0o755):
         path = self.extpath(path)
         os.makedirs(path, mode, exist_ok=True)
@@ -220,7 +231,8 @@ class Box:
             "CPUTimeLimitExceeded": Limited(Limit.cpu_time),
             "RealTimeLimitExceeded": Limited(Limit.real_time),
             "IdlenessTimeLimitExceeded": Limited(Limit.idleness_time),
-            "MemoryLimitExceeded": Limited(Limit.memory)
+            "MemoryLimitExceeded": Limited(Limit.memory),
+            "Suspended": Suspended(result.get("exit_code")),
         }.get(result.get("limit_verdict"))
 
         metrics = Metrics(**{
@@ -250,6 +262,48 @@ class Box:
             stdio.stderr = stdio.stderr or "/space/stderr.txt"
 
             result = self.command_run(run, stdio, limits)
+            verdict, metrics = self._parse_run_result(result)
+            return CompletedRun(verdict, metrics, stdio, context)
+        except Exception as e:
+            if context is not None:
+                e.add_note(f"Context: {context}")
+            raise
+
+    def prefork(
+        self,
+        run: Run,
+        limits: Metrics = Metrics(),
+        context: Optional[str] = None
+    ) -> CompletedRun:
+        try:
+            result = self.command_prefork(run, limits)
+            verdict, metrics = self._parse_run_result(result)
+            return CompletedRun(verdict, metrics, Stdio(), context)
+        except Exception as e:
+            if context is not None:
+                e.add_note(f"Context: {context}")
+            raise
+
+    def resume(
+        self,
+        suspended: CompletedRun,
+        input: Optional[str] = None,
+        stdio: Stdio = Stdio(),
+        context: Optional[str] = None
+    ) -> CompletedRun:
+        try:
+            assert type(suspended.verdict) is Suspended, "Can not resume completed processes"
+
+            if input is None:
+                stdio.stdin = None
+            else:
+                stdio.stdin = stdio.stdin or "/space/stdin.txt"
+                self.mkfile(stdio.stdin, input.encode())
+
+            stdio.stdout = stdio.stdout or "/space/stdout.txt"
+            stdio.stderr = stdio.stderr or "/space/stderr.txt"
+
+            result = self.command_resume(suspended.verdict.prefork_id, stdio)
             verdict, metrics = self._parse_run_result(result)
             return CompletedRun(verdict, metrics, stdio, context)
         except Exception as e:
