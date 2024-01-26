@@ -41,7 +41,7 @@ struct State {
 };
 
 // Returns "/proc/self/fd/{fd}", null-terminated
-static const char *format_fd_path(unsigned fd) {
+const char *format_fd_path(unsigned fd) {
     // Pad prefix to 16 bytes at the start -- this improves memcpy
     static constexpr std::array prefix{'\0', '\0', '/', 'p', 'r', 'o', 'c', '/',
                                        's',  'e',  'l', 'f', '/', 'f', 'd', '/'};
@@ -56,7 +56,7 @@ static const char *format_fd_path(unsigned fd) {
     return path - 14; // length of /proc/self/fd/
 }
 
-static Result<void> load(const State &state) {
+Result<void> load(const State &state) {
     for (size_t i = 0; i < state.count; i++) {
         const SavedFd &fd = state.fds[i];
 
