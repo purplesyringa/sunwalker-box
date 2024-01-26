@@ -1,11 +1,15 @@
 """
-description: Is running in a small pidns
+description: Is running in a small pidns and pid is preserved during prefork
+slow: true
 script: |
-    stdout="Hello!\n[1, 2, 3]\n"
-
     for _ in range(10):
-        expect(run(), stdout=stdout)
+        expect(run(), stdout="3\n3\n[1, 2, 3]\n")
         run_reset()
+
+    pid = prefork()
+    expect(pid, verdict=Suspended)
+    for i in range(10):
+        expect(resume(pid), stdout="3\n3\n[1, 2, 3, 4]\n")
 """
 
 import os
@@ -15,5 +19,6 @@ def list_pids():
     return [int(pid) for pid in os.listdir("/proc") if pid.isdigit()]
 
 
-print("Hello!")
+print(os.readlink("/proc/self"), flush=True)
+print(os.readlink("/proc/self"))
 print(list_pids())

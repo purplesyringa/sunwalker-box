@@ -153,6 +153,11 @@ class Limited(BaseVerdict):
 
 
 @dataclasses.dataclass
+class Suspended(BaseVerdict):
+    prefork_id: int
+
+
+@dataclasses.dataclass
 class CompletedRun:
     verdict: BaseVerdict
     metrics: Metrics
@@ -201,6 +206,12 @@ class Box:
     def command_run(self, run: Run, stdio: Stdio, limits: Metrics) -> dict[str, ...]:
         return self.request("run", run.as_dict() | dict(stdio=stdio.as_dict(), limits=limits.as_dict()))
 
+    def command_prefork(self, run: Run, limits: Optional[Metrics] = None) -> dict[str, ...]:
+        return self.request("prefork", run.as_dict() | dict(limits=limits.as_dict()))
+
+    def command_resume(self, prefork_id: int, stdio: Optional[Stdio] = None, limits: Optional[Metrics] = None) -> dict[str, ...]:
+        return self.request("resume", dict(prefork_id=prefork_id, stdio=stdio.as_dict()))
+
     def open(self, path: str, *args, **kwargs):
         return open(self.extpath(path), *args, **kwargs)
 
@@ -233,6 +244,8 @@ class Box:
             return Signaled(verdict.get("signal_number"))
         if kind == "LimitExceeded":
             return Limited(Limit[verdict.get("limit")])
+        if kind == "Suspended":
+            return Suspended(verdict.get("prefork_id"))
         raise RuntimeError("Unexpected verdict from the box")
 
     def _parse_run_result(self, result: dict[str, ...]) -> (BaseVerdict, Metrics):
@@ -243,6 +256,17 @@ class Box:
 
     def run(self, run: Run, stdio: Stdio, limits: Metrics) -> CompletedRun:
         result = self.command_run(run, stdio, limits)
+        verdict, metrics = self._parse_run_result(result)
+        return CompletedRun(verdict, metrics, stdio)
+
+    def prefork(self, run: Run, limits: Metrics) -> CompletedRun:
+        result = self.command_prefork(run, limits)
+        verdict, metrics = self._parse_run_result(result)
+        return CompletedRun(verdict, metrics, Stdio())
+
+    def resume(self, suspended: CompletedRun, stdio: Stdio) -> CompletedRun:
+        assert type(suspended.verdict) is Suspended, "Can not resume completed processes"
+        result = self.command_resume(suspended.verdict.prefork_id, stdio)
         verdict, metrics = self._parse_run_result(result)
         return CompletedRun(verdict, metrics, stdio)
 
