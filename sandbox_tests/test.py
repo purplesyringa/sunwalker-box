@@ -330,6 +330,39 @@ class SingleTest:
 
                 return box.run(run, input, stdio, limits, context)
 
+            def prefork(
+                run: Optional[sunwalker_box.Run] = None,
+                limits: Optional[sunwalker_box.Metrics] = None,
+                context: Optional[str] = None
+            ) -> sunwalker_box.CompletedRun:
+                if limits is not None:
+                    if type(limits.cpu_time) is str:
+                        limits.cpu_time = parse_size(limits.cpu_time)
+                    if type(limits.idleness_time) is str:
+                        limits.idleness_time = parse_size(limits.idleness_time)
+                    if type(limits.real_time) is str:
+                        limits.real_time = parse_size(limits.real_time)
+                    if type(limits.memory) is str:
+                        limits.memory = int(parse_size(limits.memory))
+                else:
+                    limits = sunwalker_box.Metrics()
+
+                if run is None:
+                    run = sunwalker_box.Run(argv=self.test.argv)
+
+                return box.prefork(run, limits, context)
+
+            def resume(
+                suspended: sunwalker_box.CompletedRun,
+                input: Optional[str] = None,
+                stdio: Optional[sunwalker_box.Stdio] = None,
+                context: Optional[str] = None
+            ) -> sunwalker_box.CompletedRun:
+                if stdio is None:
+                    stdio = sunwalker_box.Stdio()
+
+                return box.resume(suspended, input, stdio, context)
+
             def bind(source, destination, readonly=False, asset=True):
                 if asset:
                     source = os.path.abspath(os.path.join(self.test.assets_dir, source))
