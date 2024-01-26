@@ -1,7 +1,7 @@
 ENTRY(_start)
 
 SECTIONS {
-    .text 0xdeadbeef000 : {
+    .text 0xdeadbeef0000 : {
         start_of_text = .;
         *(.text .text.*)
         start_of_data = .;
