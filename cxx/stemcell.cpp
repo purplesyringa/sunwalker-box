@@ -37,7 +37,7 @@ struct ControlMessageFds {
 extern char start_of_text;
 extern char end_of_bss;
 
-static Result<void> run() {
+Result<void> run() {
     // Unmap everything the kernel has mapped for us, including stack, because we aren't using it
     // (provided the stemcell was compiled correctly)
     libc::munmap(0, reinterpret_cast<size_t>(&start_of_text))
@@ -89,7 +89,7 @@ static Result<void> run() {
     return {};
 }
 
-static Result<void> init_child(const ControlMessageFds &fds) {
+Result<void> init_child(const ControlMessageFds &fds) {
     // Remap stdio
     for (int i = 0; i < 3; i++) {
         int fd = fds.stdio[i];
@@ -140,7 +140,7 @@ static Result<void> init_child(const ControlMessageFds &fds) {
     // - CPU state
 }
 
-static Result<void> loop() {
+Result<void> loop() {
     static ControlMessage control_message;
 
     static iovec iov;
@@ -196,7 +196,7 @@ static Result<void> loop() {
     return {};
 }
 
-extern "C" __attribute__((naked)) void _start() {
+extern "C" __attribute__((naked, flatten)) void _start() {
     pid_t pid = libc::getpid().unwrap();
     state.result = run();
     (void)libc::kill(pid, SIGSTOP);
