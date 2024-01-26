@@ -10,7 +10,7 @@ struct State {
     long cpuid_status;
 };
 
-static Result<void> save(State &state) {
+Result<void> save(State &state) {
     libc::arch_prctl(ARCH_GET_FS, reinterpret_cast<unsigned long>(&state.fs_base))
         .CONTEXT("Failed to get fsbase")
         .TRY();
@@ -21,7 +21,7 @@ static Result<void> save(State &state) {
     return {};
 }
 
-static Result<void> load(const State &state) {
+Result<void> load(const State &state) {
     libc::arch_prctl(ARCH_SET_FS, state.fs_base).CONTEXT("Failed to set fsbase").TRY();
     libc::arch_prctl(ARCH_SET_GS, state.gs_base).CONTEXT("Failed to set gsbase").TRY();
     // Oh, some hardware had seen the dinos and don't support faulting cpuid

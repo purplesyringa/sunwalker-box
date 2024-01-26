@@ -9,8 +9,7 @@ namespace memory_maps {
 // Use the default value of sysctl vm.max_map_count
 static constexpr size_t MAX_MEMORY_MAPS = 65530;
 
-__attribute__((always_inline)) inline Result<void> mmap_thp(uintptr_t base, size_t length, int prot,
-                                                            int flags, int fd, off_t offset) {
+Result<void> mmap_thp(uintptr_t base, size_t length, int prot, int flags, int fd, off_t offset) {
     // We want THP, because we're going to clone lots of page tables, and they better be small. The
     // "correct" solution is enabling THP in "always" mode as opposed to "madvise" system-wide, but
     // let's at least try to handle the worse case gracefully
@@ -28,7 +27,7 @@ struct MemoryMap {
     int fd;
     off_t offset;
 
-    __attribute__((always_inline)) inline Result<void> do_map(int orig_mem_fd) const {
+    Result<void> do_map(int orig_mem_fd) const {
         mmap_thp(base, end - base, (prot & 0x7fffffff) | PROT_WRITE, flags, fd, offset)
             .CONTEXT("Failed to mmap section")
             .TRY();
@@ -60,7 +59,7 @@ struct State {
     std::array<MemoryMap, MAX_MEMORY_MAPS> maps;
 };
 
-static Result<void> load_before_fork(const State &state) {
+Result<void> load_before_fork(const State &state) {
     for (size_t i = 0; i < state.count; i++) {
         const MemoryMap &map = state.maps[i];
         if (map.prot == -1) {
@@ -82,7 +81,7 @@ static Result<void> load_before_fork(const State &state) {
     return {};
 }
 
-static Result<void> load_after_fork(const State &state) {
+Result<void> load_after_fork(const State &state) {
     for (size_t i = 0; i < state.count; i++) {
         const MemoryMap &map = state.maps[i];
         if ((map.flags & MAP_TYPE) == MAP_SHARED && (map.prot & 0x80000000)) {

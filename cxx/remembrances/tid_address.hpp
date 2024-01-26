@@ -5,7 +5,7 @@ namespace tid_address {
 
 using State = size_t;
 
-static Result<void> save(State &state) {
+Result<void> save(State &state) {
     libc::prctl(PR_GET_TID_ADDRESS, reinterpret_cast<unsigned long>(&state), 0, 0, 0).TRY();
     return {};
 }
