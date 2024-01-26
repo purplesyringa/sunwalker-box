@@ -2,7 +2,6 @@ use crate::linux::string_table;
 use anyhow::{Context, Result};
 use nix::{errno::Errno, libc, libc::c_void, sys::ptrace, unistd::Pid};
 use std::ffi::CString;
-use std::fmt::Write;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
@@ -89,135 +88,42 @@ impl std::ops::DerefMut for Registers {
     }
 }
 
-pub trait SyscallArgs {
-    const N: usize;
-    fn to_usize_slice(&self) -> [usize; Self::N];
-    fn debug(&self) -> String
-    where
-        [(); Self::N]:,
-    {
-        let mut s = String::new();
-        let slice = self.to_usize_slice();
-        write!(s, "{}(", string_table::syscall_no_to_name(slice[0] as i32)).unwrap();
-        for (i, value) in slice.iter().skip(1).enumerate() {
-            if i > 0 {
-                write!(s, ", ").unwrap();
-            }
-            write!(s, "{}", *value as isize).unwrap();
+#[derive(Clone, Copy)]
+pub struct SyscallArgs {
+    pub syscall_no: i32,
+    pub args: [usize; 6],
+}
+
+impl std::fmt::Display for SyscallArgs {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{}({}",
+            string_table::syscall_no_to_name(self.syscall_no),
+            self.args[0] as isize
+        )?;
+        for i in 1..6 {
+            write!(f, ", {}", self.args[i] as isize)?;
         }
-        write!(s, ")").unwrap();
-        s
+        write!(f, ")")
     }
 }
 
-pub trait AsUSize: Copy {
-    fn as_usize(self) -> usize;
-}
-
-macro_rules! impl_for {
-    () => {};
-    ($head:tt $($tail:tt)*) => {
-        impl AsUSize for $head {
-            fn as_usize(self) -> usize {
-                self as usize
+#[macro_export]
+macro_rules! syscall {
+    ($name:ident($($args:expr),*)) => {
+        {
+            // Use (|| $args)() instead of $args so that -1 is inferred as i32 as opposed to usize
+            #[allow(clippy::redundant_closure_call)]
+            let args = [$((|| $args)() as usize),*];
+            use libc::*;
+            let mut args6 = [0; 6];
+            args6[..args.len()].copy_from_slice(&args);
+            $crate::linux::tracing::SyscallArgs {
+                syscall_no: concat_idents!(SYS_, $name) as i32,
+                args: args6,
             }
         }
-        impl_for!($($tail)*);
-    };
-}
-
-impl_for!(u8 u16 u32 u64 usize i8 i16 i32 i64 isize char bool);
-
-impl<T> AsUSize for *const T {
-    fn as_usize(self) -> usize {
-        self as usize
-    }
-}
-
-impl<T> AsUSize for *mut T {
-    fn as_usize(self) -> usize {
-        self as usize
-    }
-}
-
-impl<T1: AsUSize> SyscallArgs for (T1,) {
-    const N: usize = 1;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        [self.0.as_usize()]
-    }
-}
-impl<T1: AsUSize, T2: AsUSize> SyscallArgs for (T1, T2) {
-    const N: usize = 2;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        [self.0.as_usize(), self.1.as_usize()]
-    }
-}
-impl<T1: AsUSize, T2: AsUSize, T3: AsUSize> SyscallArgs for (T1, T2, T3) {
-    const N: usize = 3;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        [self.0.as_usize(), self.1.as_usize(), self.2.as_usize()]
-    }
-}
-impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize> SyscallArgs for (T1, T2, T3, T4) {
-    const N: usize = 4;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        [
-            self.0.as_usize(),
-            self.1.as_usize(),
-            self.2.as_usize(),
-            self.3.as_usize(),
-        ]
-    }
-}
-impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize> SyscallArgs
-    for (T1, T2, T3, T4, T5)
-{
-    const N: usize = 5;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        [
-            self.0.as_usize(),
-            self.1.as_usize(),
-            self.2.as_usize(),
-            self.3.as_usize(),
-            self.4.as_usize(),
-        ]
-    }
-}
-impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize, T6: AsUSize> SyscallArgs
-    for (T1, T2, T3, T4, T5, T6)
-{
-    const N: usize = 6;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        [
-            self.0.as_usize(),
-            self.1.as_usize(),
-            self.2.as_usize(),
-            self.3.as_usize(),
-            self.4.as_usize(),
-            self.5.as_usize(),
-        ]
-    }
-}
-impl<T1: AsUSize, T2: AsUSize, T3: AsUSize, T4: AsUSize, T5: AsUSize, T6: AsUSize, T7: AsUSize>
-    SyscallArgs for (T1, T2, T3, T4, T5, T6, T7)
-{
-    const N: usize = 7;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        [
-            self.0.as_usize(),
-            self.1.as_usize(),
-            self.2.as_usize(),
-            self.3.as_usize(),
-            self.4.as_usize(),
-            self.5.as_usize(),
-            self.6.as_usize(),
-        ]
-    }
-}
-impl SyscallArgs for [usize; 7] {
-    const N: usize = 7;
-    fn to_usize_slice(&self) -> [usize; Self::N] {
-        *self
     }
 }
 
@@ -545,15 +451,11 @@ impl TracedProcess {
         Ok(())
     }
 
-    pub fn set_syscall<Args: SyscallArgs>(&mut self, args: Args) -> io::Result<()>
-    where
-        [(); Args::N]:,
-    {
-        let slice = args.to_usize_slice();
-        for (i, value) in slice.iter().skip(1).enumerate() {
+    pub fn set_syscall(&mut self, args: SyscallArgs) -> io::Result<()> {
+        for (i, value) in args.args.iter().enumerate() {
             self.set_syscall_arg(i, *value)?;
         }
-        self.set_syscall_no(slice[0] as i32)
+        self.set_syscall_no(args.syscall_no)
     }
 
     #[cfg(target_arch = "x86_64")]

@@ -1,6 +1,6 @@
 use crate::{
     linux::{cgroups, ipc, rootfs, string_table, system, timens, tracing, userns},
-    log,
+    log, syscall,
 };
 use anyhow::{bail, ensure, Context, Result};
 use crossmist::Object;
@@ -91,40 +91,21 @@ struct SingleRun<'a> {
 
 enum EmulatedSyscall {
     Result(usize),
-    Redirect([usize; 7], ProcessState),
+    Redirect(tracing::SyscallArgs, ProcessState),
 }
 
 impl EmulatedSyscall {
-    fn result(result: impl tracing::AsUSize) -> Self {
-        Self::Result(result.as_usize())
-    }
-
-    fn result_or_errno(result: impl tracing::AsUSize) -> Self {
-        let mut result = result.as_usize();
+    fn result_or_errno(mut result: usize) -> Self {
         if result == usize::MAX {
             result = -errno::errno() as usize;
         }
-        Self::result(result)
+        Self::Result(result)
     }
 
-    fn redirect<Args: tracing::SyscallArgs>(args: Args, state: ProcessState) -> Self
-    where
-        [(); Args::N]:,
-    {
-        let mut ext_args = [0; 7];
-        ext_args[..Args::N].copy_from_slice(&args.to_usize_slice());
-        Self::Redirect(ext_args, state)
-    }
-
-    fn redirect_with_errno<Args: tracing::SyscallArgs>(
-        result: io::Result<(Args, ProcessState)>,
-    ) -> Self
-    where
-        [(); Args::N]:,
-    {
+    fn redirect_with_errno(result: io::Result<(tracing::SyscallArgs, ProcessState)>) -> Self {
         match result {
-            Ok((args, state)) => Self::redirect(args, state),
-            Err(err) => Self::result(-err.raw_os_error().unwrap_or(libc::EINVAL)),
+            Ok((args, state)) => Self::Redirect(args, state),
+            Err(err) => Self::Result(-err.raw_os_error().unwrap_or(libc::EINVAL) as usize),
         }
     }
 }
@@ -502,8 +483,6 @@ impl SingleRun<'_> {
     }
 
     fn on_seccomp(&self, process: &mut ProcessInfo) -> Result<()> {
-        use tracing::SyscallArgs;
-
         let pid = process.traced_process.get_pid();
 
         let syscall_info = process
@@ -512,24 +491,18 @@ impl SingleRun<'_> {
             .context("Failed to get syscall info")?;
         let syscall_info = unsafe { syscall_info.u.seccomp };
 
-        let syscall_text = (
-            syscall_info.nr,
-            syscall_info.args[0],
-            syscall_info.args[1],
-            syscall_info.args[2],
-            syscall_info.args[3],
-            syscall_info.args[4],
-            syscall_info.args[5],
-        )
-            .debug();
+        let syscall_args = tracing::SyscallArgs {
+            syscall_no: syscall_info.nr as i32,
+            args: syscall_info.args.map(|arg| arg as usize),
+        };
 
         match self.emulate_syscall(process, syscall_info)? {
             EmulatedSyscall::Result(result) => {
                 if result as isize >= 0 {
-                    log!("Emulating <pid {pid}> {syscall_text} = {result}");
+                    log!("Emulating <pid {pid}> {syscall_args} = {result}");
                 } else {
                     log!(
-                        "Emulating <pid {pid}> {syscall_text} = -{}",
+                        "Emulating <pid {pid}> {syscall_args} = -{}",
                         string_table::errno_to_name(-(result as i32))
                     );
                 }
@@ -538,10 +511,7 @@ impl SingleRun<'_> {
                 process.state = ProcessState::Alive;
             }
             EmulatedSyscall::Redirect(args, state) => {
-                log!(
-                    "Emulating <pid {pid}> {syscall_text} -> {} (redirect)",
-                    args.debug()
-                );
+                log!("Emulating <pid {pid}> {syscall_args} -> {args} (redirect)");
                 process.traced_process.set_syscall(args)?;
                 process.state = state;
             }
@@ -592,13 +562,13 @@ impl SingleRun<'_> {
                         syscall_info.args[0] as i32,
                         syscall_info.args[1] as i32,
                         syscall_info.args[2] as i32,
-                    )
+                    ) as usize
                 }))
             }
             libc::SYS_msgget => {
                 set_next_id("msg", &self.msg_next_id)?;
                 Ok(EmulatedSyscall::result_or_errno(unsafe {
-                    libc::msgget(syscall_info.args[0] as i32, syscall_info.args[1] as i32)
+                    libc::msgget(syscall_info.args[0] as i32, syscall_info.args[1] as i32) as usize
                 }))
             }
             libc::SYS_shmget => {
@@ -608,7 +578,7 @@ impl SingleRun<'_> {
                         syscall_info.args[0] as i32,
                         syscall_info.args[1] as usize,
                         syscall_info.args[2] as i32,
-                    )
+                    ) as usize
                 }))
             }
             libc::SYS_memfd_create => {
@@ -717,13 +687,7 @@ impl SingleRun<'_> {
                         path.pop().unwrap();
 
                         (
-                            (
-                                libc::SYS_openat,
-                                libc::AT_FDCWD,
-                                file_name_addr,
-                                open_flags,
-                                0,
-                            ),
+                            syscall!(openat(AT_FDCWD, file_name_addr, open_flags, 0)),
                             ProcessState::AfterOpenMemfd(path),
                         )
                     },
@@ -778,9 +742,9 @@ impl SingleRun<'_> {
                     })
                     .is_ok()
                 {
-                    Ok(EmulatedSyscall::result(0))
+                    Ok(EmulatedSyscall::Result(0))
                 } else {
-                    Ok(EmulatedSyscall::result(-libc::EFAULT))
+                    Ok(EmulatedSyscall::Result(-libc::EFAULT as usize))
                 }
             }
             _ => {
@@ -794,7 +758,7 @@ impl SingleRun<'_> {
                      result, you're a basically asking for -ENOSYS. In the former case, well -- \
                      you need to report that."
                 );
-                Ok(EmulatedSyscall::result(-libc::ENOSYS))
+                Ok(EmulatedSyscall::Result(-libc::ENOSYS as usize))
             }
         }
     }
