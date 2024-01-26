@@ -62,12 +62,6 @@ struct State {
 Result<void> load_before_fork(const State &state) {
     for (size_t i = 0; i < state.count; i++) {
         const MemoryMap &map = state.maps[i];
-        if (map.prot == -1) {
-            // Start of [vvar]
-            libc::arch_prctl(ARCH_MAP_VDSO_64, map.base).CONTEXT("Failed to mmap vdso").TRY();
-            continue;
-        }
-
         if ((map.flags & MAP_TYPE) == MAP_PRIVATE) {
             map.do_map(state.orig_mem_fd).TRY();
         } else if (!(map.prot & 0x80000000)) {

@@ -1016,8 +1016,11 @@ impl<'a> Suspender<'a> {
             if map.desc == "[vsyscall]" {
                 continue;
             }
-            // This segment is mapped as a part of ARCH_MAP_VDSO_64
-            if map.desc == "[vdso]" {
+            // Although [vvar] and [vdso] are typically mapped, they are pretty much unusable, which
+            // is why we disabled them before (or, rather, made them inaccessible to the dynamic
+            // linker). Mapping VDSO is hard on platforms other than x86, and if no one uses it, we
+            // might get away with not copying it
+            if map.desc == "[vvar]" || map.desc == "[vdso]" {
                 continue;
             }
 
@@ -1029,16 +1032,6 @@ impl<'a> Suspender<'a> {
 
             alloced.base = map.base;
             alloced.end = map.end;
-
-            // [vvar] and [vdso] are handled manually
-            // FIXME: one could theoretically unmap a part of [vvar]/[vdso], which we don't
-            // replicate correctly
-            if map.desc == "[vvar]" {
-                alloced.prot = -1;
-                alloced.fd = -1;
-                continue;
-            }
-
             alloced.prot = map.prot;
             alloced.flags = libc::MAP_FIXED_NOREPLACE;
             alloced.offset = map.offset;
