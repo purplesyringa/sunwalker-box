@@ -1439,7 +1439,8 @@ fn prefork_master(
         let mut stemcell_elf = Vec::from(STEMCELL);
         for &offset in STEMCELL_RELOCATIONS {
             let chunk = stemcell_elf[offset..].first_chunk_mut().unwrap();
-            *chunk = (usize::from_ne_bytes(*chunk) - 0xdeadbeef000 + inject_location).to_ne_bytes();
+            *chunk =
+                (usize::from_ne_bytes(*chunk) - 0xdeadbeef0000 + inject_location).to_ne_bytes();
         }
 
         let stemcell = system::make_memfd("stemcell", &stemcell_elf)?;
