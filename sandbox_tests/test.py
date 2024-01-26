@@ -220,6 +220,12 @@ class Invoker:
             def run(run=None, input=None, stdio=None, limits=None, context=None):
                 return box.run(run or sunwalker_box.Run(argv=self.test.argv), input, stdio, limits, context)
 
+            def prefork(run=None, limits=None, context=None):
+                return box.prefork(run or sunwalker_box.Run(argv=self.test.argv), limits, context)
+
+            def resume(suspended=None, input=None, stdio=None, context=None):
+                return box.resume(suspended, input, stdio, context)
+
             def bind(source, mountpoint, readonly=False):
                 # This is a hack to use assets unless absolute path is explicitly used, because one should not rely on current workdir here
                 if not os.path.isabs(source):

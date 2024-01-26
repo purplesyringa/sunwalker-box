@@ -159,6 +159,21 @@ class CompletedTestRun(sunwalker_box.CompletedRun):
 
 class Box(sunwalker_box.Box):
 
+    def _prepare_limits(self, limits: Optional[sunwalker_box.Metrics] = None) -> sunwalker_box.Metrics:
+        return limits or sunwalker_box.Metrics()
+
+    def _prepare_stdio(self, input: Optional[str] = None, stdio: Optional[sunwalker_box.Stdio] = None):
+        stdio = stdio or sunwalker_box.Stdio()
+        stdio.stdout = stdio.stdout or "/space/stdout.txt"
+        stdio.stderr = stdio.stderr or "/space/stderr.txt"
+
+        if input is None:
+            stdio.stdin = None
+        else:
+            stdio.stdin = stdio.stdin or "/space/stdin.txt"
+            self.mkfile(stdio.stdin, input.encode())
+        return stdio
+
     def run(
         self,
         run: sunwalker_box.Run,
@@ -168,21 +183,48 @@ class Box(sunwalker_box.Box):
         context: Optional[str] = None
     ) -> CompletedTestRun:
         try:
-            limits = limits or sunwalker_box.Metrics()
-            stdio = stdio or sunwalker_box.Stdio()
-            stdio.stdout = stdio.stdout or "/space/stdout.txt"
-            stdio.stderr = stdio.stderr or "/space/stderr.txt"
-
-            if input is None:
-                stdio.stdin = None
-            else:
-                stdio.stdin = stdio.stdin or "/space/stdin.txt"
-                self.mkfile(stdio.stdin, input.encode())
+            limits = self._prepare_limits(limits)
+            stdio = self._prepare_stdio(input, stdio)
 
             result = super().run(run, stdio, limits)
 
             return CompletedTestRun(result, context)
 
+        except Exception as e:
+            if context is not None:
+                e.add_note(f"Context: {context}")
+            raise
+
+    def prefork(
+        self,
+        run: sunwalker_box.Run,
+        limits: Optional[sunwalker_box.Metrics] = None,
+        context: Optional[str] = None
+    ) -> CompletedTestRun:
+        try:
+            limits = self._prepare_limits(limits)
+
+            result = super().prefork(run, limits)
+
+            return CompletedTestRun(result, context)
+        except Exception as e:
+            if context is not None:
+                e.add_note(f"Context: {context}")
+            raise
+
+    def resume(
+        self,
+        suspended: CompletedTestRun,
+        input: Optional[str] = None,
+        stdio: Optional[sunwalker_box.Stdio] = None,
+        context: Optional[str] = None
+    ) -> CompletedTestRun:
+        try:
+            stdio = self._prepare_stdio(input, stdio)
+
+            result = super().resume(suspended, stdio)
+
+            return CompletedTestRun(result, context)
         except Exception as e:
             if context is not None:
                 e.add_note(f"Context: {context}")
