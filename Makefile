@@ -71,7 +71,7 @@ target/parasite.result_context_map.json: target/parasite.result_context_map gene
 	python3 generate/context_map.py <$< >$@
 target/parasite.state: target/parasite
 	readelf -s $< | awk '/OBJECT.*state/{ print "0x" $$2 }' >$@
-target/parasite: cxx/parasite.cpp $(shell find cxx -name '*.hpp') target/libc.hpp
+target/parasite: cxx/parasite.cpp cxx/parasite.ld $(shell find cxx -name '*.hpp') target/libc.hpp
 	$(CXX) $< -o $@ -T cxx/parasite.ld -static-pie $(CXX_OPTIONS)
 
 target/stemcell.result_context_map: target/stemcell
@@ -81,13 +81,13 @@ target/stemcell.result_context_map.json: target/stemcell.result_context_map gene
 target/stemcell.relocations: target/stemcell.stripped generate/stemcell_relocations.py
 	python3 generate/stemcell_relocations.py $< >$@
 target/stemcell.state: target/stemcell
-	readelf -s $< | gawk '/OBJECT.*state/{ print strtonum("0x" $$2) - 0xdeadbeef000 }' >$@
+	readelf -s $< | gawk '/OBJECT.*state/{ print strtonum("0x" $$2) - 0xdeadbeef0000 }' >$@
 target/stemcell.size: target/stemcell
-	readelf -s $< | gawk '/NOTYPE.*end_of_bss/{ print strtonum("0x" $$2) - 0xdeadbeef000 }' >$@
+	readelf -s $< | gawk '/NOTYPE.*end_of_bss/{ print strtonum("0x" $$2) - 0xdeadbeef0000 }' >$@
 target/stemcell.stripped: target/stemcell
 	strip -s -R .result_context_map $< -o $@
-target/stemcell: cxx/stemcell.cpp $(shell find cxx -name '*.hpp') target/libc.hpp
-	$(CXX) $< -o $@ -T cxx/stemcell.ld -static $(CXX_OPTIONS) -Wl,-Ttext=0xdeadbeef000
+target/stemcell: cxx/stemcell.cpp cxx/stemcell.ld $(shell find cxx -name '*.hpp') target/libc.hpp
+	$(CXX) $< -o $@ -T cxx/stemcell.ld -static $(CXX_OPTIONS) -Wl,-Ttext=0xdeadbeef0000
 
 # Keep the Linux kernel versions in sync with the minimal supported versions listed in README. These
 # two assets are not expected to be built by the user, but are merely to make updates easier for the

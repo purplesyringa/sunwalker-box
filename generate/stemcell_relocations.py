@@ -9,7 +9,7 @@ indices = []
 
 for i in range(0, len(elf) - 7):
     word, = struct.unpack("Q", elf[i:i + 8])
-    if 0 <= word - 0xdeadbeef000 <= 0x1000000:
+    if 0 <= word - 0xdeadbeef0000 <= 0x1000000:
         indices.append(i)
 
 print(indices)
