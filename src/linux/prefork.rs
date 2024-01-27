@@ -716,7 +716,7 @@ impl<'a> Suspender<'a> {
             .orig
             .get_rseq_configuration()
             .context("Failed to get rseq configuration")?;
-        if rseq.rseq_abi_size == 0 {
+        if rseq.rseq_abi_pointer == 0 {
             return Ok(None);
         }
         let rseq_cs_ptr = rseq.rseq_abi_pointer as usize + std::mem::offset_of!(rseq_abi, rseq_cs);
@@ -896,7 +896,7 @@ impl<'a> Suspender<'a> {
                 .map_err(|_| anyhow!("Invalid file name in /proc/{pid}/fd"))?
                 .parse()
                 .with_context(|| format!("Invalid file name in /proc/{pid}/fd"))?;
-            if fd < 3 {
+            if fd < 3 || self.options.ignore_fd == Some(fd) {
                 continue;
             }
 
