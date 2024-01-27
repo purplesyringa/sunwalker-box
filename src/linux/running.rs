@@ -808,8 +808,7 @@ impl SingleRun<'_> {
             "This shouldn't happen: signal number mismatch between waitpid and PTRACE_GETSIGINFO"
         );
 
-        const SI_KERNEL: i32 = 128;
-        if info.si_code == SI_KERNEL {
+        if info.si_code == libc::SI_KERNEL {
             let fault_address = unsafe { info.si_addr() as usize };
             if fault_address == 0 && self.emulate_insn(process)? {
                 return Ok(());

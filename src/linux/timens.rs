@@ -1,10 +1,8 @@
 use crate::log;
 use anyhow::{Context, Result};
-use nix::{libc, libc::c_int, sched, sys::sysinfo, time::ClockId};
+use nix::{libc, sched, sys::sysinfo, time::ClockId};
 use std::fs::File;
 use std::io::{Seek, Write};
-
-const CLONE_NEWTIME: c_int = 0x80;
 
 pub struct TimeNsController {
     timens_offsets: File,
@@ -36,7 +34,7 @@ impl TimeNsController {
             .as_secs();
 
         // timens_offsets can only be set if no process has entered the timens before
-        sched::unshare(sched::CloneFlags::from_bits_retain(CLONE_NEWTIME))
+        sched::unshare(sched::CloneFlags::from_bits_retain(libc::CLONE_NEWTIME))
             .context("Failed to unshare timens")?;
 
         // CLOCK_MONOTONIC is similar to CLOCK_MONOTONIC_RAW: both are monotonic, i.e. NTP doesn't

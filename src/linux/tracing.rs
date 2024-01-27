@@ -1,12 +1,6 @@
 use crate::linux::string_table;
 use anyhow::{Context, Result};
-use nix::{
-    errno::Errno,
-    libc,
-    libc::{c_uint, c_void},
-    sys::ptrace,
-    unistd::Pid,
-};
+use nix::{errno::Errno, libc, libc::c_void, sys::ptrace, unistd::Pid};
 use std::ffi::CString;
 use std::fmt::Write;
 use std::fs::File;
@@ -25,16 +19,6 @@ pub struct AuxiliaryEntry {
     pub id: usize,
     pub value: usize,
 }
-
-const AT_SYSINFO_EHDR: u64 = 33; // x86-64
-const SECCOMP_SET_MODE_FILTER: c_uint = 1;
-const PTRACE_GET_SYSCALL_INFO: i32 = 0x420e;
-
-#[cfg(target_arch = "aarch64")]
-const NT_PRSTATUS: i32 = 1;
-
-#[cfg(target_arch = "aarch64")]
-const NT_ARM_SYSTEM_CALL: i32 = 0x404;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -369,7 +353,7 @@ impl TracedProcess {
 
     pub fn disable_vdso(&mut self) -> Result<()> {
         for entry in self.get_auxiliary_entries()? {
-            if entry.id == AT_SYSINFO_EHDR as usize {
+            if entry.id == libc::AT_SYSINFO_EHDR as usize {
                 self.write_word(entry.address, libc::AT_IGNORE as usize)
                     .context("Failed to write AT_IGNORE")?;
             }
@@ -414,7 +398,7 @@ impl TracedProcess {
         let mut data = std::mem::MaybeUninit::<ptrace_syscall_info>::uninit();
         if unsafe {
             libc::ptrace(
-                PTRACE_GET_SYSCALL_INFO,
+                libc::PTRACE_GET_SYSCALL_INFO,
                 self.pid.as_raw(),
                 std::mem::size_of_val(&data) as *const c_void,
                 data.as_mut_ptr(),
@@ -441,7 +425,7 @@ impl TracedProcess {
             libc::ptrace(
                 libc::PTRACE_GETREGSET,
                 pid.as_raw(),
-                NT_PRSTATUS as *mut c_void,
+                libc::NT_PRSTATUS as *mut c_void,
                 &mut iovec,
             )
         } == -1
@@ -468,7 +452,7 @@ impl TracedProcess {
             libc::ptrace(
                 libc::PTRACE_SETREGSET,
                 self.pid.as_raw(),
-                NT_PRSTATUS as *mut c_void,
+                libc::NT_PRSTATUS as *mut c_void,
                 &mut iovec,
             )
         } == -1
@@ -523,7 +507,7 @@ impl TracedProcess {
             libc::ptrace(
                 libc::PTRACE_SETREGSET,
                 self.pid.as_raw(),
-                NT_ARM_SYSTEM_CALL as *mut c_void,
+                libc::NT_ARM_SYSTEM_CALL as *mut c_void,
                 &mut iovec,
             )
         } == -1
@@ -605,7 +589,7 @@ pub fn apply_seccomp_filter() -> Result<()> {
     if unsafe {
         libc::syscall(
             libc::SYS_seccomp,
-            SECCOMP_SET_MODE_FILTER,
+            libc::SECCOMP_SET_MODE_FILTER,
             // We don't want to force SSBD upon users if it harms performance and their threat model
             // allows for it
             libc::SECCOMP_FILTER_FLAG_LOG | libc::SECCOMP_FILTER_FLAG_SPEC_ALLOW,
