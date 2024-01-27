@@ -18,6 +18,7 @@ A == 0 ? allow : kill
 
 prctl:
 A = args[0]
+A &= 0xffffffff
 A == 26 ? skip : next  # PR_SET_TSC
 
 allow:
