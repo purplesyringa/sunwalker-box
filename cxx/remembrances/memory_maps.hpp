@@ -29,7 +29,7 @@ struct MemoryMap {
 
     Result<void> do_map(int orig_mem_fd) const {
         mmap_thp(base, end - base, (prot & 0x7fffffff) | PROT_WRITE, flags, fd, offset)
-            .CONTEXT("Failed to mmap section")
+            .CONTEXT("Failed to mmap-THP")
             .TRY();
 
         // We could use vmsplice here. Unfortunately, that isn't going to be zero-copy, so any
@@ -75,7 +75,7 @@ Result<void> load_before_fork(const State &state) {
         } else if (!(map.prot & 0x80000000)) {
             // Shared maps to everything but /dev/zero can be mapped just like this
             mmap_thp(map.base, map.end - map.base, map.prot, map.flags, map.fd, map.offset)
-                .CONTEXT("Failed to mmap section")
+                .CONTEXT("Failed to mmap-THP")
                 .TRY();
         }
     }
