@@ -105,7 +105,7 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // Remap stdio
     for (int i = 0; i < 3; i++) {
         int fd = fds.stdio[i];
-        libc::dup2(fd, i).CONTEXT("Failed to dup2 standard stream").TRY();
+        libc::dup3(fd, i, 0).CONTEXT("Failed to dup2 standard stream").TRY();
         libc::close(fd).CONTEXT("Failed to close standard stream").TRY();
     }
 
@@ -143,6 +143,8 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // inefficient in comparison to this workaround
 #ifdef __x86_64__
     asm volatile("mov $0x5afec0def1e1d, %rsp");
+#elif defined(__aarch64__)
+    asm volatile("mov sp, %0" : : "r"(0x5afec0def1e1d));
 #else
 #error Trying to compile stemcell against unsupported architecture!
 #endif
