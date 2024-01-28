@@ -2,6 +2,12 @@
 
 // Holy echopraxia
 
+#ifdef __aarch64__
+namespace libc {
+Result<long> personality(int persona) { return arm64_personality(persona); }
+} // namespace libc
+#endif
+
 namespace personality {
 
 using State = long;
