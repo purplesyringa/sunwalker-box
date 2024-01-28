@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
 
 pub fn mount_mqueue(path: &str) -> Result<()> {
-    system::mount("mqueue", path, "mqueue", 0, None)
+    system::mount("mqueue", path, "mqueue", system::MsFlags::empty(), None)
         .with_context(|| format!("Failed to mount mqueue on {path}"))?;
     // rwxrwxrwt
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o1777))

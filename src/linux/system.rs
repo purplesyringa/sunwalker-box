@@ -1,93 +1,58 @@
 use nix::{
     errno::Errno,
     libc,
-    libc::{
-        c_int, c_ulong, c_void, SYS_pidfd_open, MS_BIND, MS_NODEV, MS_NOEXEC, MS_NOSUID, MS_RDONLY,
-        MS_REMOUNT,
-    },
+    libc::{c_int, SYS_pidfd_open},
     sys::memfd,
     unistd::Pid,
 };
 
+pub use nix::mount::{MntFlags, MsFlags};
 pub use nix::sys::wait::WaitPidFlag;
 
 use std::ffi::CString;
 use std::fs::File;
-use std::io::{Error, ErrorKind, Result, Write};
-use std::os::{
-    fd::{FromRawFd, OwnedFd, RawFd},
-    unix::ffi::OsStrExt,
-};
+use std::io::{ErrorKind, Result, Write};
+use std::os::fd::{FromRawFd, OwnedFd, RawFd};
 use std::path::Path;
-use std::ptr::null;
-
-pub fn to_cstring(data: &[u8]) -> Result<CString> {
-    CString::new(data)
-        .map_err(|e| Error::new(ErrorKind::InvalidData, format!("CString::new failed: {e}")))
-}
 
 pub fn mount<S: AsRef<Path>, T: AsRef<Path>>(
     source: S,
     target: T,
     fs_type: &str,
-    flags: c_ulong,
+    flags: MsFlags,
     data: Option<&str>,
 ) -> Result<()> {
-    let data_cstr = match data {
-        Some(s) => Some(to_cstring(s.as_bytes())?),
-        None => None,
-    };
-    let res = unsafe {
-        libc::mount(
-            to_cstring(source.as_ref().as_os_str().as_bytes())?.as_ptr(),
-            to_cstring(target.as_ref().as_os_str().as_bytes())?.as_ptr(),
-            to_cstring(fs_type.as_bytes())?.as_ptr(),
-            flags,
-            match &data_cstr {
-                Some(s) => s.as_ptr() as *const c_void,
-                None => null(),
-            },
-        )
-    };
-    if res == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
+    Ok(nix::mount::mount(
+        Some(source.as_ref()),
+        target.as_ref(),
+        Some(fs_type),
+        flags,
+        data,
+    )?)
 }
 
-pub fn change_propagation<P: AsRef<Path>>(path: P, flags: c_ulong) -> Result<()> {
+pub fn change_propagation<P: AsRef<Path>>(path: P, flags: MsFlags) -> Result<()> {
     mount("none", path, "none", flags, None)
 }
 
 pub fn bind_mount_opt<S: AsRef<Path>, T: AsRef<Path>>(
     source: S,
     target: T,
-    flags: c_ulong,
+    flags: MsFlags,
 ) -> Result<()> {
-    mount(source, target, "none", flags | MS_BIND, None)
+    mount(source, target, "none", flags | MsFlags::MS_BIND, None)
 }
 
 pub fn bind_mount<S: AsRef<Path>, T: AsRef<Path>>(source: S, target: T) -> Result<()> {
-    bind_mount_opt(source, target, 0)
+    bind_mount_opt(source, target, MsFlags::empty())
 }
 
-pub fn umount_opt<P: AsRef<Path>>(path: P, flags: c_int) -> Result<()> {
-    let res = unsafe {
-        libc::umount2(
-            to_cstring(path.as_ref().as_os_str().as_bytes())?.as_ptr(),
-            flags,
-        )
-    };
-    if res == 0 {
-        Ok(())
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
+pub fn umount_opt<P: AsRef<Path>>(path: P, flags: MntFlags) -> Result<()> {
+    Ok(nix::mount::umount2(path.as_ref(), flags)?)
 }
 
 pub fn umount<P: AsRef<Path>>(path: P) -> Result<()> {
-    umount_opt(path, 0)
+    Ok(nix::mount::umount(path.as_ref())?)
 }
 
 pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
@@ -96,16 +61,20 @@ pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
     // isn't going to be triggered often in production anyway, so we just use the shotgun approach
     // for now, bruteforcing the flags in the order of most likeliness.
     for flags in [
-        0,
-        MS_NOSUID,
-        MS_NODEV,
-        MS_NOSUID | MS_NODEV,
-        MS_NOEXEC,
-        MS_NOEXEC | MS_NOSUID,
-        MS_NOEXEC | MS_NODEV,
-        MS_NOEXEC | MS_NOSUID | MS_NODEV,
+        MsFlags::empty(),
+        MsFlags::MS_NOSUID,
+        MsFlags::MS_NODEV,
+        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+        MsFlags::MS_NOEXEC,
+        MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID,
+        MsFlags::MS_NOEXEC | MsFlags::MS_NODEV,
+        MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
     ] {
-        match bind_mount_opt("none", path.as_ref(), MS_REMOUNT | MS_RDONLY | flags) {
+        match bind_mount_opt(
+            "none",
+            path.as_ref(),
+            MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY | flags,
+        ) {
             Err(e) if e.kind() == ErrorKind::PermissionDenied => continue,
             result => return result,
         }

@@ -120,8 +120,14 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to create /tmp/sunwalker_box directory")?;
 
     // Mount tmpfs on the working area
-    system::mount("none", "/tmp/sunwalker_box", "tmpfs", 0, None)
-        .context("Failed to mount tmpfs on /tmp/sunwalker_box")?;
+    system::mount(
+        "none",
+        "/tmp/sunwalker_box",
+        "tmpfs",
+        system::MsFlags::empty(),
+        None,
+    )
+    .context("Failed to mount tmpfs on /tmp/sunwalker_box")?;
 
     // Make various temporary directories and files
     std::fs::create_dir("/tmp/sunwalker_box/emptydir")
@@ -142,7 +148,7 @@ pub fn enter_working_area() -> Result<()> {
     system::bind_mount("/oldroot/proc", "/proc")
         .context("Failed to bind-mount /oldroot/proc to /proc")?;
 
-    system::change_propagation("/", libc::MS_SHARED | libc::MS_REC)
+    system::change_propagation("/", system::MsFlags::MS_SHARED | system::MsFlags::MS_REC)
         .context("Failed to change propagation to shared")?;
 
     Ok(())
@@ -184,7 +190,7 @@ pub fn create_dev_copy() -> Result<()> {
         "devpts",
         "/dev/pts",
         "devpts",
-        libc::MS_NOSUID | libc::MS_NOEXEC,
+        system::MsFlags::MS_NOSUID | system::MsFlags::MS_NOEXEC,
         Some("mode=666,ptmxmode=666"),
     )
     .context("Failed to mount devpts at /dev/pts")?;

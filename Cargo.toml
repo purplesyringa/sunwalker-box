@@ -12,7 +12,7 @@ description = "Sandbox for sunwalker judge system"
 anyhow = { git = "https://github.com/purplesyringa/anyhow", branch = "optout-backtrace", features = ["no_backtrace"]}
 argh = "0.1.9"
 crossmist = "0.2.4"
-nix = { version = "0.27.1", features = ["resource", "sched", "kmod", "ptrace", "signal", "fs", "time", "user", "poll", "event", "process"] }
+nix = { version = "0.27.1", features = ["resource", "sched", "kmod", "ptrace", "signal", "fs", "time", "user", "poll", "event", "process", "mount"] }
 openat = "0.1.21"
 rand = "0.8.5"
 miniserde = "0.1"
