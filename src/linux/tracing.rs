@@ -691,7 +691,6 @@ impl TracedProcess {
         // syscall. set_active_syscall_no modifies orig_rax, which only makes sense after the syscall has
         // been entered.
         if !inside_syscall {
-            self.set_active_syscall_no(-1)?;
             self.resume_syscall()?;
             self.wait_for_ptrace_syscall()?;
         }
