@@ -82,9 +82,10 @@ pub struct ptrace_rseq_configuration {
     pub pad: u32,
 }
 
-#[derive(Clone)]
-pub struct FixedRegSet<const TYPE: i32, T: Copy> {
-    value: T,
+trait RegSet: Sized {
+    fn ptrace_get(pid: Pid) -> Result<Self, Errno>;
+    fn ptrace_set(&self, pid: Pid) -> Result<()>;
+    fn zero_out(&mut self);
 }
 
 #[derive(Clone)]
@@ -92,7 +93,7 @@ struct VariableRegSet<const TYPE: i32> {
     value: Vec<u8>,
 }
 
-impl<const TYPE: i32> VariableRegSet<TYPE> {
+impl<const TYPE: i32> RegSet for VariableRegSet<TYPE> {
     fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
         let mut value = vec![0u8; 64];
         loop {
@@ -134,11 +135,11 @@ impl<const TYPE: i32> VariableRegSet<TYPE> {
         } == -1
         {
             return Err(std::io::Error::last_os_error())
-                .context("Failed to store registers of the child")?;
+                .with_context(|| format!("Failed to write regset 0x{TYPE:x}"))?;
         }
         ensure!(
             iovec.iov_len >= self.value.len(),
-            "Failed to store registers of the child: too short register set"
+            "Failed to write regset 0x{TYPE:x}: too short register set"
         );
         Ok(())
     }
@@ -146,6 +147,11 @@ impl<const TYPE: i32> VariableRegSet<TYPE> {
     fn zero_out(&mut self) {
         self.value.fill(0);
     }
+}
+
+#[derive(Clone)]
+pub struct FixedRegSet<const TYPE: i32, T: Copy> {
+    value: T,
 }
 
 impl<const TYPE: i32, T: Copy> std::ops::Deref for FixedRegSet<TYPE, T> {
@@ -161,7 +167,7 @@ impl<const TYPE: i32, T: Copy> std::ops::DerefMut for FixedRegSet<TYPE, T> {
     }
 }
 
-impl<const TYPE: i32, T: Copy> FixedRegSet<TYPE, T> {
+impl<const TYPE: i32, T: Copy> RegSet for FixedRegSet<TYPE, T> {
     fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
         let mut value = std::mem::MaybeUninit::<T>::uninit();
         let mut iovec = libc::iovec {
@@ -210,8 +216,39 @@ impl<const TYPE: i32, T: Copy> FixedRegSet<TYPE, T> {
         Ok(())
     }
 
-    unsafe fn zero_out(&mut self) {
+    // XXX: This is actually unsound for a generic T. Can we do better?
+    fn zero_out(&mut self) {
         self.value = unsafe { std::mem::zeroed() };
+    }
+}
+
+#[derive(Clone)]
+struct OptionalRegSet<T: RegSet> {
+    value: Option<T>,
+}
+
+impl<T: RegSet> RegSet for OptionalRegSet<T> {
+    fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
+        Ok(Self {
+            value: match T::ptrace_get(pid) {
+                Ok(value) => Some(value),
+                Err(Errno::EINVAL) => None,
+                Err(e) => Err(e)?,
+            },
+        })
+    }
+
+    fn ptrace_set(&self, pid: Pid) -> Result<()> {
+        match self.value {
+            Some(ref value) => value.ptrace_set(pid),
+            None => Ok(()),
+        }
+    }
+
+    fn zero_out(&mut self) {
+        if let Some(ref mut value) = self.value {
+            value.zero_out();
+        }
     }
 }
 
@@ -233,31 +270,31 @@ struct Aarch64Registers {
     prfpreg: FixedRegSet<NT_PRFPREG, libc::user_fpsimd_struct>,
     tls: FixedRegSet<NT_ARM_TLS, [usize; 2]>,
     system_call: FixedRegSet<{ libc::NT_ARM_SYSTEM_CALL }, i32>,
-    sve: VariableRegSet<NT_ARM_SVE>,
-    ssve: VariableRegSet<NT_ARM_SSVE>,
-    za: VariableRegSet<NT_ARM_ZA>,
-    zt: VariableRegSet<NT_ARM_ZT>,
-    pac_enabled_keys: FixedRegSet<NT_ARM_PAC_ENABLED_KEYS, u64>,
-    paca_keys: FixedRegSet<NT_ARM_PACA_KEYS, [u128; 4]>,
-    pacg_keys: FixedRegSet<NT_ARM_PACG_KEYS, u128>,
-    tagged_addr_ctrl: FixedRegSet<NT_ARM_TAGGED_ADDR_CTRL, u64>,
+    sve: OptionalRegSet<VariableRegSet<NT_ARM_SVE>>,
+    ssve: OptionalRegSet<VariableRegSet<NT_ARM_SSVE>>,
+    za: OptionalRegSet<VariableRegSet<NT_ARM_ZA>>,
+    zt: OptionalRegSet<VariableRegSet<NT_ARM_ZT>>,
+    pac_enabled_keys: OptionalRegSet<FixedRegSet<NT_ARM_PAC_ENABLED_KEYS, u64>>,
+    paca_keys: OptionalRegSet<FixedRegSet<NT_ARM_PACA_KEYS, [u128; 4]>>,
+    pacg_keys: OptionalRegSet<FixedRegSet<NT_ARM_PACG_KEYS, u128>>,
+    tagged_addr_ctrl: OptionalRegSet<FixedRegSet<NT_ARM_TAGGED_ADDR_CTRL, u64>>,
 }
 
 #[cfg(target_arch = "aarch64")]
-impl Aarch64Registers {
+impl RegSet for Aarch64Registers {
     fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
         Ok(Self {
-            prfpreg: FixedRegSet::ptrace_get(pid)?,
-            tls: FixedRegSet::ptrace_get(pid)?,
-            system_call: FixedRegSet::ptrace_get(pid)?,
-            sve: VariableRegSet::ptrace_get(pid)?,
-            ssve: VariableRegSet::ptrace_get(pid)?,
-            za: VariableRegSet::ptrace_get(pid)?,
-            zt: VariableRegSet::ptrace_get(pid)?,
-            pac_enabled_keys: FixedRegSet::ptrace_get(pid)?,
-            paca_keys: FixedRegSet::ptrace_get(pid)?,
-            pacg_keys: FixedRegSet::ptrace_get(pid)?,
-            tagged_addr_ctrl: FixedRegSet::ptrace_get(pid)?,
+            prfpreg: RegSet::ptrace_get(pid)?,
+            tls: RegSet::ptrace_get(pid)?,
+            system_call: RegSet::ptrace_get(pid)?,
+            sve: RegSet::ptrace_get(pid)?,
+            ssve: RegSet::ptrace_get(pid)?,
+            za: RegSet::ptrace_get(pid)?,
+            zt: RegSet::ptrace_get(pid)?,
+            pac_enabled_keys: RegSet::ptrace_get(pid)?,
+            paca_keys: RegSet::ptrace_get(pid)?,
+            pacg_keys: RegSet::ptrace_get(pid)?,
+            tagged_addr_ctrl: RegSet::ptrace_get(pid)?,
         })
     }
     fn ptrace_set(&self, pid: Pid) -> Result<()> {
@@ -276,21 +313,17 @@ impl Aarch64Registers {
     }
 
     fn zero_out(&mut self) {
-        unsafe {
-            self.prfpreg.zero_out();
-            self.tls.zero_out();
-            self.system_call.zero_out();
-        }
+        self.prfpreg.zero_out();
+        self.tls.zero_out();
+        self.system_call.zero_out();
         self.sve.zero_out();
         self.ssve.zero_out();
         self.za.zero_out();
         self.zt.zero_out();
-        unsafe {
-            self.pac_enabled_keys.zero_out();
-            self.paca_keys.zero_out();
-            self.pacg_keys.zero_out();
-            self.tagged_addr_ctrl.zero_out();
-        }
+        self.pac_enabled_keys.zero_out();
+        self.paca_keys.zero_out();
+        self.pacg_keys.zero_out();
+        self.tagged_addr_ctrl.zero_out();
     }
 }
 
@@ -317,9 +350,9 @@ macro_rules! match_arch {
 impl Registers {
     fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
         Ok(Self {
-            prstatus: FixedRegSet::ptrace_get(pid)?,
+            prstatus: RegSet::ptrace_get(pid)?,
             #[cfg(target_arch = "x86_64")]
-            x86_xstate: VariableRegSet::ptrace_get(pid)?,
+            x86_xstate: RegSet::ptrace_get(pid)?,
             #[cfg(target_arch = "aarch64")]
             arm: Aarch64Registers::ptrace_get(pid)?,
         })
@@ -334,9 +367,7 @@ impl Registers {
     }
 
     pub fn zero_out(&mut self) {
-        unsafe {
-            self.prstatus.zero_out();
-        }
+        self.prstatus.zero_out();
         #[cfg(target_arch = "x86_64")]
         self.x86_xstate.zero_out();
         #[cfg(target_arch = "aarch64")]
