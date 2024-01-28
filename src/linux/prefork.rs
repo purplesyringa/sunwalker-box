@@ -569,7 +569,7 @@ impl PreForkRun<'_> {
             State::WaitingOnOpen => {
                 self.state.set(State::Alive);
 
-                let fd = orig.get_syscall_result()? as RawFd;
+                let fd = orig.get_registers()?.get_syscall_result() as RawFd;
                 if fd < 0 {
                     return Ok(None);
                 }
@@ -650,11 +650,7 @@ impl<'a> Suspender<'a> {
         // We'll want to execute syscalls soon, put IP back where it belongs in the process too
         self.orig.set_registers(registers.clone());
         // Change the -ENOSYS placed by seccomp to the real syscall number
-        registers.set_syscall_no(
-            self.orig
-                .get_active_syscall_no()
-                .context("Get active syscall number")?,
-        );
+        registers.set_syscall_no(registers.get_active_syscall_no());
 
         // It's important to get the kernel messing with IP due to rseq out of the way as fast as
         // possible
@@ -771,29 +767,11 @@ impl<'a> Suspender<'a> {
         regs.set_stack_pointer(0xdeadbeef00000000);
         // This relies on the fact that segment registers point at GDT, which is shared between all
         // processes
-        Self::store_segment_regs(&mut regs);
+        regs.copy_segment_regs();
         self.orig.set_registers(regs);
 
         Ok(())
     }
-
-    #[cfg(target_arch = "x86_64")]
-    fn store_segment_regs(regs: &mut tracing::Registers) {
-        unsafe {
-            // This could be a single instruction rather than mov to a general register followed by
-            // a mov to memory (which Rust doesn't easily enable), but that's a premature
-            // optimization
-            std::arch::asm!("mov {}, cs", out(reg) regs.cs);
-            std::arch::asm!("mov {}, ss", out(reg) regs.ss);
-            std::arch::asm!("mov {}, ds", out(reg) regs.ds);
-            std::arch::asm!("mov {}, es", out(reg) regs.es);
-            std::arch::asm!("mov {}, fs", out(reg) regs.fs);
-            std::arch::asm!("mov {}, gs", out(reg) regs.gs);
-        }
-    }
-
-    #[cfg(not(target_arch = "x86_64"))]
-    fn store_segment_regs(_regs: &mut tracing::Registers) {}
 
     fn collect_info_via_parasite(&mut self) -> Result<()> {
         log!("Running parasite in original process");
@@ -1344,7 +1322,7 @@ fn wait_for_raised_sigstop(
                 // triggered by any sort of delayed mechanism
                 let info = process.get_signal_info()?;
                 if info.si_signo == libc::SIGSTOP && info.si_code == libc::SI_USER {
-                    let ip = process.get_instruction_pointer()?;
+                    let ip = process.get_registers()?.get_instruction_pointer();
                     log!("SIGSTOP at {ip:x}");
                     return Ok(true);
                 } else if info.si_signo == libc::SIGSEGV && allow_sigsegv {
