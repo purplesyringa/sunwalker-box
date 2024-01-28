@@ -760,7 +760,8 @@ impl<'a> Suspender<'a> {
         // XXX does this work on aarch64??
         // Reset processor stack (direction flag, x87 state, etc.). This should prevent the original
         // process from configuring the CPU in a way the parasite doesn't expect
-        let mut regs: tracing::Registers = unsafe { std::mem::zeroed() };
+        let regs = self.orig.registers_mut()?;
+        regs.zero_out();
         // Call _start() with a valid stack
         regs.set_instruction_pointer(self.inject_location);
         // Put stack pointer to incorrect value to not fuck up user memory
@@ -768,8 +769,6 @@ impl<'a> Suspender<'a> {
         // This relies on the fact that segment registers point at GDT, which is shared between all
         // processes
         regs.copy_segment_regs();
-        self.orig.set_registers(regs);
-
         Ok(())
     }
 

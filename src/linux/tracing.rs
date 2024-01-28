@@ -87,8 +87,65 @@ pub struct FixedRegSet<const TYPE: i32, T: Copy> {
     value: T,
 }
 
-struct VariableRegSet {
+#[derive(Clone)]
+struct VariableRegSet<const TYPE: i32> {
     value: Vec<u8>,
+}
+
+impl<const TYPE: i32> VariableRegSet<TYPE> {
+    fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
+        let mut value = vec![0u8; 64];
+        loop {
+            let mut iovec = libc::iovec {
+                iov_base: value.as_mut_ptr() as *mut c_void,
+                iov_len: value.len(),
+            };
+            if unsafe {
+                libc::ptrace(
+                    libc::PTRACE_GETREGSET,
+                    pid.as_raw(),
+                    TYPE as *mut c_void,
+                    &mut iovec,
+                )
+            } == -1
+            {
+                return Err(Errno::last());
+            }
+            if iovec.iov_len < value.len() {
+                value.truncate(iovec.iov_len);
+                return Ok(Self { value });
+            }
+            value.resize(value.len() * 2, 0);
+        }
+    }
+
+    fn ptrace_set(&self, pid: Pid) -> Result<()> {
+        let mut iovec = libc::iovec {
+            iov_base: self.value.as_ptr() as *const _ as *mut c_void,
+            iov_len: self.value.len(),
+        };
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_SETREGSET,
+                pid.as_raw(),
+                TYPE as *mut c_void,
+                &mut iovec,
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("Failed to store registers of the child")?;
+        }
+        ensure!(
+            iovec.iov_len >= self.value.len(),
+            "Failed to store registers of the child: too short register set"
+        );
+        Ok(())
+    }
+
+    fn zero_out(&mut self) {
+        self.value.fill(0);
+    }
 }
 
 impl<const TYPE: i32, T: Copy> std::ops::Deref for FixedRegSet<TYPE, T> {
@@ -152,11 +209,19 @@ impl<const TYPE: i32, T: Copy> FixedRegSet<TYPE, T> {
         );
         Ok(())
     }
+
+    unsafe fn zero_out(&mut self) {
+        self.value = unsafe { std::mem::zeroed() };
+    }
 }
+
+const NT_X86_XSTATE: i32 = 0x202;
 
 #[derive(Clone)]
 pub struct Registers {
     pub prstatus: FixedRegSet<{ libc::NT_PRSTATUS }, libc::user_regs_struct>,
+    #[cfg(target_arch = "x86_64")]
+    x86_xstate: VariableRegSet<{ NT_X86_XSTATE }>,
     #[cfg(target_arch = "aarch64")]
     arm_system_call: FixedRegSet<{ libc::NT_ARM_SYSTEM_CALL }, i32>,
 }
@@ -176,15 +241,31 @@ impl Registers {
     fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
         Ok(Self {
             prstatus: FixedRegSet::ptrace_get(pid)?,
+            #[cfg(target_arch = "x86_64")]
+            x86_xstate: VariableRegSet::ptrace_get(pid)?,
             #[cfg(target_arch = "aarch64")]
             arm_system_call: FixedRegSet::ptrace_get(pid)?,
         })
     }
     fn ptrace_set(&self, pid: Pid) -> Result<()> {
         self.prstatus.ptrace_set(pid)?;
+        #[cfg(target_arch = "x86_64")]
+        self.x86_xstate.ptrace_set(pid)?;
         #[cfg(target_arch = "aarch64")]
         self.arm_system_call.ptrace_set(pid)?;
         Ok(())
+    }
+
+    pub fn zero_out(&mut self) {
+        unsafe {
+            self.prstatus.zero_out();
+        }
+        #[cfg(target_arch = "x86_64")]
+        self.x86_xstate.zero_out();
+        #[cfg(target_arch = "aarch64")]
+        unsafe {
+            self.arm_system_call.zero_out();
+        }
     }
 
     pub fn get_instruction_pointer(&self) -> usize {
