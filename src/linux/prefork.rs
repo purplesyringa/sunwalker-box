@@ -389,7 +389,7 @@ impl PreForkManager {
 
         // Verify that the SIGSEGV was intentional
         let regs = child
-            .get_registers()
+            .registers_ref()
             .context("Failed to get child registers")?;
         if regs.get_stack_pointer() != 0x5afec0def1e1d {
             child.resume_signal(libc::SIGKILL)?;
@@ -569,7 +569,7 @@ impl PreForkRun<'_> {
             State::WaitingOnOpen => {
                 self.state.set(State::Alive);
 
-                let fd = orig.get_registers()?.get_syscall_result() as RawFd;
+                let fd = orig.registers_ref()?.get_syscall_result() as RawFd;
                 if fd < 0 {
                     return Ok(None);
                 }
@@ -642,13 +642,13 @@ impl<'a> Suspender<'a> {
         log!("Suspend started on {started:?}");
 
         // Save register state
-        let mut registers = self.orig.get_registers().context("Get orig registers")?;
+        let registers = self.orig.registers_mut().context("Get orig registers")?;
         // Jump back to the syscall instruction
         registers.set_instruction_pointer(
-            registers.get_instruction_pointer() - self.orig.get_syscall_insn_length(),
+            registers.get_instruction_pointer() - tracing::TracedProcess::get_syscall_insn_length(),
         );
-        // We'll want to execute syscalls soon, put IP back where it belongs in the process too
-        self.orig.set_registers(registers.clone());
+        // The rest of the changes shouldn't happen in the process
+        let mut registers = registers.clone();
         // Change the -ENOSYS placed by seccomp to the real syscall number
         registers.set_syscall_no(registers.get_active_syscall_no());
 
@@ -1322,7 +1322,7 @@ fn wait_for_raised_sigstop(
                 // triggered by any sort of delayed mechanism
                 let info = process.get_signal_info()?;
                 if info.si_signo == libc::SIGSTOP && info.si_code == libc::SI_USER {
-                    let ip = process.get_registers()?.get_instruction_pointer();
+                    let ip = process.registers_ref()?.get_instruction_pointer();
                     log!("SIGSTOP at {ip:x}");
                     return Ok(true);
                 } else if info.si_signo == libc::SIGSEGV && allow_sigsegv {

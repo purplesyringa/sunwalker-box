@@ -706,7 +706,7 @@ impl SingleRun<'_> {
         process: &mut ProcessInfo,
         syscall: EmulatedSyscall,
     ) -> Result<()> {
-        let mut regs = process.traced_process.get_registers()?;
+        let regs = process.traced_process.registers_mut()?;
         match syscall {
             EmulatedSyscall::Result(result) => {
                 if result as isize >= 0 {
@@ -731,7 +731,6 @@ impl SingleRun<'_> {
             }
         }
 
-        process.traced_process.set_registers(regs);
         if process.state == ProcessState::Alive {
             process.traced_process.resume()?;
         } else {
@@ -882,7 +881,7 @@ impl SingleRun<'_> {
 
                         // Account for red zone
                         let file_name_addr =
-                            (process.traced_process.get_registers()?.get_stack_pointer() - 128)
+                            (process.traced_process.registers_ref()?.get_stack_pointer() - 128)
                                 - path.len();
 
                         process.traced_process.write_memory(file_name_addr, &path)?;
@@ -1028,15 +1027,13 @@ impl SingleRun<'_> {
 
     #[cfg(target_arch = "x86_64")]
     fn emulate_insn(&self, process: &mut ProcessInfo) -> Result<bool> {
-        let mut regs = process.traced_process.get_registers()?;
-        let Ok(word) = process.traced_process.read_word(regs.prstatus.rip as usize) else {
-            log!(
-                "Not emulating instruction at {:x} -- failed to read word",
-                regs.prstatus.rip
-            );
+        let rip = process.traced_process.registers_ref()?.prstatus.rip;
+        let Ok(word) = process.traced_process.read_word(rip as usize) else {
+            log!("Not emulating instruction at {rip:x} -- failed to read word");
             return Ok(false);
         };
 
+        let regs = process.traced_process.registers_mut()?;
         if word & 0xffff == 0x310f {
             // rdtsc = 0f 31
             log!("Emulating rdtsc");
@@ -1045,7 +1042,6 @@ impl SingleRun<'_> {
             tsc += self.tsc_shift;
             regs.prstatus.rdx = tsc >> 32;
             regs.prstatus.rax = tsc & 0xffffffff;
-            process.traced_process.set_registers(regs);
             process.traced_process.resume()?;
             Ok(true)
         } else if word & 0xffffff == 0xf9010f {
@@ -1057,7 +1053,6 @@ impl SingleRun<'_> {
             regs.prstatus.rdx = tsc >> 32;
             regs.prstatus.rax = tsc & 0xffffffff;
             regs.prstatus.rcx = 1;
-            process.traced_process.set_registers(regs);
             process.traced_process.resume()?;
             Ok(true)
         } else {
