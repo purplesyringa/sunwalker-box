@@ -532,12 +532,6 @@ impl PreForkRun<'_> {
                     }
                 }
             }
-            libc::SYS_getppid => {
-                // TODO: this should probably return the real ppid
-                // As if across PID namespace
-                orig.set_syscall_result(0)?;
-                orig.set_active_syscall_no(-1)?; // skip syscall
-            }
             // TODO: pipe, sysinfo, modify_ldt, epoll*
             // TODO: move simple cases to seccomp filter for efficiency
             _ => {
