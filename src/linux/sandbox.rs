@@ -1,6 +1,6 @@
 use crate::linux::system;
 use anyhow::{bail, ensure, Context, Result};
-use nix::{libc, libc::c_char, sched};
+use nix::{libc, libc::c_char, sched, unistd};
 
 pub fn sanity_checks() -> Result<()> {
     // suid_dumpable = 1 means PR_SET_DUMPABLE does not trigger automatically on setuid, which is
@@ -56,15 +56,13 @@ pub fn unshare_persistent_namespaces() -> Result<()> {
 
     // Configure UTS namespace
     let domain_name = "sunwalker";
-    let host_name = "box";
     if unsafe { libc::setdomainname(domain_name.as_ptr() as *const c_char, domain_name.len()) }
         == -1
     {
         return Err(std::io::Error::last_os_error()).context("Failed to set domain name");
     }
-    if unsafe { libc::sethostname(host_name.as_ptr() as *const c_char, host_name.len()) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("Failed to set host name");
-    }
+
+    unistd::sethostname("box").context("Failed to set host name")?;
 
     // Will a reasonable program ever use a local network interface? Theoretically, I can see a
     // runtime with built-in multiprocessing support use a TCP socket on localhost for IPC, but
