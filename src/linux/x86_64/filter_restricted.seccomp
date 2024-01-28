@@ -52,6 +52,7 @@ A == getuid ? allow : next
 A == getgid ? allow : next
 A == geteuid ? allow : next
 A == getegid ? allow : next
+A == getppid ? allow : next
 A == getpgrp ? allow : next
 A == getgroups ? allow : next
 A == getresuid ? allow : next
