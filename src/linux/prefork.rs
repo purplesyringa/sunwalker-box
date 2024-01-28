@@ -390,7 +390,7 @@ impl PreForkManager {
         let regs = child
             .get_registers()
             .context("Failed to get child registers")?;
-        if regs.rsp != 0x5afec0def1e1d {
+        if regs.get_stack_pointer() != 0x5afec0def1e1d {
             child.resume_signal(libc::SIGKILL)?;
             wait_for_sigkill(&mut child)?;
             bail!("Child terminated with SIGSEGV");
@@ -647,17 +647,23 @@ impl<'a> Suspender<'a> {
         log!("Suspend started on {started:?}");
 
         // Save register state
-        let mut registers = self.orig.get_registers()?;
+        let mut registers = self.orig.get_registers().context("Get orig registers")?;
         // Jump back to the syscall instruction
-        registers.rip -= self.orig.get_syscall_insn_length() as u64;
+        registers.set_instruction_pointer(
+            registers.get_instruction_pointer() - self.orig.get_syscall_insn_length(),
+        );
         // We'll want to execute syscalls soon, put IP back where it belongs in the process too
         self.orig.set_registers(registers.clone());
         // Change the -ENOSYS placed by seccomp to the real syscall number
-        registers.rax = registers.orig_rax;
+        registers.set_syscall_no(
+            self.orig
+                .get_active_syscall_no()
+                .context("Get active syscall number")?,
+        );
 
         // It's important to get the kernel messing with IP due to rseq out of the way as fast as
         // possible
-        let rseq_info = self.save_rseq_info()?;
+        let rseq_info = self.save_rseq_info().context("Saving rseq info")?;
 
         // The working directory always exists because we don't allow deleting files before suspend
         let pid = self.orig.get_pid();
@@ -674,7 +680,7 @@ impl<'a> Suspender<'a> {
         self.collect_mm_options()
             .context("Failed to collect memory map options")?;
 
-        let memory_maps = self.orig.get_memory_maps()?;
+        let memory_maps = self.orig.get_memory_maps().context("Get memory maps")?;
         self.translate_memory_maps(&memory_maps)
             .context("Failed to translate memory maps")?;
 
@@ -760,15 +766,24 @@ impl<'a> Suspender<'a> {
             .write_memory(self.inject_location, PARASITE)
             .context("Failed to write parasite segment")?;
 
+        // XXX does this work on aarch64??
         // Reset processor stack (direction flag, x87 state, etc.). This should prevent the original
         // process from configuring the CPU in a way the parasite doesn't expect
         let mut regs: tracing::Registers = unsafe { std::mem::zeroed() };
         // Call _start() with a valid stack
-        regs.rip = self.inject_location as u64;
+        regs.set_instruction_pointer(self.inject_location);
         // Put stack pointer to incorrect value to not fuck up user memory
-        regs.rsp = 0xdeadbeef00000000 as u64;
+        regs.set_stack_pointer(0xdeadbeef00000000);
         // This relies on the fact that segment registers point at GDT, which is shared between all
         // processes
+        Self::store_segment_regs(&mut regs);
+        self.orig.set_registers(regs);
+
+        Ok(())
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    fn store_segment_regs(regs: &mut tracing::Registers) {
         unsafe {
             // This could be a single instruction rather than mov to a general register followed by
             // a mov to memory (which Rust doesn't easily enable), but that's a premature
@@ -780,10 +795,10 @@ impl<'a> Suspender<'a> {
             std::arch::asm!("mov {}, fs", out(reg) regs.fs);
             std::arch::asm!("mov {}, gs", out(reg) regs.gs);
         }
-        self.orig.set_registers(regs);
-
-        Ok(())
     }
+
+    #[cfg(not(target_arch = "x86_64"))]
+    fn store_segment_regs(_regs: &mut tracing::Registers) {}
 
     fn collect_info_via_parasite(&mut self) -> Result<()> {
         log!("Running parasite in original process");
