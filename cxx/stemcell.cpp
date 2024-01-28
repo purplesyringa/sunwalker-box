@@ -136,7 +136,12 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // state) because, duh, we're going to unmap it, and sending a signal would require a syscall,
     // and at that point it'd be more efficient to do munmap from manager, which is pretty
     // inefficient in comparison to this workaround
+#ifdef __x86_64__
     asm volatile("mov $0x5afec0def1e1d, %rsp");
+#else
+#error Trying to compile stemcell against unsupported architecture!
+#endif
+
     libc::munmap(reinterpret_cast<unsigned long>(&start_of_text), &end_of_bss - &start_of_text)
         .CONTEXT("Failed to munmap stemcell")
         .TRY();
