@@ -1,6 +1,6 @@
 use crate::linux::ids::*;
 use anyhow::{Context, Result};
-use nix::{libc, sched, unistd};
+use nix::{sched, unistd};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
@@ -14,10 +14,8 @@ pub fn enter_user_namespace() -> Result<()> {
     child.join().context("Child didn't terminate gracefully")?;
 
     // Become in-sandbox root
-    nix::unistd::setuid(nix::unistd::Uid::from_raw(INTERNAL_ROOT_UID))
-        .context("Failed to setuid to root")?;
-    nix::unistd::setgid(nix::unistd::Gid::from_raw(INTERNAL_ROOT_GID))
-        .context("Failed to setgid to root")?;
+    unistd::setuid(unistd::Uid::from_raw(INTERNAL_ROOT_UID)).context("Failed to setuid to root")?;
+    unistd::setgid(unistd::Gid::from_raw(INTERNAL_ROOT_GID)).context("Failed to setgid to root")?;
 
     Ok(())
 }
@@ -35,7 +33,7 @@ fn configure_ns_impl(mut rx: crossmist::Receiver<()>) -> Result<()> {
         .context("Failed to recv")?
         .context("Parent terminated")?;
 
-    let ppid = nix::unistd::getppid();
+    let ppid = unistd::getppid();
 
     // Fill uid/gid maps
     std::fs::write(
@@ -72,11 +70,7 @@ pub fn drop_privileges() -> Result<()> {
     // which would confuse the system.
     unistd::setgroups(&[unistd::Gid::from_raw(INTERNAL_USER_GID)])
         .context("Failed to setgroups")?;
-    if unsafe { libc::setgid(INTERNAL_USER_GID) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("Failed to setgid");
-    }
-    if unsafe { libc::setuid(INTERNAL_USER_UID) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("Failed to setuid");
-    }
+    unistd::setgid(unistd::Gid::from_raw(INTERNAL_USER_GID)).context("Failed to setgid to user")?;
+    unistd::setuid(unistd::Uid::from_raw(INTERNAL_USER_UID)).context("Failed to setuid to user")?;
     Ok(())
 }
