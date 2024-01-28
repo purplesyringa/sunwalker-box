@@ -648,6 +648,8 @@ impl<'a> Suspender<'a> {
         let mut registers = self.orig.get_registers()?;
         // Jump back to the syscall instruction
         registers.rip -= self.orig.get_syscall_insn_length() as u64;
+        // We'll want to execute syscalls soon, put IP back where it belongs in the process too
+        self.orig.set_registers(registers.clone());
         // Change the -ENOSYS placed by seccomp to the real syscall number
         registers.rax = registers.orig_rax;
 
