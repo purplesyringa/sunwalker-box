@@ -69,7 +69,9 @@ Result<void> load(const State &state) {
             break;
         case SavedFdKindDiscriminant::REGULAR: {
             const char *path = format_fd_path(fd.kind.regular.cloned_fd);
-            new_fd = libc::open(path, fd.flags, 0).CONTEXT("Failed to open regular fd").TRY();
+            new_fd = libc::openat(AT_FDCWD, path, fd.flags, 0)
+                         .CONTEXT("Failed to open regular fd")
+                         .TRY();
             libc::lseek(new_fd, fd.kind.regular.position, SEEK_SET)
                 .CONTEXT("Failed to seek regular fd")
                 .TRY();
@@ -85,7 +87,7 @@ Result<void> load(const State &state) {
             // to and open that path manually
             const char *path = format_fd_path(fd.kind.directory.cloned_fd);
             static char real_path[4096];
-            ssize_t n_bytes = libc::readlink(path, real_path, sizeof(real_path))
+            ssize_t n_bytes = libc::readlinkat(AT_FDCWD, path, real_path, sizeof(real_path))
                                   .CONTEXT("Failed to readlink")
                                   .TRY();
             // Suspend happens before the user has any possibility of modifying the filesystem.
@@ -93,8 +95,9 @@ Result<void> load(const State &state) {
             ENSURE(n_bytes < sizeof(real_path), "Too long filesystem path");
             real_path[n_bytes] = '\0';
 
-            new_fd =
-                libc::open(real_path, fd.flags, 0).CONTEXT("Failed to open directory fd").TRY();
+            new_fd = libc::openat(AT_FDCWD, real_path, fd.flags, 0)
+                         .CONTEXT("Failed to open directory fd")
+                         .TRY();
             libc::lseek(new_fd, fd.kind.directory.position, SEEK_SET)
                 .CONTEXT("Failed to seek directory fd")
                 .TRY();
