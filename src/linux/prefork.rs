@@ -468,6 +468,8 @@ impl PreForkRun<'_> {
                 self.suspend(orig, SuspendOptions::new_seccomp())?;
                 return Ok(true);
             }
+            // XXX This WILL break on non-(x86_64|aarch64) architectures!
+            #[cfg(target_arch = "x86_64")]
             libc::SYS_dup2 | libc::SYS_dup3 => {
                 let oldfd = syscall_info.args[0] as RawFd;
                 let newfd = syscall_info.args[1] as RawFd;
@@ -476,7 +478,24 @@ impl PreForkRun<'_> {
                     return Ok(true);
                 }
             }
+            #[cfg(target_arch = "aarch64")]
+            libc::SYS_dup3 => {
+                let oldfd = syscall_info.args[0] as RawFd;
+                let newfd = syscall_info.args[1] as RawFd;
+                if (0..3).contains(&oldfd) || (0..3).contains(&newfd) {
+                    self.suspend(orig, SuspendOptions::new_seccomp())?;
+                    return Ok(true);
+                }
+            }
+            #[cfg(target_arch = "x86_64")]
             libc::SYS_open | libc::SYS_openat => {
+                // TOCTOU is not a problem as the user process is single-threaded
+                self.state.set(State::WaitingOnOpen);
+                orig.resume_syscall()?;
+                return Ok(false);
+            }
+            #[cfg(target_arch = "aarch64")]
+            libc::SYS_openat => {
                 // TOCTOU is not a problem as the user process is single-threaded
                 self.state.set(State::WaitingOnOpen);
                 orig.resume_syscall()?;
