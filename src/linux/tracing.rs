@@ -215,7 +215,84 @@ impl<const TYPE: i32, T: Copy> FixedRegSet<TYPE, T> {
     }
 }
 
+const NT_PRFPREG: i32 = 2;
 const NT_X86_XSTATE: i32 = 0x202;
+const NT_ARM_TLS: i32 = 0x401;
+const NT_ARM_SVE: i32 = 0x405;
+const NT_ARM_PACA_KEYS: i32 = 0x407;
+const NT_ARM_PACG_KEYS: i32 = 0x408;
+const NT_ARM_TAGGED_ADDR_CTRL: i32 = 0x409;
+const NT_ARM_PAC_ENABLED_KEYS: i32 = 0x40a;
+const NT_ARM_SSVE: i32 = 0x40b;
+const NT_ARM_ZA: i32 = 0x40c;
+const NT_ARM_ZT: i32 = 0x40d;
+
+#[cfg(target_arch = "aarch64")]
+#[derive(Clone)]
+struct Aarch64Registers {
+    prfpreg: FixedRegSet<NT_PRFPREG, libc::user_fpsimd_struct>,
+    tls: FixedRegSet<NT_ARM_TLS, [usize; 2]>,
+    system_call: FixedRegSet<{ libc::NT_ARM_SYSTEM_CALL }, i32>,
+    sve: VariableRegSet<NT_ARM_SVE>,
+    ssve: VariableRegSet<NT_ARM_SSVE>,
+    za: VariableRegSet<NT_ARM_ZA>,
+    zt: VariableRegSet<NT_ARM_ZT>,
+    pac_enabled_keys: FixedRegSet<NT_ARM_PAC_ENABLED_KEYS, u64>,
+    paca_keys: FixedRegSet<NT_ARM_PACA_KEYS, [u128; 4]>,
+    pacg_keys: FixedRegSet<NT_ARM_PACG_KEYS, u128>,
+    tagged_addr_ctrl: FixedRegSet<NT_ARM_TAGGED_ADDR_CTRL, u64>,
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Aarch64Registers {
+    fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
+        Ok(Self {
+            prfpreg: FixedRegSet::ptrace_get(pid)?,
+            tls: FixedRegSet::ptrace_get(pid)?,
+            system_call: FixedRegSet::ptrace_get(pid)?,
+            sve: VariableRegSet::ptrace_get(pid)?,
+            ssve: VariableRegSet::ptrace_get(pid)?,
+            za: VariableRegSet::ptrace_get(pid)?,
+            zt: VariableRegSet::ptrace_get(pid)?,
+            pac_enabled_keys: FixedRegSet::ptrace_get(pid)?,
+            paca_keys: FixedRegSet::ptrace_get(pid)?,
+            pacg_keys: FixedRegSet::ptrace_get(pid)?,
+            tagged_addr_ctrl: FixedRegSet::ptrace_get(pid)?,
+        })
+    }
+    fn ptrace_set(&self, pid: Pid) -> Result<()> {
+        self.prfpreg.ptrace_set(pid)?;
+        self.tls.ptrace_set(pid)?;
+        self.system_call.ptrace_set(pid)?;
+        self.sve.ptrace_set(pid)?;
+        self.ssve.ptrace_set(pid)?;
+        self.za.ptrace_set(pid)?;
+        self.zt.ptrace_set(pid)?;
+        self.pac_enabled_keys.ptrace_set(pid)?;
+        self.paca_keys.ptrace_set(pid)?;
+        self.pacg_keys.ptrace_set(pid)?;
+        self.tagged_addr_ctrl.ptrace_set(pid)?;
+        Ok(())
+    }
+
+    fn zero_out(&mut self) {
+        unsafe {
+            self.prfpreg.zero_out();
+            self.tls.zero_out();
+            self.system_call.zero_out();
+        }
+        self.sve.zero_out();
+        self.ssve.zero_out();
+        self.za.zero_out();
+        self.zt.zero_out();
+        unsafe {
+            self.pac_enabled_keys.zero_out();
+            self.paca_keys.zero_out();
+            self.pacg_keys.zero_out();
+            self.tagged_addr_ctrl.zero_out();
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct Registers {
@@ -223,7 +300,7 @@ pub struct Registers {
     #[cfg(target_arch = "x86_64")]
     x86_xstate: VariableRegSet<{ NT_X86_XSTATE }>,
     #[cfg(target_arch = "aarch64")]
-    arm_system_call: FixedRegSet<{ libc::NT_ARM_SYSTEM_CALL }, i32>,
+    arm: Aarch64Registers,
 }
 
 macro_rules! match_arch {
@@ -244,7 +321,7 @@ impl Registers {
             #[cfg(target_arch = "x86_64")]
             x86_xstate: VariableRegSet::ptrace_get(pid)?,
             #[cfg(target_arch = "aarch64")]
-            arm_system_call: FixedRegSet::ptrace_get(pid)?,
+            arm: Aarch64Registers::ptrace_get(pid)?,
         })
     }
     fn ptrace_set(&self, pid: Pid) -> Result<()> {
@@ -252,7 +329,7 @@ impl Registers {
         #[cfg(target_arch = "x86_64")]
         self.x86_xstate.ptrace_set(pid)?;
         #[cfg(target_arch = "aarch64")]
-        self.arm_system_call.ptrace_set(pid)?;
+        self.arm.ptrace_set(pid)?;
         Ok(())
     }
 
@@ -263,9 +340,7 @@ impl Registers {
         #[cfg(target_arch = "x86_64")]
         self.x86_xstate.zero_out();
         #[cfg(target_arch = "aarch64")]
-        unsafe {
-            self.arm_system_call.zero_out();
-        }
+        self.arm.zero_out();
     }
 
     pub fn get_instruction_pointer(&self) -> usize {
@@ -302,7 +377,7 @@ impl Registers {
     pub fn get_active_syscall_no(&self) -> usize {
         match_arch! {
             "x86_64" => self.prstatus.orig_rax as usize,
-            "aarch64" => *self.arm_system_call as usize,
+            "aarch64" => *self.arm.system_call as usize,
         }
     }
 
@@ -318,7 +393,7 @@ impl Registers {
                 self.prstatus.r9 = args.args[5] as u64;
             },
             "aarch64" => {
-                *self.arm_system_call = args.syscall_no;
+                *self.arm.system_call = args.syscall_no;
                 self.prstatus.regs[..6].copy_from_slice(&args.args.map(|arg| arg as u64));
             }
         }
