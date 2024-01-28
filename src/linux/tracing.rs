@@ -112,15 +112,48 @@ impl std::ops::DerefMut for Registers {
 
 #[cfg(target_arch = "x86_64")]
 impl Registers {
+    pub fn get_instruction_pointer(&self) -> usize {
+        self.0.rip as usize
+    }
+
+    pub fn set_instruction_pointer(&mut self, address: usize) {
+        self.0.rip = address as u64;
+    }
+
     pub fn get_stack_pointer(&self) -> usize {
         self.0.rsp as usize
+    }
+
+    pub fn set_stack_pointer(&mut self, address: usize) {
+        self.0.rsp = address as u64;
+    }
+
+    pub fn set_syscall_no(&mut self, syscall: usize) {
+        self.0.rax = syscall as u64;
     }
 }
 
 #[cfg(target_arch = "aarch64")]
 impl Registers {
+    pub fn get_instruction_pointer(&self) -> usize {
+        self.pc as usize
+    }
+
+    pub fn set_instruction_pointer(&mut self, address: usize) {
+        self.pc = address as u64;
+    }
+
     pub fn get_stack_pointer(&self) -> usize {
         self.sp as usize
+    }
+
+    pub fn set_stack_pointer(&mut self, address: usize) {
+        self.sp = address as u64;
+    }
+
+    pub fn set_syscall_no(&mut self, syscall: usize) {
+        // see syscall(3)
+        self.regs[8] = syscall as u64;
     }
 }
 
@@ -530,6 +563,34 @@ impl TracedProcess {
     }
 
     #[cfg(target_arch = "x86_64")]
+    pub fn get_active_syscall_no(&mut self) -> io::Result<usize> {
+        Ok(self._load_registers()?.orig_rax as usize)
+    }
+    #[cfg(target_arch = "aarch64")]
+    pub fn get_active_syscall_no(&mut self) -> io::Result<usize> {
+        let mut data = std::mem::MaybeUninit::<u32>::uninit();
+        let mut iovec = libc::iovec {
+            iov_base: data.as_mut_ptr() as *mut c_void,
+            iov_len: std::mem::size_of_val(&data),
+        };
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETREGSET,
+                self.pid.as_raw(),
+                libc::NT_ARM_SYSTEM_CALL as *mut c_void,
+                &mut iovec,
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error());
+        }
+        if iovec.iov_len < std::mem::size_of_val(&data) {
+            return Err(io::Error::from_raw_os_error(libc::EINVAL));
+        }
+        unsafe { Ok(data.assume_init() as usize) }
+    }
+
+    #[cfg(target_arch = "x86_64")]
     fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
         self.registers_edited = true;
         let regs = self._load_registers()?;
@@ -587,26 +648,8 @@ impl TracedProcess {
         Ok(self._load_registers()?.get_stack_pointer())
     }
 
-    #[cfg(target_arch = "x86_64")]
     pub fn get_instruction_pointer(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.rip as usize)
-    }
-    #[cfg(target_arch = "aarch64")]
-    pub fn get_instruction_pointer(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.pc as usize)
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub fn set_instruction_pointer(&mut self, address: usize) -> io::Result<()> {
-        self.registers_edited = true;
-        self._load_registers()?.rip = address as u64;
-        Ok(())
-    }
-    #[cfg(target_arch = "aarch64")]
-    pub fn set_instruction_pointer(&mut self, address: usize) -> io::Result<()> {
-        self.registers_edited = true;
-        self._load_registers()?.pc = address as u64;
-        Ok(())
+        Ok(self._load_registers()?.get_instruction_pointer())
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -615,7 +658,8 @@ impl TracedProcess {
     }
     #[cfg(target_arch = "aarch64")]
     pub fn get_syscall_insn_length(&self) -> usize {
-        2
+        // svc #0 -> d4000001
+        4
     }
 
     pub fn get_signal_mask(&self) -> Result<u64> {
@@ -644,7 +688,7 @@ impl TracedProcess {
 
     pub fn exec_syscall(&mut self, syscall: SyscallArgs, inside_syscall: bool) -> Result<usize> {
         // Assuming that the instruction pointer points to a syscall instruction, execute one
-        // syscall. set_syscall_no modifies orig_rax, which only makes sense after the syscall has
+        // syscall. set_active_syscall_no modifies orig_rax, which only makes sense after the syscall has
         // been entered.
         if !inside_syscall {
             self.set_active_syscall_no(-1)?;
