@@ -15,6 +15,7 @@
 
 struct State {
     Result<void> result;
+    uintptr_t end_of_memory_space;
     alternative_stack::State alternative_stack;
 #ifdef __x86_64__
     arch_prctl_options::State arch_prctl_options;
@@ -47,9 +48,10 @@ Result<void> run() {
     libc::munmap(0, reinterpret_cast<size_t>(&start_of_text))
         .CONTEXT("Failed to munmap memory prefix")
         .TRY();
-    // FIXME: This is only valid for x86-64
+    // We can't hard-code any particular upper bound because it is not only arch-dependent, but
+    // kernel-configuration-dependent too, e.g. on x86-64 if 5-level page tables are available
     libc::munmap(reinterpret_cast<unsigned long>(&end_of_bss),
-                 0x7ffffffff000 - reinterpret_cast<size_t>(&end_of_bss))
+                 state.end_of_memory_space - reinterpret_cast<uintptr_t>(&end_of_bss))
         .CONTEXT("Failed to munmap memory suffix")
         .TRY();
 
