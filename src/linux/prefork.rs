@@ -98,9 +98,11 @@ const PARASITE_STATE_OFFSET: usize = include!("../../target/parasite.state");
 const PARASITE_MEMORY_SIZE: usize = (PARASITE_SIZE + 4095) / 4096 * 4096;
 
 const STEMCELL: &[u8] = include_bytes!("../../target/stemcell.stripped");
+const STEMCELL_SIZE: usize = include!("../../target/stemcell.size");
 const STEMCELL_CONTEXTS: &[&str] = &include!("../../target/stemcell.result_context_map.json");
 const STEMCELL_RELOCATIONS: &[usize] = &include!("../../target/stemcell.relocations");
 const STEMCELL_STATE_OFFSET: usize = include!("../../target/stemcell.state");
+const STEMCELL_MEMORY_SIZE: usize = (STEMCELL_SIZE + 4095) / 4096 * 4096;
 
 #[repr(C)]
 struct rseq_abi {
@@ -676,14 +678,6 @@ impl<'a> Suspender<'a> {
         self.translate_memory_maps(&memory_maps)
             .context("Failed to translate memory maps")?;
 
-        // Find a location unused in the original process where we can safely map the parasite. We
-        // will also use the same location for the stemcell in the master copy. Derive the requested
-        // size from the size of the executable plus the stack, minding the red zone
-        self.inject_location = self
-            .find_inject_location(&memory_maps, PARASITE_MEMORY_SIZE)
-            .context("Failed to find location for parasite")?;
-        log!("Found free space at 0x{:x}", self.inject_location);
-
         self.infect_orig()
             .context("Failed to infect original process")?;
         self.collect_info_via_parasite()
@@ -740,44 +734,26 @@ impl<'a> Suspender<'a> {
         }))
     }
 
-    fn find_inject_location(&self, maps: &[tracing::MemoryMap], size: usize) -> Result<usize> {
-        let mmap_min_addr: usize = std::fs::read_to_string("/proc/sys/vm/mmap_min_addr")
-            .context("Failed to read /proc/sys/vm/mmap_min_addr")?
-            .trim()
-            .parse()
-            .context("Failed to parse /proc/sys/vm/mmap_min_addr")?;
-
-        // Ban address 0, because perhaps that's a bit safer
-        let mmap_min_addr = mmap_min_addr.max(4096);
-
-        if mmap_min_addr + size <= maps[0].base {
-            return Ok(mmap_min_addr);
-        }
-        for i in 1..maps.len() {
-            if maps[i - 1].end + size <= maps[i].base {
-                return Ok(maps[i - 1].end);
-            }
-        }
-        Ok(maps.last().unwrap().end)
-    }
-
     fn infect_orig(&mut self) -> Result<()> {
         log!("Infecting original process");
 
         // mmap an rwx segment
-        self.orig
+        self.inject_location = self
+            .orig
             .exec_syscall(
                 syscall!(mmap(
-                    self.inject_location,
-                    PARASITE_MEMORY_SIZE,
+                    0,
+                    // Also reserve memory for stemcell
+                    PARASITE_MEMORY_SIZE.max(STEMCELL_MEMORY_SIZE),
                     PROT_READ | PROT_WRITE | PROT_EXEC,
-                    MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED,
+                    MAP_PRIVATE | MAP_ANONYMOUS,
                     -1,
                     0
                 )),
                 self.options.inside_syscall,
             )
             .context("Failed to mmap parasite segment")?;
+        log!("Found free space at 0x{:x}", self.inject_location);
 
         // Load code
         self.orig
