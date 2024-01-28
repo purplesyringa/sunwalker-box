@@ -177,6 +177,7 @@ struct ParasiteState {
 #[repr(C)]
 struct StemcellState {
     result: u64,
+    end_of_memory_space: usize,
     alternative_stack: libc::stack_t,
     arch_prctl_options: ArchPrctlOptions,
     file_descriptors: FileDescriptors,
@@ -1245,6 +1246,16 @@ impl<'a> Suspender<'a> {
         log!("Uploading data to master");
 
         let master = self.master.as_mut().unwrap();
+
+        let stemcell_state_mut = unsafe { self.stemcell_state.assume_init_mut() };
+        stemcell_state_mut.end_of_memory_space = master
+            .get_memory_maps()
+            .context("Failed to read memory maps of master")?
+            .iter()
+            .filter(|map| map.desc != "[vsyscall]")
+            .last()
+            .context("No memory maps in master")?
+            .end;
 
         master
             .write_memory(self.inject_location + STEMCELL_STATE_OFFSET, unsafe {
