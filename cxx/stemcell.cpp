@@ -102,7 +102,7 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // Remap stdio
     for (int i = 0; i < 3; i++) {
         int fd = fds.stdio[i];
-        libc::dup2(fd, i).CONTEXT("Failed to dup2 standard stream").TRY();
+        libc::dup3(fd, i, 0).CONTEXT("Failed to dup2 standard stream").TRY();
         libc::close(fd).CONTEXT("Failed to close standard stream").TRY();
     }
 
