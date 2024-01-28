@@ -141,6 +141,8 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // inefficient in comparison to this workaround
 #ifdef __x86_64__
     asm volatile("mov $0x5afec0def1e1d, %rsp");
+#elif defined(__aarch64__)
+    asm volatile("mov sp, %0" : : "r"(0x5afec0def1e1d));
 #else
 #error Trying to compile stemcell against unsupported architecture!
 #endif
