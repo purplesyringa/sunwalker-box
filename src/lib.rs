@@ -1,6 +1,8 @@
 #![feature(
     generic_const_exprs,
     io_error_more,
+    maybe_uninit_as_bytes,
+    maybe_uninit_slice,
     never_type,
     try_blocks,
     unwrap_infallible
@@ -17,7 +19,6 @@ mod linux {
     mod ipc;
     mod kmodule;
     mod manager;
-    mod mountns;
     mod openat;
     mod procs;
     mod reaper;

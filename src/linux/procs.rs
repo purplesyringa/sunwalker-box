@@ -1,17 +1,9 @@
 use crate::{linux::system, log};
 use anyhow::{Context, Result};
-use nix::{libc, libc::CLONE_NEWPID};
 use std::path::PathBuf;
 
-pub fn unshare_pidns() -> std::io::Result<()> {
-    if unsafe { libc::unshare(CLONE_NEWPID) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
-
 pub fn mount_procfs(proc_path: &str) -> Result<()> {
-    system::mount("none", proc_path, "proc", 0, None)?;
+    system::mount("none", proc_path, "proc", system::MsFlags::empty(), None)?;
 
     log!("Hiding dangerous files under /proc");
 
@@ -124,8 +116,12 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
 
         system::bind_mount(source, &target)
             .with_context(|| format!("Failed to hide .../proc/{path}"))?;
-        system::bind_mount_opt("none", target, libc::MS_REMOUNT | libc::MS_RDONLY)
-            .with_context(|| format!("Failed to remount .../proc/{path} read-only"))?;
+        system::bind_mount_opt(
+            "none",
+            target,
+            system::MsFlags::MS_REMOUNT | system::MsFlags::MS_RDONLY,
+        )
+        .with_context(|| format!("Failed to remount .../proc/{path} read-only"))?;
     }
 
     Ok(())

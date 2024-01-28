@@ -7,7 +7,8 @@ use crossmist::Object;
 use nix::{
     errno, libc,
     libc::pid_t,
-    sys::{epoll, ptrace, resource, signal, signalfd, time, wait},
+    sched,
+    sys::{epoll, ptrace, resource, signal, signalfd, sysinfo, time, wait},
     unistd,
     unistd::Pid,
 };
@@ -16,6 +17,7 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::fs::File;
 use std::io;
+use std::mem::MaybeUninit;
 use std::os::unix::io::AsRawFd;
 use std::time::{Duration, Instant};
 
@@ -134,7 +136,8 @@ impl Runner {
         rootfs::enter_rootfs().context("Failed to enter rootfs")?;
 
         // Unshare IPC namespace now, so that it is owned by the new userns and can be configured
-        ipc::unshare_ipc_namespace().context("Failed to unshare IPC namespace")?;
+        sched::unshare(sched::CloneFlags::CLONE_NEWIPC)
+            .context("Failed to unshare IPC namespace")?;
 
         // Create signalfd to watch child's state change
         let mut sigset = signal::SigSet::empty();
@@ -646,15 +649,11 @@ impl SingleRun<'_> {
                 ))
             }
             libc::SYS_sysinfo => {
-                // We can't use std::mem::zeroed because we need the guarantee that padding bytes
-                // are zeroed (or we'll actually leak sunwalker's memory)
-                let mut user_sysinfo: libc::sysinfo =
-                    unsafe { std::mem::transmute([0u8; std::mem::size_of::<libc::sysinfo>()]) };
+                let our_sysinfo = sysinfo::sysinfo().context("Failed to get sysinfo")?;
 
-                let mut our_sysinfo: libc::sysinfo = unsafe { std::mem::zeroed() };
-                if unsafe { libc::sysinfo(&mut our_sysinfo as *mut _) } == -1 {
-                    Err(std::io::Error::last_os_error()).context("Failed to get sysinfo")?;
-                }
+                // Don't leak sunwalker's memory in padding bytes
+                let mut user_sysinfo = MaybeUninit::<libc::sysinfo>::zeroed();
+                let user_sysinfo_mut = unsafe { user_sysinfo.assume_init_mut() };
 
                 let mem = self
                     .box_cgroup
@@ -663,37 +662,38 @@ impl SingleRun<'_> {
                     .get_memory_stats()
                     .context("Failed to get memory stats")?;
 
-                user_sysinfo.uptime =
-                    our_sysinfo.uptime - self.runner.timens_controller.get_uptime_shift();
-                user_sysinfo.loads = [0; 3]; // there's no practical way to replicate LA
+                user_sysinfo_mut.uptime = (our_sysinfo.uptime()
+                    - Duration::from_secs(self.runner.timens_controller.get_uptime_shift()))
+                .as_secs();
+                user_sysinfo_mut.loads = [0; 3]; // there's no practical way to replicate LA
                 if let Some(limit) = self.options.memory_limit {
-                    user_sysinfo.totalram = limit as u64;
+                    user_sysinfo_mut.totalram = limit as u64;
                 } else {
-                    user_sysinfo.totalram = our_sysinfo.totalram * our_sysinfo.mem_unit as u64;
+                    user_sysinfo_mut.totalram = our_sysinfo.ram_total();
                 }
-                user_sysinfo.freeram =
-                    user_sysinfo.totalram - (mem.anon + mem.file + mem.kernel) as u64;
-                user_sysinfo.sharedram = mem.shmem as u64;
-                user_sysinfo.bufferram = mem.file as u64;
-                user_sysinfo.totalswap = 0;
-                user_sysinfo.freeswap = 0;
-                user_sysinfo.procs = self
+                user_sysinfo_mut.freeram =
+                    user_sysinfo_mut.totalram - (mem.anon + mem.file + mem.kernel) as u64;
+                user_sysinfo_mut.sharedram = mem.shmem as u64;
+                user_sysinfo_mut.bufferram = mem.file as u64;
+                user_sysinfo_mut.totalswap = 0;
+                user_sysinfo_mut.freeswap = 0;
+                user_sysinfo_mut.procs = self
                     .box_cgroup
                     .as_ref()
                     .unwrap()
                     .get_current_processes()
                     .context("Failed to get count of runnning processes")?
                     as u16;
-                user_sysinfo.totalhigh = 0;
-                user_sysinfo.freehigh = 0;
-                user_sysinfo.mem_unit = 1;
+                user_sysinfo_mut.totalhigh = 0;
+                user_sysinfo_mut.freehigh = 0;
+                user_sysinfo_mut.mem_unit = 1;
 
                 if process
                     .traced_process
                     .write_memory(syscall_info.args[0] as usize, unsafe {
                         // We have to force the size to 112 bytes because musl's sysinfo is much
                         // larger, and we don't want to override user's data
-                        &std::mem::transmute_copy::<libc::sysinfo, [u8; 112]>(&user_sysinfo)
+                        MaybeUninit::slice_assume_init_ref(&user_sysinfo.as_bytes()[..112])
                     })
                     .is_ok()
                 {

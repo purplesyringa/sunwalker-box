@@ -57,12 +57,11 @@ def save_table(table_name: str, table: list[tuple[str, int]]):
 
     assert (max_offset + 1) * (max_length + 1) <= 2 ** 16
 
-    with open(f"target/{table_name}.info", "wb") as f:
-        f.write(struct.pack("<QQ", len(ref_table), max_length))
+    with open(f"target/{table_name}.info", "w") as f:
+        f.write(repr((len(ref_table), max_length)))
 
-    with open(f"target/{table_name}.offsets", "wb") as f:
-        for offset, length in ref_table:
-            f.write(struct.pack("<H", offset * (max_length + 1) + length))
+    with open(f"target/{table_name}.offsets", "w") as f:
+        f.write(repr([offset * (max_length + 1) + length for offset, length in ref_table]))
 
     with open(f"target/{table_name}.names", "w") as f:
         f.write(strings)

@@ -1,9 +1,6 @@
 use crate::linux::system;
 use anyhow::{bail, ensure, Context, Result};
-use nix::{
-    libc,
-    libc::{c_char, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM},
-};
+use nix::{libc, libc::c_char, sched, unistd};
 
 pub fn sanity_checks() -> Result<()> {
     // suid_dumpable = 1 means PR_SET_DUMPABLE does not trigger automatically on setuid, which is
@@ -50,21 +47,22 @@ pub fn sanity_checks() -> Result<()> {
 }
 
 pub fn unshare_persistent_namespaces() -> Result<()> {
-    if unsafe { libc::unshare(CLONE_NEWUTS | CLONE_SYSVSEM | CLONE_NEWNET) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("Failed to unshare namespaces");
-    }
+    sched::unshare(
+        sched::CloneFlags::CLONE_NEWUTS
+            | sched::CloneFlags::CLONE_SYSVSEM
+            | sched::CloneFlags::CLONE_NEWNET,
+    )
+    .context("Failed to unshare namespaces")?;
 
     // Configure UTS namespace
     let domain_name = "sunwalker";
-    let host_name = "box";
     if unsafe { libc::setdomainname(domain_name.as_ptr() as *const c_char, domain_name.len()) }
         == -1
     {
         return Err(std::io::Error::last_os_error()).context("Failed to set domain name");
     }
-    if unsafe { libc::sethostname(host_name.as_ptr() as *const c_char, host_name.len()) } == -1 {
-        return Err(std::io::Error::last_os_error()).context("Failed to set host name");
-    }
+
+    unistd::sethostname("box").context("Failed to set host name")?;
 
     // Will a reasonable program ever use a local network interface? Theoretically, I can see a
     // runtime with built-in multiprocessing support use a TCP socket on localhost for IPC, but
@@ -120,8 +118,14 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to create /tmp/sunwalker_box directory")?;
 
     // Mount tmpfs on the working area
-    system::mount("none", "/tmp/sunwalker_box", "tmpfs", 0, None)
-        .context("Failed to mount tmpfs on /tmp/sunwalker_box")?;
+    system::mount(
+        "none",
+        "/tmp/sunwalker_box",
+        "tmpfs",
+        system::MsFlags::empty(),
+        None,
+    )
+    .context("Failed to mount tmpfs on /tmp/sunwalker_box")?;
 
     // Make various temporary directories and files
     std::fs::create_dir("/tmp/sunwalker_box/emptydir")
@@ -142,7 +146,7 @@ pub fn enter_working_area() -> Result<()> {
     system::bind_mount("/oldroot/proc", "/proc")
         .context("Failed to bind-mount /oldroot/proc to /proc")?;
 
-    system::change_propagation("/", libc::MS_SHARED | libc::MS_REC)
+    system::change_propagation("/", system::MsFlags::MS_SHARED | system::MsFlags::MS_REC)
         .context("Failed to change propagation to shared")?;
 
     Ok(())
@@ -184,7 +188,7 @@ pub fn create_dev_copy() -> Result<()> {
         "devpts",
         "/dev/pts",
         "devpts",
-        libc::MS_NOSUID | libc::MS_NOEXEC,
+        system::MsFlags::MS_NOSUID | system::MsFlags::MS_NOEXEC,
         Some("mode=666,ptmxmode=666"),
     )
     .context("Failed to mount devpts at /dev/pts")?;

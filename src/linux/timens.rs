@@ -1,6 +1,6 @@
 use crate::log;
 use anyhow::{Context, Result};
-use nix::{libc, libc::c_int, sys::sysinfo, time::ClockId};
+use nix::{libc, libc::c_int, sched, sys::sysinfo, time::ClockId};
 use std::fs::File;
 use std::io::{Seek, Write};
 
@@ -36,9 +36,8 @@ impl TimeNsController {
             .as_secs();
 
         // timens_offsets can only be set if no process has entered the timens before
-        if unsafe { libc::unshare(CLONE_NEWTIME) } != 0 {
-            return Err(std::io::Error::last_os_error()).context("unshare() failed");
-        }
+        sched::unshare(sched::CloneFlags::from_bits_retain(CLONE_NEWTIME))
+            .context("Failed to unshare timens")?;
 
         // CLOCK_MONOTONIC is similar to CLOCK_MONOTONIC_RAW: both are monotonic, i.e. NTP doesn't
         // adjust their absolute value, but NTP still adjust the *rate* of the former. Meaning that,
