@@ -507,7 +507,7 @@ impl SingleRun<'_> {
                     );
                 }
                 process.traced_process.set_syscall_result(result)?;
-                process.traced_process.set_syscall_no(-1)?; // skip syscall
+                process.traced_process.set_active_syscall_no(-1)?; // skip syscall
                 process.state = ProcessState::Alive;
             }
             EmulatedSyscall::Redirect(args, state) => {

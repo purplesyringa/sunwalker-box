@@ -88,6 +88,20 @@ impl std::ops::DerefMut for Registers {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+impl Registers {
+    pub fn get_stack_pointer(&self) -> usize {
+        self.0.rsp as usize
+    }
+}
+
+#[cfg(target_arch = "aarch64")]
+impl Registers {
+    pub fn get_stack_pointer(&self) -> usize {
+        self.sp as usize
+    }
+}
+
 #[derive(Clone, Copy)]
 pub struct SyscallArgs {
     pub syscall_no: i32,
@@ -398,13 +412,13 @@ impl TracedProcess {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn set_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
+    pub fn set_active_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
         self.registers_edited = true;
         self._load_registers()?.orig_rax = syscall_no as u64;
         Ok(())
     }
     #[cfg(target_arch = "aarch64")]
-    pub fn set_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
+    pub fn set_active_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
         let mut iovec = libc::iovec {
             iov_base: &syscall_no as *const _ as *mut c_void,
             iov_len: std::mem::size_of_val(&syscall_no),
@@ -455,7 +469,7 @@ impl TracedProcess {
         for (i, value) in args.args.iter().enumerate() {
             self.set_syscall_arg(i, *value)?;
         }
-        self.set_syscall_no(args.syscall_no)
+        self.set_active_syscall_no(args.syscall_no)
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -471,13 +485,8 @@ impl TracedProcess {
         Ok(())
     }
 
-    #[cfg(target_arch = "x86_64")]
     pub fn get_stack_pointer(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.rsp as usize)
-    }
-    #[cfg(target_arch = "aarch64")]
-    pub fn get_stack_pointer(&mut self) -> io::Result<usize> {
-        Ok(self.get_registers()?.sp as usize)
+        Ok(self._load_registers()?.get_stack_pointer())
     }
 }
 
