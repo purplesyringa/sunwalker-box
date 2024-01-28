@@ -1,22 +1,11 @@
 macro_rules! table {
     ($fn_name:tt, $table_name:tt, $formatter:tt, $default_formatter:tt) => {
         pub fn $fn_name(number: i32) -> String {
-            const INFO: (usize, usize) = unsafe {
-                std::mem::transmute(*include_bytes!(concat!(
-                    "../../target/",
-                    $table_name,
-                    ".info"
-                )))
-            };
+            const INFO: (usize, usize) = include!(concat!("../../target/", $table_name, ".info"));
             const TABLE_LENGTH: usize = INFO.0;
             const MAX_LENGTH: usize = INFO.1;
-            static TABLE_OFFSETS: &[u16; TABLE_LENGTH] = unsafe {
-                &std::mem::transmute(*include_bytes!(concat!(
-                    "../../target/",
-                    $table_name,
-                    ".offsets"
-                )))
-            };
+            static TABLE_OFFSETS: [u16; TABLE_LENGTH] =
+                include!(concat!("../../target/", $table_name, ".offsets"));
             static TABLE_NAMES: &[u8] =
                 include_bytes!(concat!("../../target/", $table_name, ".names"));
 
