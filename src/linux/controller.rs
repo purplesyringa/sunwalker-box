@@ -1,10 +1,10 @@
 use crate::{
     entry,
-    linux::{cgroups, manager, mountns, procs, reaper, rootfs, sandbox, system},
+    linux::{cgroups, manager, reaper, rootfs, sandbox, system},
     log,
 };
 use anyhow::{anyhow, ensure, Context, Result};
-use nix::{libc, sys::resource};
+use nix::{libc, sched, sys::resource};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -65,7 +65,8 @@ impl Controller {
 
         // Do whatever cannot be done inside the userns. This mostly amounts to mounting stuff.
         // Create an isolated mountns for a dedicated /tmp/sunwalker_box directory
-        mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
+        sched::unshare(sched::CloneFlags::CLONE_NEWNS)
+            .context("Failed to unshare mount namespace")?;
         // Ensure our working area is ours only
         system::change_propagation("/", libc::MS_PRIVATE | libc::MS_REC)
             .context("Failed to change propagation to private")?;
@@ -113,7 +114,8 @@ impl Controller {
 
         // Run a child in a new PID namespace
         log!("Unsharing pidns");
-        procs::unshare_pidns().context("Failed to unshare pid namespace")?;
+        sched::unshare(sched::CloneFlags::CLONE_NEWPID)
+            .context("Failed to unshare pid namespace")?;
 
         // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
         // communication doesn't work well, so we use pidfd. As a side note, pidfd_open sets O_CLOEXEC

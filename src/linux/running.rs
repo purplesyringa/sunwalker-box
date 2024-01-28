@@ -7,6 +7,7 @@ use crossmist::Object;
 use nix::{
     errno, libc,
     libc::pid_t,
+    sched,
     sys::{epoll, ptrace, resource, signal, signalfd, time, wait},
     unistd,
     unistd::Pid,
@@ -134,7 +135,8 @@ impl Runner {
         rootfs::enter_rootfs().context("Failed to enter rootfs")?;
 
         // Unshare IPC namespace now, so that it is owned by the new userns and can be configured
-        ipc::unshare_ipc_namespace().context("Failed to unshare IPC namespace")?;
+        sched::unshare(sched::CloneFlags::CLONE_NEWIPC)
+            .context("Failed to unshare IPC namespace")?;
 
         // Create signalfd to watch child's state change
         let mut sigset = signal::SigSet::empty();

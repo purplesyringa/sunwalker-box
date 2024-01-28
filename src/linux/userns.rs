@@ -1,15 +1,13 @@
 use crate::linux::ids::*;
 use anyhow::{Context, Result};
-use nix::{libc, libc::CLONE_NEWUSER, unistd};
+use nix::{libc, sched, unistd};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
     let (mut tx, rx) = crossmist::channel::<()>().context("Failed to create channel")?;
     let child = configure_ns.spawn(rx).context("Failed to start child")?;
 
-    if unsafe { libc::unshare(CLONE_NEWUSER) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("unshare() failed");
-    }
+    sched::unshare(sched::CloneFlags::CLONE_NEWUSER).context("Failed to unshare user namespace")?;
 
     tx.send(&()).context("Failed to trigger child")?;
 

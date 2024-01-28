@@ -1,9 +1,6 @@
 use crate::linux::system;
 use anyhow::{bail, ensure, Context, Result};
-use nix::{
-    libc,
-    libc::{c_char, CLONE_NEWNET, CLONE_NEWUTS, CLONE_SYSVSEM},
-};
+use nix::{libc, libc::c_char, sched};
 
 pub fn sanity_checks() -> Result<()> {
     // suid_dumpable = 1 means PR_SET_DUMPABLE does not trigger automatically on setuid, which is
@@ -50,9 +47,12 @@ pub fn sanity_checks() -> Result<()> {
 }
 
 pub fn unshare_persistent_namespaces() -> Result<()> {
-    if unsafe { libc::unshare(CLONE_NEWUTS | CLONE_SYSVSEM | CLONE_NEWNET) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("Failed to unshare namespaces");
-    }
+    sched::unshare(
+        sched::CloneFlags::CLONE_NEWUTS
+            | sched::CloneFlags::CLONE_SYSVSEM
+            | sched::CloneFlags::CLONE_NEWNET,
+    )
+    .context("Failed to unshare namespaces")?;
 
     // Configure UTS namespace
     let domain_name = "sunwalker";

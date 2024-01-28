@@ -2,19 +2,12 @@ use crate::{linux::system, log};
 use anyhow::{Context, Result};
 use nix::{
     libc,
-    libc::{c_int, pid_t, CLONE_NEWIPC},
+    libc::{c_int, pid_t},
     sched,
 };
 use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::os::unix::fs::PermissionsExt;
-
-pub fn unshare_ipc_namespace() -> Result<()> {
-    if unsafe { libc::unshare(CLONE_NEWIPC) } != 0 {
-        return Err(std::io::Error::last_os_error()).context("unshare() failed");
-    }
-    Ok(())
-}
 
 pub fn mount_mqueue(path: &str) -> Result<()> {
     system::mount("mqueue", path, "mqueue", 0, None)

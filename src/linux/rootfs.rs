@@ -1,9 +1,9 @@
 use crate::{
-    linux::{ids, mountns, procs, system},
+    linux::{ids, procs, system},
     log,
 };
 use anyhow::{anyhow, ensure, Context, Result};
-use nix::libc;
+use nix::{libc, sched};
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
 use std::io::{BufRead, ErrorKind};
@@ -114,7 +114,7 @@ pub fn configure_rootfs() -> Result<()> {
 
     // We want to unmount /oldroot and others, so we need to switch to a new mount namespace. But we
     // don't want mounts to get locked, so the user namespace has to stay the same.
-    mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
+    sched::unshare(sched::CloneFlags::CLONE_NEWNS).context("Failed to unshare mount namespace")?;
     system::change_propagation("/oldroot", libc::MS_PRIVATE)
         .context("Failed to change propagation of /oldroot")?;
     system::umount_opt("/oldroot", libc::MNT_DETACH).context("Failed to unmount /oldroot")?;
@@ -149,7 +149,7 @@ pub fn enter_rootfs() -> Result<()> {
     // chroot, and if we want to obtain the level of security pivot_root might otherwise grant, we
     // have to call pivot_root earlier, in the main process.
 
-    mountns::unshare_mountns().context("Failed to unshare mount namespace")?;
+    sched::unshare(sched::CloneFlags::CLONE_NEWNS).context("Failed to unshare mount namespace")?;
 
     // Chroot into /newroot
     std::env::set_current_dir("/newroot").context("Failed to chdir to /newroot")?;

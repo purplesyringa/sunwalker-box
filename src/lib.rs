@@ -17,7 +17,6 @@ mod linux {
     mod ipc;
     mod kmodule;
     mod manager;
-    mod mountns;
     mod openat;
     mod procs;
     mod reaper;

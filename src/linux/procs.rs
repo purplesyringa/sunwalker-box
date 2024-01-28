@@ -1,14 +1,7 @@
 use crate::{linux::system, log};
 use anyhow::{Context, Result};
-use nix::{libc, libc::CLONE_NEWPID};
+use nix::libc;
 use std::path::PathBuf;
-
-pub fn unshare_pidns() -> std::io::Result<()> {
-    if unsafe { libc::unshare(CLONE_NEWPID) } != 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-    Ok(())
-}
 
 pub fn mount_procfs(proc_path: &str) -> Result<()> {
     system::mount("none", proc_path, "proc", 0, None)?;
