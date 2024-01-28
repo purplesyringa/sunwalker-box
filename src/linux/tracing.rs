@@ -82,79 +82,198 @@ pub struct ptrace_rseq_configuration {
     pub pad: u32,
 }
 
-#[cfg(target_arch = "x86_64")]
 #[derive(Clone)]
-pub struct Registers(libc::user_regs_struct);
+pub struct FixedRegSet<const TYPE: i32, T: Copy> {
+    value: T,
+}
 
-#[cfg(target_arch = "aarch64")]
-#[repr(C)]
+struct VariableRegSet {
+    value: Vec<u8>,
+}
+
+impl<const TYPE: i32, T: Copy> std::ops::Deref for FixedRegSet<TYPE, T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        &self.value
+    }
+}
+
+impl<const TYPE: i32, T: Copy> std::ops::DerefMut for FixedRegSet<TYPE, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.value
+    }
+}
+
+impl<const TYPE: i32, T: Copy> FixedRegSet<TYPE, T> {
+    fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
+        let mut value = std::mem::MaybeUninit::<T>::uninit();
+        let mut iovec = libc::iovec {
+            iov_base: value.as_mut_ptr() as *mut c_void,
+            iov_len: std::mem::size_of::<T>(),
+        };
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_GETREGSET,
+                pid.as_raw(),
+                TYPE as *mut c_void,
+                &mut iovec,
+            )
+        } == -1
+        {
+            return Err(Errno::last());
+        }
+        if iovec.iov_len < std::mem::size_of::<T>() {
+            return Err(Errno::EINVAL);
+        }
+        let value = unsafe { value.assume_init() };
+        Ok(Self { value })
+    }
+
+    fn ptrace_set(&self, pid: Pid) -> Result<()> {
+        let mut iovec = libc::iovec {
+            iov_base: &self.value as *const _ as *mut c_void,
+            iov_len: std::mem::size_of::<T>(),
+        };
+        if unsafe {
+            libc::ptrace(
+                libc::PTRACE_SETREGSET,
+                pid.as_raw(),
+                TYPE as *mut c_void,
+                &mut iovec,
+            )
+        } == -1
+        {
+            return Err(std::io::Error::last_os_error())
+                .context("Failed to store registers of the child")?;
+        }
+        ensure!(
+            iovec.iov_len >= std::mem::size_of::<T>(),
+            "Failed to store registers of the child: too short register set"
+        );
+        Ok(())
+    }
+}
+
 #[derive(Clone)]
 pub struct Registers {
-    pub regs: [u64; 31],
-    pub sp: u64,
-    pub pc: u64,
-    pub pstate: u64,
+    pub prstatus: FixedRegSet<{ libc::NT_PRSTATUS }, libc::user_regs_struct>,
+    #[cfg(target_arch = "aarch64")]
+    arm_system_call: FixedRegSet<{ libc::NT_ARM_SYSTEM_CALL }, i32>,
 }
 
-#[cfg(target_arch = "x86_64")]
-impl std::ops::Deref for Registers {
-    type Target = libc::user_regs_struct;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-#[cfg(target_arch = "x86_64")]
-impl std::ops::DerefMut for Registers {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.0
-    }
+macro_rules! match_arch {
+    ($($arch:literal => $value:expr),* $(,)?) => {
+        match () {
+            $(
+                #[cfg(target_arch = $arch)]
+                () => $value,
+            )*
+        }
+    };
 }
 
-#[cfg(target_arch = "x86_64")]
 impl Registers {
+    fn ptrace_get(pid: Pid) -> Result<Self, Errno> {
+        Ok(Self {
+            prstatus: FixedRegSet::ptrace_get(pid)?,
+            #[cfg(target_arch = "aarch64")]
+            arm_system_call: FixedRegSet::ptrace_get(pid)?,
+        })
+    }
+    fn ptrace_set(&self, pid: Pid) -> Result<()> {
+        self.prstatus.ptrace_set(pid)?;
+        #[cfg(target_arch = "aarch64")]
+        self.arm_system_call.ptrace_set(pid)?;
+        Ok(())
+    }
+
     pub fn get_instruction_pointer(&self) -> usize {
-        self.0.rip as usize
+        match_arch! {
+            "x86_64" => self.prstatus.rip as usize,
+            "aarch64" => self.prstatus.pc as usize,
+        }
     }
-
     pub fn set_instruction_pointer(&mut self, address: usize) {
-        self.0.rip = address as u64;
+        match_arch! {
+            "x86_64" => self.prstatus.rip = address as u64,
+            "aarch64" => self.prstatus.pc = address as u64,
+        }
     }
-
     pub fn get_stack_pointer(&self) -> usize {
-        self.0.rsp as usize
+        match_arch! {
+            "x86_64" => self.prstatus.rsp as usize,
+            "aarch64" => self.prstatus.sp as usize,
+        }
     }
-
     pub fn set_stack_pointer(&mut self, address: usize) {
-        self.0.rsp = address as u64;
+        match_arch! {
+            "x86_64" => self.prstatus.rsp = address as u64,
+            "aarch64" => self.prstatus.sp = address as u64,
+        }
     }
-
     pub fn set_syscall_no(&mut self, syscall: usize) {
-        self.0.rax = syscall as u64;
-    }
-}
-
-#[cfg(target_arch = "aarch64")]
-impl Registers {
-    pub fn get_instruction_pointer(&self) -> usize {
-        self.pc as usize
+        match_arch! {
+            "x86_64" => self.prstatus.rax = syscall as u64,
+            "aarch64" => self.prstatus.regs[8] = syscall as u64,
+        }
     }
 
-    pub fn set_instruction_pointer(&mut self, address: usize) {
-        self.pc = address as u64;
+    pub fn get_active_syscall_no(&self) -> usize {
+        match_arch! {
+            "x86_64" => self.prstatus.orig_rax as usize,
+            "aarch64" => *self.arm_system_call as usize,
+        }
     }
 
-    pub fn get_stack_pointer(&self) -> usize {
-        self.sp as usize
+    pub fn set_syscall(&mut self, args: SyscallArgs) {
+        match_arch! {
+            "x86_64" => {
+                self.prstatus.orig_rax = args.syscall_no as u64;
+                self.prstatus.rdi = args.args[0] as u64;
+                self.prstatus.rsi = args.args[1] as u64;
+                self.prstatus.rdx = args.args[2] as u64;
+                self.prstatus.r10 = args.args[3] as u64;
+                self.prstatus.r8 = args.args[4] as u64;
+                self.prstatus.r9 = args.args[5] as u64;
+            },
+            "aarch64" => {
+                *self.arm_system_call = args.syscall_no;
+                self.prstatus.regs[..6].copy_from_slice(&args.args.map(|arg| arg as u64));
+            }
+        }
     }
 
-    pub fn set_stack_pointer(&mut self, address: usize) {
-        self.sp = address as u64;
+    pub fn get_syscall_result(&self) -> usize {
+        match_arch! {
+            "x86_64" => self.prstatus.rax as usize,
+            "aarch64" => self.prstatus.regs[0] as usize,
+        }
+    }
+    pub fn set_syscall_result(&mut self, value: usize) {
+        match_arch! {
+            "x86_64" => self.prstatus.rax = value as u64,
+            "aarch64" => self.prstatus.regs[0] = value as u64,
+        }
     }
 
-    pub fn set_syscall_no(&mut self, syscall: usize) {
-        // see syscall(3)
-        self.regs[8] = syscall as u64;
+    #[cfg(target_arch = "x86_64")]
+    pub fn copy_segment_regs(&mut self) {
+        macro_rules! read_segment_register {
+            ($($name:ident)*) => {
+                $(
+                    std::arch::asm!(
+                        concat!("mov {:x}, ", stringify!($name)),
+                        out(reg) self.prstatus.$name
+                    );
+                )*
+            }
+        }
+        unsafe {
+            read_segment_register!(cs ss ds es fs gs);
+        }
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    pub fn copy_segment_regs(&mut self) {}
 }
 
 #[derive(Clone, Copy)]
@@ -180,6 +299,12 @@ impl std::fmt::Display for SyscallArgs {
 
 #[macro_export]
 macro_rules! syscall {
+    (skip) => {
+        $crate::linux::tracing::SyscallArgs {
+            syscall_no: -1,
+            args: [0, 0, 0, 0, 0, 0],
+        }
+    };
     ($name:ident($($args:expr),*)) => {
         {
             // Use (|| $args)() instead of $args so that -1 is inferred as i32 as opposed to usize
@@ -346,7 +471,10 @@ impl TracedProcess {
 
     fn get_auxiliary_vector_address(&mut self) -> Result<usize> {
         let word_size = std::mem::size_of::<usize>();
-        let mut address = self.get_stack_pointer()?;
+        let mut address = self
+            .get_registers()
+            .context("Failed to read registers")?
+            .get_stack_pointer();
 
         // Skip argc & argv
         let argc = self.read_word(address).context("Failed to read argc")?;
@@ -452,61 +580,11 @@ impl TracedProcess {
         unsafe { Ok(data.assume_init()) }
     }
 
-    #[cfg(target_arch = "x86_64")]
     fn _get_registers(pid: Pid) -> Result<Registers, Errno> {
-        ptrace::getregs(pid).map(Registers)
+        Registers::ptrace_get(pid)
     }
-    #[cfg(target_arch = "aarch64")]
-    fn _get_registers(pid: Pid) -> Result<Registers, Errno> {
-        let mut data = std::mem::MaybeUninit::<Registers>::uninit();
-        let mut iovec = libc::iovec {
-            iov_base: data.as_mut_ptr() as *mut c_void,
-            iov_len: std::mem::size_of_val(&data),
-        };
-        if unsafe {
-            libc::ptrace(
-                libc::PTRACE_GETREGSET,
-                pid.as_raw(),
-                libc::NT_PRSTATUS as *mut c_void,
-                &mut iovec,
-            )
-        } == -1
-        {
-            return Err(Errno::last());
-        }
-        if iovec.iov_len < std::mem::size_of_val(&data) {
-            return Err(Errno::EINVAL);
-        }
-        unsafe { Ok(data.assume_init()) }
-    }
-
-    #[cfg(target_arch = "x86_64")]
     fn _set_registers(&self, regs: Registers) -> Result<()> {
-        ptrace::setregs(self.pid, *regs).context("Failed to store registers of the child")
-    }
-    #[cfg(target_arch = "aarch64")]
-    fn _set_registers(&self, regs: Registers) -> Result<()> {
-        let mut iovec = libc::iovec {
-            iov_base: &regs as *const _ as *mut c_void,
-            iov_len: std::mem::size_of_val(&regs),
-        };
-        if unsafe {
-            libc::ptrace(
-                libc::PTRACE_SETREGSET,
-                self.pid.as_raw(),
-                libc::NT_PRSTATUS as *mut c_void,
-                &mut iovec,
-            )
-        } == -1
-        {
-            return Err(std::io::Error::last_os_error())
-                .context("Failed to store registers of the child")?;
-        }
-        anyhow::ensure!(
-            iovec.iov_len >= std::mem::size_of_val(&regs),
-            "Failed to store registers of the child: too short register set"
-        );
-        Ok(())
+        regs.ptrace_set(self.pid)
     }
 
     fn _load_registers(&mut self) -> io::Result<&mut Registers> {
@@ -531,125 +609,6 @@ impl TracedProcess {
     pub fn set_registers(&mut self, regs: Registers) {
         self.registers_edited = true;
         self.cached_registers = Some(Ok(regs));
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub fn set_active_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
-        self.registers_edited = true;
-        self._load_registers()?.orig_rax = syscall_no as u64;
-        Ok(())
-    }
-    #[cfg(target_arch = "aarch64")]
-    pub fn set_active_syscall_no(&mut self, syscall_no: i32) -> io::Result<()> {
-        let mut iovec = libc::iovec {
-            iov_base: &syscall_no as *const _ as *mut c_void,
-            iov_len: std::mem::size_of_val(&syscall_no),
-        };
-        if unsafe {
-            libc::ptrace(
-                libc::PTRACE_SETREGSET,
-                self.pid.as_raw(),
-                libc::NT_ARM_SYSTEM_CALL as *mut c_void,
-                &mut iovec,
-            )
-        } == -1
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        if iovec.iov_len < std::mem::size_of_val(&syscall_no) {
-            return Err(io::Error::from_raw_os_error(libc::EINVAL));
-        }
-        Ok(())
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub fn get_active_syscall_no(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.orig_rax as usize)
-    }
-    #[cfg(target_arch = "aarch64")]
-    pub fn get_active_syscall_no(&mut self) -> io::Result<usize> {
-        let mut data = std::mem::MaybeUninit::<u32>::uninit();
-        let mut iovec = libc::iovec {
-            iov_base: data.as_mut_ptr() as *mut c_void,
-            iov_len: std::mem::size_of_val(&data),
-        };
-        if unsafe {
-            libc::ptrace(
-                libc::PTRACE_GETREGSET,
-                self.pid.as_raw(),
-                libc::NT_ARM_SYSTEM_CALL as *mut c_void,
-                &mut iovec,
-            )
-        } == -1
-        {
-            return Err(std::io::Error::last_os_error());
-        }
-        if iovec.iov_len < std::mem::size_of_val(&data) {
-            return Err(io::Error::from_raw_os_error(libc::EINVAL));
-        }
-        unsafe { Ok(data.assume_init() as usize) }
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
-        self.registers_edited = true;
-        let regs = self._load_registers()?;
-        let arg = arg as u64;
-        match index {
-            0 => regs.rdi = arg,
-            1 => regs.rsi = arg,
-            2 => regs.rdx = arg,
-            3 => regs.r10 = arg,
-            4 => regs.r8 = arg,
-            5 => regs.r9 = arg,
-            _ => panic!("syscall argument index >= 6"),
-        }
-        Ok(())
-    }
-    #[cfg(target_arch = "aarch64")]
-    fn set_syscall_arg(&mut self, index: usize, arg: usize) -> io::Result<()> {
-        assert!(index < 6);
-        self.registers_edited = true;
-        let regs = self._load_registers()?;
-        regs.regs[index] = arg as u64;
-        Ok(())
-    }
-
-    pub fn set_syscall(&mut self, args: SyscallArgs) -> io::Result<()> {
-        for (i, value) in args.args.iter().enumerate() {
-            self.set_syscall_arg(i, *value)?;
-        }
-        self.set_active_syscall_no(args.syscall_no)
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub fn get_syscall_result(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.rax as usize)
-    }
-    #[cfg(target_arch = "aarch64")]
-    pub fn get_syscall_result(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.regs[0] as usize)
-    }
-
-    #[cfg(target_arch = "x86_64")]
-    pub fn set_syscall_result(&mut self, result: usize) -> io::Result<()> {
-        self.registers_edited = true;
-        self._load_registers()?.rax = result as u64;
-        Ok(())
-    }
-    #[cfg(target_arch = "aarch64")]
-    pub fn set_syscall_result(&mut self, result: usize) -> io::Result<()> {
-        self.registers_edited = true;
-        self._load_registers()?.regs[0] = result as u64;
-        Ok(())
-    }
-
-    pub fn get_stack_pointer(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.get_stack_pointer())
-    }
-
-    pub fn get_instruction_pointer(&mut self) -> io::Result<usize> {
-        Ok(self._load_registers()?.get_instruction_pointer())
     }
 
     #[cfg(target_arch = "x86_64")]
@@ -694,10 +653,11 @@ impl TracedProcess {
             self.resume_syscall()?;
             self.wait_for_ptrace_syscall()?;
         }
-        self.set_syscall(syscall)?;
+        self._load_registers()?.set_syscall(syscall);
+        self.registers_edited = true;
         self.resume_syscall()?;
         self.wait_for_ptrace_syscall()?;
-        let result = self.get_syscall_result()?;
+        let result = self.get_registers()?.get_syscall_result();
         if (-4095..0).contains(&(result as isize)) {
             let errno = -(result as i32);
             log!(

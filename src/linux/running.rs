@@ -706,6 +706,7 @@ impl SingleRun<'_> {
         process: &mut ProcessInfo,
         syscall: EmulatedSyscall,
     ) -> Result<()> {
+        let mut regs = process.traced_process.get_registers()?;
         match syscall {
             EmulatedSyscall::Result(result) => {
                 if result as isize >= 0 {
@@ -716,17 +717,21 @@ impl SingleRun<'_> {
                         string_table::errno_to_name(-(result as i32))
                     );
                 }
-                process.traced_process.set_syscall_result(result)?;
-                process.traced_process.set_active_syscall_no(-1)?; // skip syscall
+                // On aarch64, syscall result is stored in x0, just like the first argument of a
+                // syscall. We always assume syscalls have all 6 arguments and override x0..x5.
+                // Therefore, these two lines have to be in exactly this order.
+                regs.set_syscall(syscall!(skip));
+                regs.set_syscall_result(result);
                 process.state = ProcessState::Alive;
             }
             EmulatedSyscall::Redirect(args, state) => {
                 log!("Emulating -> {args} (redirect)");
-                process.traced_process.set_syscall(args)?;
+                regs.set_syscall(args);
                 process.state = state;
             }
         }
 
+        process.traced_process.set_registers(regs);
         if process.state == ProcessState::Alive {
             process.traced_process.resume()?;
         } else {
@@ -877,7 +882,8 @@ impl SingleRun<'_> {
 
                         // Account for red zone
                         let file_name_addr =
-                            (process.traced_process.get_stack_pointer()? - 128) - path.len();
+                            (process.traced_process.get_registers()?.get_stack_pointer() - 128)
+                                - path.len();
 
                         process.traced_process.write_memory(file_name_addr, &path)?;
 
@@ -1023,10 +1029,10 @@ impl SingleRun<'_> {
     #[cfg(target_arch = "x86_64")]
     fn emulate_insn(&self, process: &mut ProcessInfo) -> Result<bool> {
         let mut regs = process.traced_process.get_registers()?;
-        let Ok(word) = process.traced_process.read_word(regs.rip as usize) else {
+        let Ok(word) = process.traced_process.read_word(regs.prstatus.rip as usize) else {
             log!(
                 "Not emulating instruction at {:x} -- failed to read word",
-                regs.rip
+                regs.prstatus.rip
             );
             return Ok(false);
         };
@@ -1034,23 +1040,23 @@ impl SingleRun<'_> {
         if word & 0xffff == 0x310f {
             // rdtsc = 0f 31
             log!("Emulating rdtsc");
-            regs.rip += 2;
+            regs.prstatus.rip += 2;
             let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
             tsc += self.tsc_shift;
-            regs.rdx = tsc >> 32;
-            regs.rax = tsc & 0xffffffff;
+            regs.prstatus.rdx = tsc >> 32;
+            regs.prstatus.rax = tsc & 0xffffffff;
             process.traced_process.set_registers(regs);
             process.traced_process.resume()?;
             Ok(true)
         } else if word & 0xffffff == 0xf9010f {
             // rdtscp = 0f 01 f9
             log!("Emulating rdtscp");
-            regs.rip += 3;
+            regs.prstatus.rip += 3;
             let mut tsc = unsafe { core::arch::x86_64::_rdtsc() };
             tsc += self.tsc_shift;
-            regs.rdx = tsc >> 32;
-            regs.rax = tsc & 0xffffffff;
-            regs.rcx = 1;
+            regs.prstatus.rdx = tsc >> 32;
+            regs.prstatus.rax = tsc & 0xffffffff;
+            regs.prstatus.rcx = 1;
             process.traced_process.set_registers(regs);
             process.traced_process.resume()?;
             Ok(true)
