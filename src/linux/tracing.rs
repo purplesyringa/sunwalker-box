@@ -472,7 +472,7 @@ impl TracedProcess {
     fn get_auxiliary_vector_address(&mut self) -> Result<usize> {
         let word_size = std::mem::size_of::<usize>();
         let mut address = self
-            .get_registers()
+            .registers_ref()
             .context("Failed to read registers")?
             .get_stack_pointer();
 
@@ -603,8 +603,12 @@ impl TracedProcess {
         Ok(())
     }
 
-    pub fn get_registers(&mut self) -> io::Result<Registers> {
-        self._load_registers().cloned()
+    pub fn registers_ref(&mut self) -> io::Result<&Registers> {
+        Ok(self._load_registers()?)
+    }
+    pub fn registers_mut(&mut self) -> io::Result<&mut Registers> {
+        self.registers_edited = true;
+        self._load_registers()
     }
     pub fn set_registers(&mut self, regs: Registers) {
         self.registers_edited = true;
@@ -612,11 +616,11 @@ impl TracedProcess {
     }
 
     #[cfg(target_arch = "x86_64")]
-    pub fn get_syscall_insn_length(&self) -> usize {
+    pub fn get_syscall_insn_length() -> usize {
         2
     }
     #[cfg(target_arch = "aarch64")]
-    pub fn get_syscall_insn_length(&self) -> usize {
+    pub fn get_syscall_insn_length() -> usize {
         // svc #0 -> d4000001
         4
     }
@@ -657,7 +661,7 @@ impl TracedProcess {
         self.registers_edited = true;
         self.resume_syscall()?;
         self.wait_for_ptrace_syscall()?;
-        let result = self.get_registers()?.get_syscall_result();
+        let result = self.registers_ref()?.get_syscall_result();
         if (-4095..0).contains(&(result as isize)) {
             let errno = -(result as i32);
             log!(
