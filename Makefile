@@ -33,7 +33,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	strip $^ -o $@
 
-DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper.stripped target/exec_wrapper.itimer_prof target/sunwalker.ko target/syscall_table.offsets target/parasite.bin target/parasite.size target/parasite.result_context_map.json target/parasite.state target/stemcell.stripped target/stemcell.result_context_map.json target/stemcell.relocations target/stemcell.state
+DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper.stripped target/exec_wrapper.itimer_prof target/sunwalker.ko target/syscall_table.offsets target/parasite.bin target/parasite.size target/parasite.result_context_map.json target/parasite.state target/stemcell.stripped target/stemcell.result_context_map.json target/stemcell.relocations target/stemcell.state target/stemcell.size
 
 target/$(TARGET)/release/sunwalker_box: $(DEPS)
 	$(CARGO) build $(CARGO_OPTIONS)
@@ -70,6 +70,8 @@ target/stemcell.relocations: target/stemcell.stripped generate/stemcell_relocati
 	python3 generate/stemcell_relocations.py $< >$@
 target/stemcell.state: target/stemcell
 	readelf -s $< | gawk '/OBJECT.*state/{ print strtonum("0x" $$2) - 0xdeadbeef000 }' >$@
+target/stemcell.size: target/stemcell
+	readelf -s $< | gawk '/NOTYPE.*end_of_bss/{ print strtonum("0x" $$2) - 0xdeadbeef000 }' >$@
 target/stemcell.stripped: target/stemcell
 	strip -s -R .result_context_map $< -o $@
 target/stemcell: cxx/stemcell.cpp $(shell find cxx -name '*.hpp') target/libc.hpp
