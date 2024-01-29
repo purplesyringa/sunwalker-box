@@ -1399,7 +1399,7 @@ fn prefork_master(
     forbidden_transferred_fds: HashSet<RawFd>,
     mut transferred_fds_tx: Sender<Vec<RawFd>>,
 ) {
-    let result: Result<()> = try {
+    let result: Result<!> = try {
         // Make sure transferred fds are not forbidden and make them all non-CLOEXEC
         let mut target_fd = 3;
         for fd in &mut transferred_fds {
@@ -1455,16 +1455,11 @@ fn prefork_master(
 
         ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
         tracing::apply_seccomp_filter(false).context("Failed to apply seccomp filter")?;
-        unistd::fexecve::<&CStr, &CStr>(
-            stemcell.as_raw_fd(),
-            &[CStr::from_bytes_with_nul(b"stemcell\0").unwrap()],
-            &[],
-        )
-        .context("execv failed")?;
+        let argv = [CStr::from_bytes_with_nul(b"stemcell\0").unwrap()];
+        let envp: [&CStr; 0] = [];
+        match unistd::fexecve(stemcell.as_raw_fd(), &argv, &envp).context("execv failed")? {}
     };
 
-    if let Err(e) = result {
-        pipe.send(&format!("{e:?}"))
-            .expect("Failed to report error to parent");
-    }
+    pipe.send(&format!("{:?}", result.into_err()))
+        .expect("Failed to report error to parent");
 }
