@@ -75,7 +75,7 @@ target/stemcell.size: target/stemcell
 target/stemcell.stripped: target/stemcell
 	strip -s -R .result_context_map $< -o $@
 target/stemcell: cxx/stemcell.cpp $(shell find cxx -name '*.hpp') target/libc.hpp
-	$(CXX) $< -o $@ -T cxx/stemcell.ld -static $(CXX_OPTIONS) -Wl,-Ttext=0xdeadbeef0000
+	$(CXX) $< -o $@ -T cxx/stemcell.ld -static $(CXX_OPTIONS)
 
 # Keep the Linux kernel versions in sync with the minimal supported versions listed in README. These
 # two assets are not expected to be built by the user, but are merely to make updates easier for the
