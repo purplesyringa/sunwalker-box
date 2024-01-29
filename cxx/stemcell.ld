@@ -7,6 +7,8 @@ SECTIONS {
         start_of_data = .;
         *(.rodata .rodata.* .gnu.linkonce.r.*)
         *(.data .data.* .gnu.linkonce.d.*)
+        *(.got .got.*)
+        *(.init_array)
         *(.dynbss)
     }
     .result_context_map : {
