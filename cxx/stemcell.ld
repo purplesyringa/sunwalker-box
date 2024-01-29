@@ -23,7 +23,7 @@ SECTIONS {
     .bss : {
         *(.bss .bss.* .gnu.linkonce.b.*)
         *(COMMON)
-        . = ALIGN(4096);
+        . = ALIGN(CONSTANT(MAXPAGESIZE));
         end_of_bss = .;
     } :text
     /DISCARD/ : {
