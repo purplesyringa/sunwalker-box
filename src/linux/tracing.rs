@@ -252,32 +252,20 @@ impl<T: RegSet> RegSet for OptionalRegSet<T> {
     }
 }
 
-const NT_PRFPREG: i32 = 2;
-const NT_X86_XSTATE: i32 = 0x202;
-const NT_ARM_TLS: i32 = 0x401;
-const NT_ARM_SVE: i32 = 0x405;
-const NT_ARM_PACA_KEYS: i32 = 0x407;
-const NT_ARM_PACG_KEYS: i32 = 0x408;
-const NT_ARM_TAGGED_ADDR_CTRL: i32 = 0x409;
-const NT_ARM_PAC_ENABLED_KEYS: i32 = 0x40a;
-const NT_ARM_SSVE: i32 = 0x40b;
-const NT_ARM_ZA: i32 = 0x40c;
-const NT_ARM_ZT: i32 = 0x40d;
-
 #[cfg(target_arch = "aarch64")]
 #[derive(Clone)]
 struct Aarch64Registers {
-    prfpreg: FixedRegSet<NT_PRFPREG, libc::user_fpsimd_struct>,
-    tls: FixedRegSet<NT_ARM_TLS, [usize; 2]>,
+    prfpreg: FixedRegSet<{ libc::NT_PRFPREG }, libc::user_fpsimd_struct>,
+    tls: FixedRegSet<{ libc::NT_ARM_TLS }, [usize; 2]>,
     system_call: FixedRegSet<{ libc::NT_ARM_SYSTEM_CALL }, i32>,
-    sve: OptionalRegSet<VariableRegSet<NT_ARM_SVE>>,
-    ssve: OptionalRegSet<VariableRegSet<NT_ARM_SSVE>>,
-    za: OptionalRegSet<VariableRegSet<NT_ARM_ZA>>,
-    zt: OptionalRegSet<VariableRegSet<NT_ARM_ZT>>,
-    pac_enabled_keys: OptionalRegSet<FixedRegSet<NT_ARM_PAC_ENABLED_KEYS, u64>>,
-    paca_keys: OptionalRegSet<FixedRegSet<NT_ARM_PACA_KEYS, [u128; 4]>>,
-    pacg_keys: OptionalRegSet<FixedRegSet<NT_ARM_PACG_KEYS, u128>>,
-    tagged_addr_ctrl: OptionalRegSet<FixedRegSet<NT_ARM_TAGGED_ADDR_CTRL, u64>>,
+    sve: OptionalRegSet<VariableRegSet<{ libc::NT_ARM_SVE }>>,
+    ssve: OptionalRegSet<VariableRegSet<{ libc::NT_ARM_SSVE }>>,
+    za: OptionalRegSet<VariableRegSet<{ libc::NT_ARM_ZA }>>,
+    zt: OptionalRegSet<VariableRegSet<{ libc::NT_ARM_ZT }>>,
+    pac_enabled_keys: OptionalRegSet<FixedRegSet<{ libc::NT_ARM_PAC_ENABLED_KEYS }, u64>>,
+    paca_keys: OptionalRegSet<FixedRegSet<{ libc::NT_ARM_PACA_KEYS }, [u128; 4]>>,
+    pacg_keys: OptionalRegSet<FixedRegSet<{ libc::NT_ARM_PACG_KEYS }, u128>>,
+    tagged_addr_ctrl: OptionalRegSet<FixedRegSet<{ libc::NT_ARM_TAGGED_ADDR_CTRL }, u64>>,
 }
 
 #[cfg(target_arch = "aarch64")]
@@ -331,7 +319,7 @@ impl RegSet for Aarch64Registers {
 pub struct Registers {
     pub prstatus: FixedRegSet<{ libc::NT_PRSTATUS }, libc::user_regs_struct>,
     #[cfg(target_arch = "x86_64")]
-    x86_xstate: VariableRegSet<{ NT_X86_XSTATE }>,
+    x86_xstate: VariableRegSet<{ libc::NT_X86_XSTATE }>,
     #[cfg(target_arch = "aarch64")]
     arm: Aarch64Registers,
 }
