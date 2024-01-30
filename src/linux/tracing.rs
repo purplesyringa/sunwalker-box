@@ -346,6 +346,8 @@ impl Registers {
         })
     }
     fn ptrace_set(&self, pid: Pid) -> Result<()> {
+        // XXX: This *breaks* effeciency fix that existed before Registers refactoring -- do not set
+        // unmodified registers, and only modify those which really were modified
         self.prstatus.ptrace_set(pid)?;
         #[cfg(target_arch = "x86_64")]
         self.x86_xstate.ptrace_set(pid)?;
