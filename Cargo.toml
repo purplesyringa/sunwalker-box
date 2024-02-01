@@ -2,7 +2,7 @@
 name = "sunwalker_box"
 version = "0.1.0"
 edition = "2021"
-authors = ["Alisa Sireneva <imachug@gmail.com>"]
+authors = ["Alisa Sireneva <me@purplesyringa.moe>"]
 license = "Apache-2.0"
 description = "Sandbox for sunwalker judge system"
 
