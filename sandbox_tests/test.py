@@ -380,7 +380,12 @@ class SimpleTest(Test):
                 self._bind(box)
                 exec(self.script, aliases | locals() | globals())
             except Exception as e:
-                error_line = e.__traceback__.tb_next.tb_lineno
+                error_line = -1
+                if e.__traceback__.tb_next:
+                    error_line = e.__traceback__.tb_next.tb_lineno
+                if isinstance(e, SyntaxError):
+                    error_line = e.lineno
+
                 arrow, blue, reset = '\x1b[91m->', '\x1b[34m', '\x1b[0m'
                 script = '\n'.join(
                     f"  {arrow if i == error_line else '  '}{blue}{i:2}{reset}  {line}"
