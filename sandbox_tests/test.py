@@ -398,12 +398,24 @@ class SimpleTest(Test):
 
 class CTest(SimpleTest):
     def prepare(self, tester):
-        cc = "gcc"
-        ccflags = ""
+        ccflags = " -static" if self.static else ""
 
-        if self.static:
+        try:
+            _gcc = subprocess.run(["gcc", "-v"], capture_output=True, text=True).stderr
+        except:
+            _gcc = ""
+
+        try:
+            _musl_gcc = subprocess.run(["musl-gcc", "-v"], capture_output=True, text=True).stderr
+        except:
+            _musl_gcc = ""
+
+        if "musl" in _gcc:
+            cc = "gcc"
+        elif "musl" in _musl_gcc:
             cc = "musl-gcc"
-            ccflags += " -static"
+        else:
+            assert False, "You need a working musl gcc (gcc or musl-gcc binary in PATH) to run C tests"
 
         tester.f_makefile.write(f"{self.slug}: ../tests/{self.slug}.c\n\t{cc} $^ -o $@{ccflags}\n\n")
         tester.make_targets.append(f"{self.slug}")
