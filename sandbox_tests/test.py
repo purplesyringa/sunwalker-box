@@ -443,6 +443,11 @@ class PyTest(SimpleTest):
         box.bind(os.path.abspath(f"tests/{self.slug}.py"), self.path, readonly=True)
 
 
+class YamlTest(SimpleTest):
+    def _bind(self, box):
+        pass
+
+
 class Tester:
     def __init__(self, f_makefile: io.TextIOBase, arch: str, test_whitelist: Optional[list[str]] = None):
         self.f_makefile = f_makefile
@@ -468,6 +473,15 @@ class Tester:
         slug = os.path.basename(source_path).removesuffix(".py")
 
         self.tests.append(PyTest(slug, **header))
+
+    def register_yaml_test(self, source_path: str):
+        with open(source_path) as f:
+            yaml_header = f.read()
+        header = yaml.unsafe_load(yaml_header)
+
+        slug = os.path.basename(source_path).removesuffix(".yaml")
+
+        self.tests.append(YamlTest(slug, **header))
 
     def prepare(self):
         for test in self.tests:
@@ -578,11 +592,14 @@ def main():
         # box.cat("/space/stdout")
 
         for test_file in sorted(os.listdir("tests")):
-            name = test_file.rpartition(".")[0]
+            name = test_file.partition(".")[0]
+            path = os.path.join("tests", test_file)
             if test_file.endswith(".c"):
-                tester.register_c_test(os.path.join("tests", test_file))
+                tester.register_c_test(path)
             elif test_file.endswith(".py"):
-                tester.register_py_test(os.path.join("tests", test_file))
+                tester.register_py_test(path)
+            elif test_file.endswith(".yaml"):
+                tester.register_yaml_test(path)
 
         tester.prepare()
         tester.run()
