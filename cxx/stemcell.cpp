@@ -8,6 +8,7 @@
 #include "remembrances/memory_maps.hpp"
 #include "remembrances/mm_options.hpp"
 #include "remembrances/personality.hpp"
+#include "remembrances/robust_list.hpp"
 #include "remembrances/signal_handlers.hpp"
 #include "remembrances/thp_options.hpp"
 #include "remembrances/tid_address.hpp"
@@ -25,6 +26,7 @@ struct State {
     memory_maps::State memory_maps;
     mm_options::State mm_options;
     personality::State personality;
+    robust_futexes::State robust_list;
     signal_handlers::State signal_handlers;
     thp_options::State thp_options;
     tid_address::State tid_address;
@@ -124,6 +126,9 @@ Result<void> init_child(const ControlMessageFds &fds) {
     memory_maps::load_after_fork(state.memory_maps)
         .CONTEXT("Failed to load shared memory maps")
         .TRY();
+
+    // Robust lists are per-thread therefore restore them after fork
+    robust_futexes::load(state.robust_list).CONTEXT("Failed to load robust list").TRY();
 
     // File descriptors have to be restored after fork, as dup2 doesn't clone the underlying file
     // descriptor but uses the same one, and thus updates to file offset and other information would
