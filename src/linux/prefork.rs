@@ -152,6 +152,12 @@ struct ItimersState {
 }
 
 #[repr(C)]
+struct RobustList {
+    head: usize,
+    len: usize,
+}
+
+#[repr(C)]
 struct ParasiteState {
     result: u64,
     alternative_stack: libc::stack_t,
@@ -160,6 +166,7 @@ struct ParasiteState {
     program_break: usize,
     pending_signals: u64,
     personality: usize,
+    robust_list: RobustList,
     signal_handlers: [libc::sigaction; 64],
     thp_options: usize,
     tid_address: usize,
@@ -177,6 +184,7 @@ struct StemcellState {
     memory_maps: MemoryMaps,
     mm_options: prctl_mm_map,
     personality: usize,
+    robust_list: RobustList,
     signal_handlers: [libc::sigaction; 64],
     thp_options: usize,
     tid_address: usize,
@@ -839,6 +847,11 @@ impl<'a> Suspender<'a> {
             std::ptr::copy_nonoverlapping(
                 &parasite_state.itimers,
                 &mut stemcell_state_mut.itimers,
+                1,
+            );
+            std::ptr::copy_nonoverlapping(
+                &parasite_state.robust_list,
+                &mut stemcell_state_mut.robust_list,
                 1,
             );
             std::ptr::copy_nonoverlapping(
