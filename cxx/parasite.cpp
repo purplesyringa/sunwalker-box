@@ -7,6 +7,7 @@
 #include "remembrances/pending_signals.hpp"
 #include "remembrances/personality.hpp"
 #include "remembrances/program_break.hpp"
+#include "remembrances/robust_list.hpp"
 #include "remembrances/signal_handlers.hpp"
 #include "remembrances/thp_options.hpp"
 #include "remembrances/tid_address.hpp"
@@ -22,6 +23,7 @@ struct State {
     program_break::State program_break;
     pending_signals::State pending_signals;
     personality::State personality;
+    robust_futexes::State robust_list;
     signal_handlers::State signal_handlers;
     thp_options::State thp_options;
     tid_address::State tid_address;
@@ -41,6 +43,7 @@ Result<void> run() {
     program_break::save(state.program_break).CONTEXT("Failed to save program break").TRY();
     pending_signals::save(state.pending_signals).CONTEXT("Failed to save pending signals").TRY();
     personality::save(state.personality).CONTEXT("Failed to save personality").TRY();
+    robust_futexes::save(state.robust_list).CONTEXT("Failed to save robust list").TRY();
     signal_handlers::save(state.signal_handlers).CONTEXT("Failed to save signal handlers").TRY();
     thp_options::save(state.thp_options)
         .CONTEXT("Failed to save transparent huge pages options")
