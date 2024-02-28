@@ -1,5 +1,5 @@
 use crate::{
-    linux::{cgroups, ids, string_table, system, timens, tracing, userns},
+    linux::{cgroups, ids, string_table, system, timens, tracing, tracing::Timer, userns},
     log, syscall,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
@@ -182,6 +182,12 @@ struct ParasiteState {
 }
 
 #[repr(C)]
+struct TimerList {
+    timers: [Timer; 64],
+    timer_count: usize,
+}
+
+#[repr(C)]
 struct StemcellState {
     result: u64,
     end_of_memory_space: usize,
@@ -196,6 +202,7 @@ struct StemcellState {
     signal_handlers: [kernel_sigaction; 64],
     thp_options: usize,
     tid_address: usize,
+    timers: TimerList,
     umask: mode_t,
     controlling_fd: RawFd,
 }
@@ -697,6 +704,7 @@ impl<'a> Suspender<'a> {
             .context("Failed to collect file descriptors")?;
         self.collect_mm_options()
             .context("Failed to collect memory map options")?;
+        self.collect_timers().context("Failed to collect timers")?;
 
         let memory_maps = self.orig.get_memory_maps().context("Get memory maps")?;
         self.translate_memory_maps(&memory_maps)
@@ -995,6 +1003,28 @@ impl<'a> Suspender<'a> {
         mm_options.auxv = 0;
         mm_options.auxv_size = 0;
         mm_options.exe_fd = -1;
+        Ok(())
+    }
+
+    fn collect_timers(&mut self) -> Result<()> {
+        let state_timers = &mut unsafe { self.stemcell_state.assume_init_mut() }.timers;
+        let timers = self
+            .orig
+            .get_timers()
+            .context("Failed to get original process timers")?;
+        // XXX This is plain cringe.
+        ensure!(timers.len() <= 64, "Too many timers");
+
+        state_timers.timer_count = timers.len();
+        for (state_timer, timer) in state_timers.timers.iter_mut().zip(timers) {
+            state_timer.id = timer.id;
+            state_timer.signal = timer.signal;
+            state_timer.sigev_value = timer.sigev_value;
+            state_timer.mechanism = timer.mechanism;
+            state_timer.target = timer.target;
+            state_timer.clock_id = timer.clock_id;
+        }
+
         Ok(())
     }
 
