@@ -12,6 +12,7 @@
 #include "remembrances/signal_handlers.hpp"
 #include "remembrances/thp_options.hpp"
 #include "remembrances/tid_address.hpp"
+#include "remembrances/timers.hpp"
 #include "remembrances/umask.hpp"
 
 struct State {
@@ -30,6 +31,7 @@ struct State {
     signal_handlers::State signal_handlers;
     thp_options::State thp_options;
     tid_address::State tid_address;
+    timers::State timers;
     umask::State umask;
     int controlling_fd;
 } state __attribute__((externally_visible));
@@ -102,6 +104,11 @@ Result<void> run() {
 }
 
 Result<void> init_child(const ControlMessageFds &fds) {
+    // Shared pages have to be unshared between instances of clones, so do this after fork
+    memory_maps::load_after_fork(state.memory_maps)
+        .CONTEXT("Failed to load shared memory maps")
+        .TRY();
+
     // Remap stdio
     for (int i = 0; i < 3; i++) {
         int fd = fds.stdio[i];
@@ -122,11 +129,6 @@ Result<void> init_child(const ControlMessageFds &fds) {
 
     libc::close(state.controlling_fd).CONTEXT("Failed to close controlling fd").TRY();
 
-    // Shared pages have to be unshared between instances of clones, so do this after fork
-    memory_maps::load_after_fork(state.memory_maps)
-        .CONTEXT("Failed to load shared memory maps")
-        .TRY();
-
     // Robust lists are per-thread therefore restore them after fork
     robust_futexes::load(state.robust_list).CONTEXT("Failed to load robust list").TRY();
 
@@ -138,6 +140,10 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // Loading itimers has to happen at each run to preserve expiration times so that time doesn't
     // flow between suspend and resume
     itimers::load(state.itimers).CONTEXT("Failed to load interval timers").TRY();
+
+    // Timers can trigger user code execution and therefore need to be restored as near to the end
+    // of restoring as possible
+    timers::load(state.timers).CONTEXT("Failed to load timers").TRY();
 
     // Unmap self, finally. We have to somehow specify we're ready for that and the SIGSEGV is not
     // just a bug, so put a magic value to a register beforehand. We can't put it to memory (say,

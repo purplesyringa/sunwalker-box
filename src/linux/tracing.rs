@@ -6,7 +6,7 @@ use anyhow::{bail, ensure, Context, Result};
 use nix::{
     errno::Errno,
     libc,
-    libc::{c_void, off_t},
+    libc::{c_void, off_t, pid_t},
     sys::{ptrace, wait},
     unistd::Pid,
 };
@@ -536,12 +536,14 @@ pub struct Stat {
     pub env_end: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct Timer {
     pub id: i32,
     pub signal: i32,
     pub sigev_value: usize,
-    pub notify: (i32, Pid),
+    pub mechanism: i32,
+    pub target: pid_t,
     pub clock_id: i32,
 }
 
@@ -986,6 +988,83 @@ impl TracedProcess {
     pub fn wait(&self) -> Result<system::WaitStatus> {
         system::waitpid(Some(self.get_pid()), system::WaitPidFlag::empty())
             .context("Failed to wait for traced process")
+    }
+
+    pub fn get_timers(&self) -> Result<Vec<Timer>> {
+        let buf = BufReader::new(
+            File::open(self.get_procfs_path("timers"))
+                .context("Could not open /proc/pid/timers")?,
+        );
+
+        let mut res = vec![];
+        let mut timer = None;
+
+        for line in buf.lines() {
+            let line = line.context("Failed to read line from file")?;
+            let Some((key, value)) = line.split_once(':') else {
+                // XXX: Is silencing this really a good thing?
+                continue;
+            };
+            let value = value.trim();
+
+            match key {
+                "ID" => {
+                    if let Some(timer) = timer.take() {
+                        res.push(timer);
+                    }
+                    timer = Some(Timer {
+                        id: value.parse().context("Invalid timer ID")?,
+                        signal: 0,
+                        sigev_value: 0,
+                        mechanism: libc::SIGEV_NONE,
+                        target: 0,
+                        clock_id: 0,
+                    });
+                }
+                "signal" => {
+                    let (signal, sigev_value) =
+                        value.split_once('/').context("Missing / in signal entry")?;
+                    let timer = timer.as_mut().context("Unexpected entry before ID")?;
+                    timer.signal = signal.parse().context("Invalid signal number")?;
+                    timer.sigev_value =
+                        usize::from_str_radix(sigev_value, 16).context("Invalid sigev_value")?;
+                }
+                "notify" => {
+                    let timer = timer.as_mut().context("Unexpected entry before ID")?;
+                    let (mechanism, target) =
+                        value.split_once('/').context("Missing / in signal entry")?;
+                    let mut mechanism = match mechanism {
+                        "thread" => libc::SIGEV_THREAD,
+                        "signal" => libc::SIGEV_SIGNAL,
+                        "none" => libc::SIGEV_NONE,
+                        _ => bail!("Invalid notification mechanism"),
+                    };
+                    let target = if let Some(tid) = target.strip_prefix("tid.") {
+                        mechanism |= libc::SIGEV_THREAD_ID;
+                        tid.parse().context("Invalid TID")?
+                    } else if let Some(pid) = target.strip_prefix("pid.") {
+                        pid.parse().context("Invalid PID")?
+                    } else {
+                        bail!("Invalid notification target")
+                    };
+                    timer.mechanism = mechanism;
+                    timer.target = target;
+                }
+                "ClockID" => {
+                    let timer = timer.as_mut().context("Unexpected entry before ID")?;
+                    timer.clock_id = value.parse().context("Invalid clock ID")?;
+                }
+                _ => bail!("Invalid key"),
+            }
+        }
+
+        if let Some(timer) = timer.take() {
+            res.push(timer);
+        }
+
+        res.sort_by_key(|timer| timer.id);
+
+        Ok(res)
     }
 }
 
