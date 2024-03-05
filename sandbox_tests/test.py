@@ -498,7 +498,6 @@ class Tester:
                 or (self.test_whitelist and test.slug not in self.test_whitelist)
             ):
                 skips += 1
-                print(f"     \x1b[93mSKIP\x1b[0m [{test.slug}]", flush=True)
                 continue
 
             print(f"          [{test.slug}]", end="", flush=True)
