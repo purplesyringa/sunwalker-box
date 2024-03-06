@@ -7,6 +7,7 @@ A = sys_number
 A == mmap ? mmap : next
 A == prctl ? prctl : next
 A == sysinfo ? trace : next
+A == reboot ? reboot : next
 
 A == stat ? allow : next
 A == fstat ? allow : next
@@ -163,6 +164,17 @@ A == 0x1011 ? allow : next  # ARCH_GET_CPUID
 A == 0x1012 ? allow : next  # ARCH_SET_CPUID
 A == 0x3001 ? einval : trace  # ARCH_CET_STATUS -- simulate lack of CET
 
+reboot:
+A = args[0]
+A &= 0xffffffff
+A == 0xfee1dead ? next : einval
+A = args[1]
+A &= 0xffffffff
+A == 0x11092001 ? next : allow
+A = args[2]
+A &= 0xffffffff
+A == 0 ? skip : enosys  # reboot(..., 0) = 0 is prefork mode marker
+
 trace:
 return TRACE
 
@@ -174,3 +186,9 @@ return KILL
 
 einval:
 return ERRNO(22)  # EINVAL
+
+enosys:
+return ERRNO(38)  # ENOSYS
+
+skip:
+return ERRNO(0)

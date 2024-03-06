@@ -12,9 +12,22 @@ A == 447 ? enosys : next  # memfd_secret -- as unsafe as memfd_create, but is be
 A == sysinfo ? trace : next
 A == prctl ? prctl : next
 
+A == reboot ? reboot : next
+
 # Forbid x86-32 ABI in x86-64 mode
 A &= 0x40000000
 A == 0 ? allow : kill
+
+reboot:
+A = args[0]
+A &= 0xffffffff
+A == 0xfee1dead ? next : einval
+A = args[1]
+A &= 0xffffffff
+A == 0x11092001 ? next : allow
+A = args[2]
+A &= 0xffffffff
+A == 0 ? einval : enosys  # reboot(..., 0) = 0 is prefork mode marker
 
 prctl:
 A = args[0]
@@ -29,6 +42,9 @@ return TRACE
 
 kill:
 return KILL
+
+einval:
+return ERRNO(22)  # EINVAL
 
 enosys:
 return ERRNO(38)  # ENOSYS
