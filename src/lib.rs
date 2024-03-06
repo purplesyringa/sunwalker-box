@@ -1,6 +1,7 @@
 #![feature(
     generic_const_exprs,
     io_error_more,
+    let_chains,
     maybe_uninit_as_bytes,
     maybe_uninit_slice,
     never_type,

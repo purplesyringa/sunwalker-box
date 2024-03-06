@@ -61,8 +61,9 @@ pub struct RunResults {
     pub memory: usize,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq)]
 enum ProcessState {
+    AwaitingForkNotification,
     JustStarted,
     Alive,
 }
@@ -816,13 +817,57 @@ impl SingleRun<'_> {
             }
 
             system::WaitStatus::Stopped(pid, signal) => {
-                let mut process = self
-                    .processes
-                    .get(&pid)
-                    .with_context(|| {
-                        format!("Unknown pid {pid} while handling Stopped on signal {signal}")
-                    })?
-                    .borrow_mut();
+                // Normally, we don't get signals from "unknown" processes, and SIGSTOP, which is
+                // raised immediately after process start is delivered after PtraceEvent(fork). But,
+                // this is not always true. One notable (first google link) example of this is
+                //     https://stackoverflow.com/questions/29997244/occasionally-missing-ptrace-event-vfork-when-running-ptrace
+                // where PtraceEvent(vfork) is received *after* Stopped(SIGSTOP). This case is rare
+                // on my machine, and was the cause of flickering zombies and fork_bomb tests, where
+                // unknown pids were marked as errors. A quick dig into linux kernel source code
+                // gives us this: (only notable parts are shown)
+                //
+                //     // --- include/linux/ptrace.h --- //
+                //     static inline void ptrace_init_task(...) {
+                //         sigaddset(&child->pending.signal, SIGSTOP);
+                //     }
+                //
+                //     // --- kernel/fork.c --- //
+                //     struct task_struct *copy_process(...) {
+                //         ptrace_init_task(...);
+                //     }
+                //
+                //     /* the heart of process cloning */
+                //     pid_t kernel_clone(...) {'
+                //         /* Adds SIGSTOP to pending signals deep inside */
+                //         p = copy_process(...);
+                //         /* Wakes up task and will trigger Stopped(SIGSTOP) *later* */
+                //         wake_up_new_task(p);
+                //         /* Triggers PtraceEvent(fork/vfork/clone) */
+                //         ptrace_event_pid(...);
+                //     }
+                //
+                // Waking up new task before notifying about fork can sometimes lead to SIGSTOP
+                // arriving before PtraceEvent.
+
+                let mut process = match self.processes.get(&pid) {
+                    Some(process) => process.borrow_mut(),
+                    None => {
+                        ensure!(
+                            signal == libc::SIGSTOP,
+                            "Unknown pid {pid} while handling Stopped on signal {signal}"
+                        );
+
+                        self.processes.insert(
+                            pid,
+                            RefCell::new(ProcessInfo {
+                                state: ProcessState::AwaitingForkNotification,
+                                traced_process: tracing::TracedProcess::new(pid)?,
+                            }),
+                        );
+
+                        return Ok(false);
+                    }
+                };
 
                 match signal {
                     libc::SIGSTOP => {
@@ -881,13 +926,32 @@ impl SingleRun<'_> {
                             Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
                         process.traced_process.resume()?;
                         drop(process);
-                        self.processes.insert(
-                            child_pid,
-                            RefCell::new(ProcessInfo {
-                                state: ProcessState::JustStarted,
-                                traced_process: tracing::TracedProcess::new(child_pid)?,
-                            }),
-                        );
+
+                        match self.processes.get(&child_pid) {
+                            Some(occ) => {
+                                let mut old_process = occ.borrow_mut();
+                                let state = &mut old_process.state;
+
+                                // See Stopped(SIGSTOP) handling
+                                ensure!(
+                                    *state == ProcessState::AwaitingForkNotification,
+                                    "Pid {child_pid} got PtraceEvent(fork-like) with \
+                                     inappropriate state {state:?}"
+                                );
+
+                                *state = ProcessState::Alive;
+                                self.on_after_fork(&mut old_process)?;
+                            }
+                            None => {
+                                self.processes.insert(
+                                    child_pid,
+                                    RefCell::new(ProcessInfo {
+                                        state: ProcessState::JustStarted,
+                                        traced_process: tracing::TracedProcess::new(child_pid)?,
+                                    }),
+                                );
+                            }
+                        }
                     }
                     libc::PTRACE_EVENT_EXIT => {
                         process.traced_process.resume()?;
