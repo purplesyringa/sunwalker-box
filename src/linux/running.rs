@@ -476,12 +476,13 @@ impl SingleRun<'_> {
         Ok(())
     }
 
-    fn on_after_fork(&self, process: &ProcessInfo) -> Result<()> {
+    fn on_after_fork(&self, process: &mut ProcessInfo) -> Result<()> {
         log!(
             "Initializing process {} after fork",
             process.traced_process.get_pid()
         );
         process.traced_process.init()?;
+        process.traced_process.resume()?;
         Ok(())
     }
 
@@ -827,8 +828,7 @@ impl SingleRun<'_> {
                     libc::SIGSTOP => {
                         if process.state == ProcessState::JustStarted {
                             process.state = ProcessState::Alive;
-                            self.on_after_fork(&process)?;
-                            process.traced_process.resume()?;
+                            self.on_after_fork(&mut process)?;
                             return Ok(false);
                         }
                     }
@@ -989,9 +989,8 @@ impl SingleRun<'_> {
             state: ProcessState::Alive,
             traced_process,
         };
-        self.on_after_fork(&main_process)?;
         self.on_after_execve(&mut main_process)?;
-        main_process.traced_process.resume()?;
+        self.on_after_fork(&mut main_process)?;
         self.processes
             .insert(self.main_pid, RefCell::new(main_process));
 
