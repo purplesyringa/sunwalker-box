@@ -15,7 +15,12 @@ Result<void> mmap_thp(uintptr_t base, size_t length, int prot, int flags, int fd
     // let's at least try to handle the worse case gracefully
     // FIXME: This is only valid for x86-64
     libc::mmap(base, length, prot, flags, fd, offset).CONTEXT("Failed to mmap section").TRY();
-    libc::madvise(base, length, MADV_HUGEPAGE).CONTEXT("Failed to madvise huge pages").TRY();
+    // If kernel is built without CONFIG_TRANSPARENT_HUGEPAGE, like `linux-rt` in Arch Linux,
+    // madvise THP will return EINVAL. We can't do anything about it and will just swallow the error
+    libc::madvise(base, length, MADV_HUGEPAGE)
+        .swallow(EINVAL, 0)
+        .CONTEXT("Failed to madvise huge pages")
+        .TRY();
     return {};
 }
 
