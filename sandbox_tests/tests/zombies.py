@@ -1,5 +1,6 @@
 """
 description: Zombies are reaped
+runs: 15
 """
 
 import os
