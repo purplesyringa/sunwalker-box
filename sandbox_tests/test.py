@@ -178,7 +178,7 @@ def create_dirs(structure: dict[str, ...], dir: str):
 
 
 def contextify(text: str, context: Optional[...] = None) -> str:
-    return f"{context}: {text}" if context else text
+    return f"{context}: {text}" if context is not None else text
 
 
 def expect_output(key, value, previous_values, expect, context):
