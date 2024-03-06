@@ -818,7 +818,9 @@ impl SingleRun<'_> {
                 let mut process = self
                     .processes
                     .get(&pid)
-                    .with_context(|| format!("Unknown pid {pid}"))?
+                    .with_context(|| {
+                        format!("Unknown pid {pid} while handling Stopped on signal {signal}")
+                    })?
                     .borrow_mut();
 
                 match signal {
@@ -864,11 +866,11 @@ impl SingleRun<'_> {
                     return Ok(false);
                 }
 
-                let mut process = self
-                    .processes
-                    .get(&pid)
-                    .with_context(|| format!("Unknown pid {pid}"))?
-                    .borrow_mut();
+                let Some(process) = self.processes.get(&pid) else {
+                    bail!("Unknown pid {pid} while handling PtraceEvent {event}");
+                };
+
+                let mut process = process.borrow_mut();
 
                 match event {
                     libc::PTRACE_EVENT_SECCOMP => self.on_seccomp(&mut process)?,
