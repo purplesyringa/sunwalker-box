@@ -400,8 +400,7 @@ class CTest(SimpleTest):
             cc = "musl-gcc"
             ccflags += " -static"
 
-        tester.f_makefile.write(
-            f"{self.slug}: ../tests/{self.slug}.c\n\t{cc} $^ -o $@{ccflags}\n\n")
+        tester.f_makefile.write(f"{self.slug}: ../tests/{self.slug}.c\n\t{cc} $^ -o $@{ccflags}\n\n")
         tester.make_targets.append(f"{self.slug}")
 
         super().prepare(tester)
@@ -428,7 +427,7 @@ class PyTest(SimpleTest):
 
 
 class Tester:
-    def __init__(self, f_makefile: io.TextIOBase, arch: str, test_whitelist: Optional[list[str]]=None):
+    def __init__(self, f_makefile: io.TextIOBase, arch: str, test_whitelist: Optional[list[str]] = None):
         self.f_makefile = f_makefile
         self.arch = arch
         self.test_whitelist = test_whitelist
@@ -446,8 +445,7 @@ class Tester:
 
     def register_py_test(self, source_path: str):
         with open(source_path) as f:
-            yaml_header = re.match(
-                r"\"\"\"([\s\S]+?)\"\"\"", f.read()).group(1)
+            yaml_header = re.match(r"\"\"\"([\s\S]+?)\"\"\"", f.read()).group(1)
         header = yaml.unsafe_load(yaml_header)
 
         slug = os.path.basename(source_path).removesuffix(".py")
@@ -508,8 +506,7 @@ class Tester:
                 buf_stdout.seek(0)
                 print("  " + buf_stdout.read().rstrip("\n").replace("\n", "\n  "))
                 if isinstance(ex[0], AssertionError):
-                    print("\x1b[33m  " +
-                          str(ex[0]).replace("\n", "\n  ") + "\x1b[0m")
+                    print("\x1b[33m  " + str(ex[0]).replace("\n", "\n  ") + "\x1b[0m")
                     failures += 1
                 else:
                     print("\x1b[95m" + ex[1] + "\x1b[0m")
@@ -541,8 +538,7 @@ def main():
     os.makedirs("build/assets", exist_ok=True)
     f_makefile = open("build/Makefile", "w")
 
-    subprocess.run(["../sunwalker_box", "isolate",
-                   "--core", str(CORE)], check=True)
+    subprocess.run(["../sunwalker_box", "isolate", "--core", str(CORE)], check=True)
 
     try:
         if len(sys.argv) >= 3:
@@ -574,8 +570,7 @@ def main():
         tester.prepare()
         tester.run()
     finally:
-        subprocess.run(["../sunwalker_box", "free",
-                       "--core", str(CORE)], check=True)
+        subprocess.run(["../sunwalker_box", "free", "--core", str(CORE)], check=True)
 
 
 if __name__ == "__main__":
