@@ -1,5 +1,7 @@
 """
 description: Dangerous files and directories under /proc are hidden
+script: |
+  expect(run())
 """
 
 import os

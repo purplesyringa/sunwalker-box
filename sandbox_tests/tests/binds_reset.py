@@ -3,19 +3,18 @@ description: Bind-mounts are removed on reset
 assets:
   dir:
     file: text
-preexec:
-  - ~0 mkdir /space/dir
-  - ~0 bind @dir /space/dir
-  - ~0 bind @dir /var
-runs: 2
-pass_run_number: true
+script: |
+  mkdir("/space/dir")
+  bind("dir", "/space/dir")
+  bind("dir", "/var")
+  expect(run(input="0"))
+  run_reset()
+  expect(run(input="1"))
 """
 
 import os
-import sys
 
-
-run = int(sys.argv[-1])
+run = int(input())
 
 if run == 0:
     assert os.path.exists("/space/dir/file")

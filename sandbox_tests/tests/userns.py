@@ -1,5 +1,7 @@
 """
 description: Running in userns
+script: |
+  expect(run())
 """
 
 import os

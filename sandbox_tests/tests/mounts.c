@@ -2,6 +2,8 @@
 description: External mounts are not visible
 root: {}
 static: true
+script: |
+  expect(run())
 */
 
 #include <errno.h>

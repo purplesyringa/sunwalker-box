@@ -1,10 +1,12 @@
 /*
 description: Filesystem is totally restored on reset
 root: {}
-runs: 3
 static: true
-expect:
-  matching_stdout: true
+script: |
+  pv = {}
+  for i in range(3):
+    _, _, pv = expect(run(context=i), previous_values=pv, matching_stdout=True)
+    run_reset()
 */
 
 #include <dirent.h>

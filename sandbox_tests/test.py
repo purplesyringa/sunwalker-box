@@ -185,40 +185,106 @@ def create_dirs(structure: dict[str, ...], dir: str):
         os.lchown(path, 2, 2)  # internal user
 
 
+def contextify(text: str, context: Optional[...] = None) -> str:
+    return f"{context}: {text}" if context else text
+
+
+def expect_output(key, value, previous_values, expect, context):
+    patched_value = value
+    if expect.get(f"unordered_{key}"):
+        patched_value = b"\n".join(sorted(patched_value.split(b"\n")))
+
+    if key in expect:
+        expected_value = expect[key].encode()
+        patched_expected_value = expected_value
+        if expect.get(f"unordered_{key}"):
+            patched_expected_value = b"\n".join(sorted(patched_expected_value.split(b"\n")))
+        assert patched_value == patched_expected_value, contextify(f"Expected {key}: {expected_value}, actual: {value}", context)
+
+    matching = expect.get(f"matching_{key}")
+    if matching:
+        if not previous_values:
+            previous_values[key] = (value, patched_value)
+            return previous_values
+
+        previous_value, patched_previous_value = previous_values[key]
+
+        err_text = contextify(f"Expected {key} to match the value from the first run: {previous_value}, actual: {value}", context)
+        if matching is True:
+            assert patched_value == patched_previous_value, err_text
+        elif matching.startswith("+-"):
+            previous_values = patched_previous_value.decode().split()
+            new_values = patched_value.decode().split()
+
+            assert len(previous_values) == len(new_values), contextify(
+                f"Different lengths of values: current: {new_values}, previous: {previous_values}", context)
+
+            for prev, new in zip(previous_values, new_values):
+                l, r = parse_approximate_value(prev + matching, float)
+                assert l <= float(new) <= r, err_text
+        else:
+            assert False, contextify(f"Invalid matching value: {matching}", context)
+    return previous_values
+
+
+def expect(result, previous_values={}, **expect):
+    box, context, stdout_path, stderr_path, result = result
+
+    pretty_result = json.dumps(result, indent=2)
+
+    stdout = box.cat(stdout_path).decode() if stdout_path else ''
+    stderr = box.cat(stderr_path).decode() if stderr_path else ''
+
+    def expect_key(key, result, expected):
+        assert result == expected, contextify(f"Expected {key}: {expected}, actual: {result}\n\nstdout:\n{stdout}\nstderr:\n{stderr}", context)
+
+    limit_verdict = expect.get("limit_verdict", "OK")
+    expect_key("verdict", result["limit_verdict"], limit_verdict)
+    expect_key("exit code", result["exit_code"], expect.get("exit_code", 0 if limit_verdict == "OK" else -1))
+
+    if stdout_path:
+        previous_values = expect_output("stdout", stdout.encode(), previous_values, expect, context)
+    if stderr_path:
+        previous_values = expect_output("stderr", stderr.encode(), previous_values, expect, context)
+
+    for (key, parser) in [
+        ("cpu_time", float),
+        ("idleness_time", float),
+        ("real_time", float),
+        ("memory", parse_size)
+    ]:
+        value = result[key]
+        if key in expect:
+            expected_value = expect[key]
+            l, r = parse_approximate_value(expected_value, parser)
+            assert l <= value <= r, contextify(
+                f"Expected {key}: {expected_value}, actual: {value}\n\nstdout:\n{stdout}\nstderr:\n{stderr}", context)
+
+    return (context, result, previous_values)
+
+
 class SimpleTest(Test):
     def __init__(
         self,
         slug: str,
         description: str,
         arch: Optional[list[str]] = None,
-        runs: int = 1,
-        pass_run_number: bool = False,
         assets: dict[str, str] = {},
         root: Optional[dict[str, ...]] = None,
-        preexec: list[str] = [],
         static: bool = False,
         outer_env: dict[str, str] = {},
-        env: dict[str, str] = DEFAULT_ENV,
         quotas: dict[str, ...] = {},
-        input: Optional[str] = None,
-        expect: dict[str, ...] = {},
-        limits: dict[str, ...] = {}
+        script: Optional[str] = None,
     ):
         self.slug = slug
         self.description = description
         self.arch = arch
-        self.runs = runs
-        self.pass_run_number = pass_run_number
         self.assets = assets
         self.root = root
-        self.preexec = preexec
         self.static = static
         self.outer_env = outer_env
-        self.env = env
         self.quotas = quotas
-        self.input = input
-        self.expect = expect
-        self.limits = limits
+        self.script = script
         self.root_dir = None
         self.files_committed = False
 
@@ -240,7 +306,7 @@ class SimpleTest(Test):
             create_dirs(self.assets, self.assets_dir)
 
     @abc.abstractmethod
-    def _bind_and_run(self, box, argv: list[str], **kwargs):
+    def _bind(self, box):
         ...
 
     def run(self, tester):
@@ -254,149 +320,75 @@ class SimpleTest(Test):
         if self.root is not None:
             opts += ["--root", self.root_dir]
 
+        if self.script is None:
+            # return self.legacy_run(tester, opts)
+            assert False, "Non-script tests are unsupported"
+
         with Box(opts) as box:
-            previous_values = {}
 
-            for i in range(self.runs):
+            def run(context=None, exe=None, argv=None, input=None, stdin=None, stdout=None, stderr=None, env=None, **limits):
                 try:
-                    if i != 0:
-                        box.reset()
-
-                    if self.input is None:
+                    if input is None:
                         stdin = None
                     else:
-                        stdin = "/space/stdin.txt"
-                        box.mkfile("/space/stdin.txt", self.input.encode())
+                        stdin = stdin or "/space/stdin.txt"
+                        box.mkfile(stdin, input.encode())
 
-                    should_commit = False
-                    for cmd in self.preexec:
-                        args = cmd.split()
-                        if args[0].startswith("~"):
-                            runs = list(map(int, args[0][1:].split(",")))
-                            if i not in runs:
-                                continue
-                            args.pop(0)
-                        cmd = args.pop(0)
-                        if cmd == "mkdir":
-                            for arg in args:
-                                box.mkdir(arg)
-                        elif cmd == "touch":
-                            for arg in args:
-                                box.mkfile(arg)
-                        elif cmd == "bind":
-                            readonly = False
-                            if args[0] == "-ro":
-                                readonly = True
-                                args.pop(0)
-                            if len(args) != 2:
-                                raise ValueError("Invalid bind syntax")
-                            source, target = args
-                            if source.startswith("@"):
-                                source = os.path.abspath(
-                                    self.assets_dir + "/" + source[1:])
-                            box.bind(source, target, readonly=readonly)
-                        elif cmd == "commit":
-                            should_commit = True
-                        else:
-                            raise ValueError(f"Unknown command {cmd}")
+                    stdout = stdout or "/space/stdout.txt"
+                    stderr = stderr or "/space/stderr.txt"
 
-                    limits = {}
-                    for (key, parser) in [
-                        ("cpu_time", float),
-                        ("idleness_time", float),
-                        ("real_time", float),
-                        ("memory", parse_size),
-                        ("processes", int)
-                    ]:
-                        if key in self.limits:
-                            limits[f"{key}_limit"] = parser(self.limits[key])
-
-                    argv = []
-                    if self.pass_run_number:
-                        argv.append(str(i))
-
-                    result = self._bind_and_run(
-                        box,
-                        argv,
+                    return (box, context, stdout, stderr, box.run(
+                        ([exe] if exe else self.argv) + (argv or []),
+                        env=env or DEFAULT_ENV,
                         stdin=stdin,
-                        stdout="/space/stdout.txt",
-                        stderr="/space/stderr.txt",
-                        env=self.env,
+                        stdout=stdout,
+                        stderr=stderr,
                         **limits
-                    )
-
-                    for key, default_value in [
-                        ("limit_verdict", "OK"),
-                        ("exit_code", 0 if result["limit_verdict"] == "OK" else -1)
-                    ]:
-                        value = result[key]
-                        expected_value = self.expect.get(key, default_value)
-                        if expected_value is not None:
-                            stdout = box.cat("/space/stdout.txt").decode()
-                            stderr = box.cat("/space/stderr.txt").decode()
-                            assert value == expected_value, f"Expected {key}: {expected_value}, actual: {value}\n\nstdout:\n{stdout}\nstderr:\n{stderr}"
-
-                    for key in ("stdout", "stderr"):
-                        value = box.cat(f"/space/{key}.txt")
-
-                        patched_value = value
-                        if self.expect.get(f"unordered_{key}"):
-                            patched_value = b"\n".join(
-                                sorted(patched_value.split(b"\n")))
-
-                        if key in self.expect:
-                            expected_value = self.expect[key].encode()
-                            patched_expected_value = expected_value
-                            if self.expect.get(f"unordered_{key}"):
-                                patched_expected_value = b"\n".join(
-                                    sorted(patched_expected_value.split(b"\n")))
-                            assert patched_value == patched_expected_value, f"Expected {key}: {expected_value}, actual: {value}"
-
-                        matching = self.expect.get(f"matching_{key}")
-                        if matching:
-                            if i == 0:
-                                previous_values[key] = (value, patched_value)
-                            else:
-                                previous_value, patched_previous_value = previous_values[key]
-
-                                err_text = f"Expected {key} to match the value from the first run: {previous_value}, actual: {value}"
-                                if matching is True:
-                                    assert patched_value == patched_previous_value, err_text
-                                elif matching.startswith("+-"):
-                                    previous_values = patched_previous_value.decode().split()
-                                    new_values = patched_value.decode().split()
-
-                                    assert len(previous_values) == len(
-                                        new_values), f"Different lengths of values: current: {new_values}, previous: {previous_values}"
-
-                                    for prev, new in zip(previous_values, new_values):
-                                        l, r = parse_approximate_value(
-                                            prev + matching, float)
-                                        assert l <= float(new) <= r, err_text
-                                else:
-                                    assert False, f"Invalid matching value: {matching}"
-
-                    for (key, parser) in [
-                        ("cpu_time", float),
-                        ("idleness_time", float),
-                        ("real_time", float),
-                        ("memory", parse_size)
-                    ]:
-                        value = result[key]
-                        if key in self.expect:
-                            expected_value = self.expect[key]
-                            l, r = parse_approximate_value(expected_value, parser)
-                            assert l <= value <= r, f"Expected {key}: {expected_value}, actual: {value}\n\nstdout:\n{stdout}\nstderr:\n{stderr}"
-
-                    if should_commit:
-                        box.commit()
-                        self.files_committed = True
+                    ))
                 except AssertionError as e:
-                    if self.runs > 1:
-                        raise AssertionError(f"Run {i}: {e}") from None
-                    else:
-                        raise
+                    assert False, contextify(e, context)
+                except Exception as e:
+                    if context:
+                        e.add_note(f"Context: {context}")
+                    raise e
 
+            def bind(source, destination, readonly=False, asset=True):
+                return box.bind(os.path.abspath(f"{self.assets_dir}/{source}") if asset else source, destination, readonly)
+
+            def bind_ro(source, destination, asset=True):
+                return bind(source, destination, True, asset)
+
+            def commit():
+                self.files_committed = True
+                return box.commit()
+
+            def run_reset():
+                box.reset()
+                self._bind(box)
+
+            aliases = {
+                "mkdir": box.mkdir,
+                "ls": box.ls,
+                "cat": box.cat,
+                "touch": box.mkfile,
+                "into": box.mkfile,
+                "link": box.mksymlink,
+                "reset": box.reset,
+            }
+
+            try:
+                self._bind(box)
+                exec(self.script, aliases | locals() | globals())
+            except Exception as e:
+                error_line = e.__traceback__.tb_next.tb_lineno
+                arrow, blue, reset = '\x1b[91m->', '\x1b[34m', '\x1b[0m'
+                script = '\n'.join(
+                    f"  {arrow if i == error_line else '  '}{blue}{i:2}{reset}  {line}"
+                    for i, line
+                    in enumerate(self.script.split('\n')[:-1], 1)
+                )
+                print(f"Executed script:\n{script}")
+                raise
 
 
 class CTest(SimpleTest):
@@ -414,21 +406,25 @@ class CTest(SimpleTest):
 
         super().prepare(tester)
 
-    def _bind_and_run(self, box, argv: list[str], **kwargs):
-        if not self.files_committed:
-            box.mkfile(f"/space/{self.slug}")
-            box.bind(os.path.abspath(
-                f"build/{self.slug}"), f"/space/{self.slug}", readonly=True)
-        return box.run([f"/space/{self.slug}"] + argv, **kwargs)
+    def _bind(self, box):
+        if self.files_committed:
+            return
+
+        self.path = f"/space/{self.slug}"
+        self.argv = [self.path]
+        box.mkfile(self.path)
+        box.bind(os.path.abspath(f"build/{self.slug}"), self.path, readonly=True)
 
 
 class PyTest(SimpleTest):
-    def _bind_and_run(self, box, argv: list[str], **kwargs):
-        if not self.files_committed:
-            box.mkfile(f"/space/{self.slug}.py")
-            box.bind(os.path.abspath(
-                f"tests/{self.slug}.py"), f"/space/{self.slug}.py", readonly=True)
-        return box.run(["/usr/bin/python3", f"/space/{self.slug}.py"] + argv, **kwargs)
+    def _bind(self, box):
+        if self.files_committed:
+            return
+
+        self.path = f"/space/{self.slug}.py"
+        self.argv = ["/usr/bin/python3", self.path]
+        box.mkfile(self.path)
+        box.bind(os.path.abspath(f"tests/{self.slug}.py"), self.path, readonly=True)
 
 
 class Tester:
@@ -557,10 +553,10 @@ def main():
         tester = Tester(f_makefile, sys.argv[1], test_whitelist)
 
         # with Box() as box:
-            # box.commit()
-            # for _ in range(1000):
-                # box.reset()
-                # box.run(["/usr/bin/python3", "-c", ""])
+        #    box.commit()
+        #    for _ in range(1000):
+        #        box.reset()
+        #        box.run(["/usr/bin/python3", "-c", ""])
         # box.mkfile("/space/cat")
         # box.mkfile("/space/stdin", b"Hello, world!")
         # box.bind("/usr/bin/cat", "/space/cat", readonly=True)

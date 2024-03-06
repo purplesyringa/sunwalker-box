@@ -1,9 +1,7 @@
 /*
 description: Cannot allocate more memory than allowed
-limits:
-  memory: 200 MB
-expect:
-  limit_verdict: MemoryLimitExceeded
+script: |
+  expect(run(memory_limit=parse_size("200 MB")), limit_verdict="MemoryLimitExceeded")
 */
 
 #include <errno.h>

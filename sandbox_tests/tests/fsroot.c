@@ -9,38 +9,40 @@ root:
   rootsymlink1: -> /absolute/path
   rootsymlink2: -> relative/path
 static: true
-expect:
-  stdout: |
-    /tmp/
-    /proc/
-    /dev/
-    /dev/shm/
-    /dev/ptmx
-    /dev/pts/
-    /dev/pts/ptmx
-    /dev/mqueue/
-    /dev/fd -> /proc/self/fd
-    /dev/tty
-    /dev/stderr -> /proc/self/fd/2
-    /dev/stdout -> /proc/self/fd/1
-    /dev/stdin -> /proc/self/fd/0
-    /dev/random
-    /dev/urandom
-    /dev/zero
-    /dev/full
-    /dev/null
-    /space/
-    /space/stderr.txt
-    /space/stdout.txt
-    /space/fsroot
-    /rootsymlink1 -> /absolute/path
-    /rootdir/
-    /rootdir/nestedsymlink1 -> /absolute/path
-    /rootdir/nestedsymlink2 -> relative/path
-    /rootdir/nestedfile
-    /rootsymlink2 -> relative/path
-    /rootfile
-  unordered_stdout: true
+script: |
+  stdout = '\n'.join([
+    "/tmp/",
+    "/proc/",
+    "/dev/",
+    "/dev/shm/",
+    "/dev/ptmx",
+    "/dev/pts/",
+    "/dev/pts/ptmx",
+    "/dev/mqueue/",
+    "/dev/fd -> /proc/self/fd",
+    "/dev/tty",
+    "/dev/stderr -> /proc/self/fd/2",
+    "/dev/stdout -> /proc/self/fd/1",
+    "/dev/stdin -> /proc/self/fd/0",
+    "/dev/random",
+    "/dev/urandom",
+    "/dev/zero",
+    "/dev/full",
+    "/dev/null",
+    "/space/",
+    "/space/stderr.txt",
+    "/space/stdout.txt",
+    "/space/fsroot",
+    "/rootsymlink1 -> /absolute/path",
+    "/rootdir/",
+    "/rootdir/nestedsymlink1 -> /absolute/path",
+    "/rootdir/nestedsymlink2 -> relative/path",
+    "/rootdir/nestedfile",
+    "/rootsymlink2 -> relative/path",
+    "/rootfile",
+    ""
+  ])
+  expect(run(), stdout=stdout, unordered_stdout=True)
 */
 
 #include <dirent.h>

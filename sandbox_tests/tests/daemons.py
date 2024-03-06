@@ -1,14 +1,14 @@
 """
 description: All processes are killed when invokee dies
-runs: 2
-expect:
-  matching_stdout: true
+script: |
+  pv = {}
+  for _ in range(2):
+    _, _, pv = expect(run(), previous_values=pv, matching_stdout=True)
+    run_reset()
 """
 
 import os
 import subprocess
-import sys
-import time
 
 
 def list_pids():

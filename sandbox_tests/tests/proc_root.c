@@ -2,6 +2,8 @@
 description: External root is inaccessible via procfs
 static: true
 root: {}
+script: |
+  expect(run())
 */
 
 #include <dirent.h>

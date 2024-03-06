@@ -2,6 +2,8 @@
 description: Many files cannot be created
 quotas:
   inodes: 100
+script: |
+  expect(run())
 */
 
 #include <errno.h>

@@ -1,5 +1,7 @@
 /*
 description: /dev/random does not deplete entropy pool
+script: |
+  expect(run())
 */
 
 #include <errno.h>

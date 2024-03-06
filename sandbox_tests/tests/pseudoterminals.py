@@ -1,8 +1,10 @@
 """
 description: Pseudoterminals work and are reset correctly
-runs: 2
-expect:
-  matching_stderr: true
+script: |
+  pv = {}
+  for _ in range(2):
+    _, _, pv = expect(run(), previous_values=pv, matching_stderr=True)
+    run_reset()
 """
 
 import os

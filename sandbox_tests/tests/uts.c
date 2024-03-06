@@ -1,5 +1,7 @@
 /*
 description: UTS namespace is unshared
+script: |
+  expect(run())
 */
 
 #include <errno.h>

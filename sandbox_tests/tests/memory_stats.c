@@ -1,7 +1,7 @@
 /*
 description: Peak memory usage is computed correctly
-expect:
-    memory: 10 MB +- 0.5 MB
+script: |
+  expect(run(), memory="10 MB +- 0.5 MB")
 */
 
 #include <errno.h>

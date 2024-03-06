@@ -3,9 +3,11 @@ description: Environment is cleared and passed
 outer_env:
   key1: outer-value1
   key2: outer-value2
-env:
-  key1: inner-value1
-  key3: inner-value3
+script: |
+  expect(run(env={
+    "key1": "inner-value1",
+    "key3": "inner-value3",
+  }))
 """
 
 import os

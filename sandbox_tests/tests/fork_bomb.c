@@ -1,7 +1,7 @@
 /*
 description: Can start exactly as many processes as allowed
-limits:
-  processes: 100
+script: |
+  expect(run(processes_limit=100))
 */
 
 #include <stddef.h>

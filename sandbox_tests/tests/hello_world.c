@@ -1,9 +1,8 @@
 /*
 description: A simple program works as intended
-input: "world"
-expect:
-  stdout: "Hello, world!"
-  stderr: "Bye, world!"
+script: |
+  expect(run(input="world"), stdout="Hello, world!", stderr="Bye, world!")
+  run_reset()
 */
 
 #include <stdio.h>

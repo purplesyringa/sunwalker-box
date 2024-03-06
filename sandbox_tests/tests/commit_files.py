@@ -1,16 +1,23 @@
 """
 description: Files are preserved after commit
-preexec:
-  - ~1 commit
-runs: 4
-pass_run_number: true
+script: |
+  def simple_run(i):
+    expect(run(input=str(i), context=str(i)))
+    run_reset()
+
+  simple_run(0)
+
+  run(input="1")
+  commit()
+  run_reset()
+  
+  simple_run(2)
+  simple_run(3)
 """
 
 import os
-import sys
 
-
-run = int(sys.argv[-1])
+run = int(input())
 
 if run == 0:
     with open("/space/run0", "w") as f:

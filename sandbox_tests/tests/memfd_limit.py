@@ -2,6 +2,8 @@
 description: memfds are subject to disk quotas
 quotas:
   space: 10000
+script: |
+  expect(run())
 """
 
 import errno

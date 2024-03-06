@@ -2,6 +2,8 @@
 description: Large files cannot be created
 quotas:
   space: 10000
+script: |
+  expect(run())
 */
 
 #include <errno.h>

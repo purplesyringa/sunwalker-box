@@ -1,8 +1,10 @@
 /*
 description: IPC namespace works and is reset
-runs: 2
-expect:
-  matching_stdout: true
+script: |
+  pv = {}
+  for i in range(2):
+    _, _, pv = expect(run(context=i), previous_values=pv, matching_stdout=True)
+    run_reset()
 */
 
 #include <fcntl.h>

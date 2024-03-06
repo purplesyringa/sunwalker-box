@@ -1,7 +1,7 @@
 /*
 description: Non-zero exit code is caught as a verdict
-expect:
-  exit_code: 123
+script: |
+  expect(run(), exit_code=123)
 */
 
 #include <stddef.h>

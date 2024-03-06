@@ -1,5 +1,7 @@
 /*
 description: There is no controlling terminal
+script: |
+  expect(run())
 */
 
 #include <errno.h>

@@ -4,27 +4,40 @@ assets:
     file: Pre-uploaded
     dir:
       file: Pre-uploaded 2
-preexec:
-  - ~0 touch /space/file
-  - ~0 mkdir /space/dir
-  - ~0 bind @file /space/file
-  - ~0 bind @dir /space/dir
-  - ~2 touch /space/file_ro /space/file_rw
-  - ~2 mkdir /space/dir_ro /space/dir_rw
-  - ~2 bind @file /space/file_rw
-  - ~2 bind -ro @file /space/file_ro
-  - ~2 bind @dir /space/dir_rw
-  - ~2 bind -ro @dir /space/dir_ro
-  - ~2 commit
-runs: 4
-pass_run_number: true
+script: |
+  touch("/space/file")
+  bind("file", "/space/file")
+  
+  mkdir("/space/dir")
+  bind("dir", "/space/dir")
+  
+  expect(run(input="0"))
+  run_reset()
+  expect(run(input="1"))
+  run_reset()
+
+  touch("/space/file_ro")
+  bind_ro("file", "/space/file_ro")
+  
+  touch("/space/file_rw")
+  bind("file", "/space/file_rw")
+  
+  mkdir("/space/dir_ro")
+  bind_ro("dir", "/space/dir_ro")
+  
+  mkdir("/space/dir_rw")
+  bind("dir", "/space/dir_rw")
+  commit()
+  
+  expect(run(input="2"))
+  run_reset()
+  expect(run(input="3"))
+  run_reset()
 """
 
 import os
-import sys
 
-
-run = int(sys.argv[-1])
+run = int(input())
 
 if run == 0:
     with open("/space/file") as f:

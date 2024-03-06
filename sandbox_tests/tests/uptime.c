@@ -1,8 +1,10 @@
 /*
 description: Uptime should be zero
-runs: 2
-expect:
-  matching_stdout: +- 0.1
+script: |
+  pv = {}
+  for _ in range(2):
+    _, _, pv = expect(run(), previous_values=pv, matching_stdout="+- 0.1")
+    run_reset()
 */
 
 #include <stdio.h>

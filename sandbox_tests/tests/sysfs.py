@@ -1,5 +1,7 @@
 """
 description: sysfs is not mounted
+script: |
+  expect(run())
 """
 
 import os

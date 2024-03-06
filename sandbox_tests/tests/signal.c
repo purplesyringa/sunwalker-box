@@ -1,8 +1,7 @@
 /*
 description: Signal is caught as a verdict
-expect:
-  limit_verdict: Signaled
-  exit_code: -11
+script: |
+  expect(run(), limit_verdict="Signaled", exit_code=-11)
 */
 
 #include <stddef.h>

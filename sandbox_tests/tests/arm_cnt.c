@@ -2,11 +2,14 @@
 description: arm64 counter-timer registers (cntpct[ss], cntvct[ss]) are unavailable
 arch:
 - aarch64
-expect:
-  limit_verdict: Signaled
-  exit_code: -4
-runs: 4
-pass_run_number: true
+script: |
+  for i in range(4):
+    expect(
+      run(input=str(i), context=str(i)),
+      limit_verdict="Signaled",
+      exit_code=-4
+    )
+    run_reset()
 */
 
 #pragma GCC target("arch=armv8.6-a")
@@ -34,7 +37,8 @@ unsigned long long load_register(int reg) {
 const char* names[] = {"cntpctss", "cntpct", "cntvctss", "cntvct"};
 
 int main(int argc, char **argv) {
-  int run = atoi(argv[1]);
+  int run = -1;
+  scanf("%d", &run);
 
   unsigned long long before = load_register(run);
   if (usleep(300000) == -1) {

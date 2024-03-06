@@ -1,10 +1,10 @@
 /*
 description: sysinfo should not reveal information
-runs: 2
-limits:
-  memory: 200 MB
-expect:
-  matching_stdout: +- 0.1
+script: |
+  pv = {}
+  for _ in range(2):
+    _, _, pv = expect(run(memory_limit=parse_size("200 MB")), previous_values=pv, matching_stdout="+- 0.1")
+    run_reset()
 */
 
 #include <stdio.h>
