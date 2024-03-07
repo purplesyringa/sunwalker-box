@@ -1,23 +1,12 @@
 """
-description: memfds are subject to disk quotas
-quotas:
-  space: 10000
+description: memfds are subject to memory limit
 script: |
-  expect(run())
+  expect(run(memory_limit=parse_size("20 MiB")), limit_verdict="MemoryLimitExceeded")
 """
 
-import errno
 import os
 
-f = open(os.memfd_create("test"), "wb")
-
-for _ in range(1024):
-    try:
-        f.write(b"\x00" * 1024)
-    except OSError as e:
-        if e.errno == errno.ENOSPC:
-            break
-        else:
-            raise
-else:
-    assert False, "Did not fail to write"
+for i in range(20):
+    with open(os.memfd_create(f"test{i}"), "wb") as f:
+        for _ in range(1024):
+            f.write(b"\x00" * 1024)

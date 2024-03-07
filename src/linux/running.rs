@@ -14,11 +14,11 @@ use nix::{
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
-use std::ffi::CString;
+use std::ffi::{CString, OsStr};
 use std::fs::File;
 use std::io;
 use std::mem::MaybeUninit;
-use std::os::unix::io::AsRawFd;
+use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt, io::AsRawFd};
 use std::time::{Duration, Instant};
 
 pub struct Runner {
@@ -605,12 +605,7 @@ impl SingleRun<'_> {
             libc::SYS_memfd_create => {
                 Ok(EmulatedSyscall::redirect_with_errno(
                     try {
-                        let mut name = process
-                            .traced_process
-                            .read_cstring(syscall_info.args[0] as usize, 249)?
-                            .into_bytes_with_nul();
-
-                        let mut open_flags = libc::O_RDWR | libc::O_CREAT;
+                        let mut open_flags = libc::O_RDWR;
                         if syscall_info.args[1] & (libc::MFD_CLOEXEC as u64) != 0 {
                             open_flags |= libc::O_CLOEXEC;
                         }
@@ -625,27 +620,88 @@ impl SingleRun<'_> {
                             Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
                         }
 
-                        // We don't care about .. in this context because open(2) is executed in the
-                        // context of the unprivileged process, and no sane person is going to use ..
-                        // in the name for benign reasons.
-                        let mut file_name =
-                            format!("/dev/shm/memfd:{:08x}:", rand::random::<u32>()).into_bytes();
-                        file_name.append(&mut name);
+                        let mut name = process
+                            .traced_process
+                            .read_cstring(syscall_info.args[0] as usize, 249)?
+                            .into_bytes();
+
+                        // Sanitization
+                        name.retain(|&c| c != b'/');
+
+                        let mut path = Vec::from(b"/memfd:");
+                        path.append(&mut name);
+
+                        // This attempts to create a file named memfd:... in the root tmpfs. This
+                        // ensures the path shown in /proc/.../maps matches the name memfd_create
+                        // would generate unless the filename contains /. This can theoretically
+                        // collide with an existing file in the chroot, but that would be rather
+                        // stupid from the rootfs generator, and we believe our users are not morons.
+                        if let Err(e) = File::create_new(OsStr::from_bytes(&path)) {
+                            if e.kind() == io::ErrorKind::AlreadyExists {
+                                // The user is, in fact, a moron. Alternatively, we fucked up while
+                                // emulating another memfd_create call. Either way, report this.
+                                log!(
+                                    impossible,
+                                    "A file matching the pattern /memfd:... exists in the root \
+                                     filesystem. This means either that memfd_create logic is \
+                                     faulty, or that such a file exists in the chroot passed to \
+                                     sunwalker-box. In the latter case, remove or rename that \
+                                     file; this path is reserved. Otherwise, report this to the \
+                                     sunwalker-box bug tracker."
+                                );
+                            } else {
+                                // Any other error isn't supposed to happen under any condition.
+                                log!(
+                                    impossible,
+                                    "An attempt to create /memfd:... failed. This is a bug in \
+                                     sunwalker-box."
+                                );
+                            }
+                            Err(std::io::Error::from_raw_os_error(libc::ENOMEM))?;
+                        }
+
+                        if std::fs::set_permissions(
+                            OsStr::from_bytes(&path),
+                            PermissionsExt::from_mode(0o666),
+                        )
+                        .is_err()
+                        {
+                            log!(
+                                impossible,
+                                "An attempt to chmod /memfd:... failed. This is a bug in \
+                                 sunwalker-box."
+                            );
+                            Err(std::io::Error::from_raw_os_error(libc::ENOMEM))?;
+                        }
+
+                        // Open the same path in the user process
+                        path.push(b'\0');
 
                         // Account for red zone
                         let file_name_addr =
-                            (process.traced_process.get_stack_pointer()? - 128) - file_name.len();
+                            (process.traced_process.get_stack_pointer()? - 128) - path.len();
 
-                        process
-                            .traced_process
-                            .write_memory(file_name_addr, &file_name)?;
+                        process.traced_process.write_memory(file_name_addr, &path)?;
+
+                        // Note that files created in / are not accounted for by the tmpfs quotas.
+                        // Therefore memfds are not subject to disk quotas, which are typically
+                        // lower than the memory limit. This behavior has caused problems before,
+                        // see e.g. https://github.com/purplesyringa/sunwalker-box/issues/7.
+                        //
+                        // However, these files *are* accounted for by the cgroup. Indeed, any
+                        // attempt to write to the memfd (initially empty) by a user process will
+                        // allocate pages, and shmem_alloc_and_add_folio charges the pages to the
+                        // memory cgroup of the current process (see e.g.
+                        // mm/shmem.c:mem_cgroup_charge:1679 on Linux v6.7.9). Therefore, memfd is
+                        // effectively treated as an extension to RAM, which is what it is supposed
+                        // to be anwyay.
 
                         (
                             libc::SYS_openat,
                             libc::AT_FDCWD,
                             file_name_addr,
                             open_flags,
-                            0o700,
+                            0,
                         )
                     },
                 ))

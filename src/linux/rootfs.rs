@@ -35,6 +35,13 @@ pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<Rootf
 
     // Create the new root directory
     std::fs::create_dir("/newroot").context("Failed to mkdir /newroot")?;
+    // Manager needs to be able to create /memfd:... files in root
+    std::os::unix::fs::chown(
+        "/newroot",
+        Some(ids::EXTERNAL_ROOT_UID),
+        Some(ids::EXTERNAL_ROOT_GID),
+    )
+    .context("Failed to chown /newroot")?;
 
     // Mount directories from image
     for entry in std::fs::read_dir(root).context("Failed to read root directory")? {
