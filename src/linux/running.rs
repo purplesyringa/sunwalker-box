@@ -644,28 +644,37 @@ impl SingleRun<'_> {
                         // ensures the path shown in /proc/.../maps matches the name memfd_create
                         // would generate unless the filename contains /. This can theoretically
                         // collide with an existing file in the chroot, but that would be rather
-                        // stupid from the rootfs generator, and we believe our users are not morons.
-                        if let Err(e) = File::create_new(OsStr::from_bytes(&path)) {
-                            if e.kind() == io::ErrorKind::AlreadyExists {
-                                // The user is, in fact, a moron. Alternatively, we fucked up while
-                                // emulating another memfd_create call. Either way, report this.
-                                log!(
-                                    impossible,
-                                    "A file matching the pattern /memfd:... exists in the root \
-                                     filesystem. This means either that memfd_create logic is \
-                                     faulty, or that such a file exists in the chroot passed to \
-                                     sunwalker-box. In the latter case, remove or rename that \
-                                     file; this path is reserved. Otherwise, report this to the \
-                                     sunwalker-box bug tracker."
-                                );
-                            } else {
-                                // Any other error isn't supposed to happen under any condition.
-                                log!(
-                                    impossible,
-                                    "An attempt to create /memfd:... failed. This is a bug in \
-                                     sunwalker-box."
-                                );
-                            }
+                        // stupid from the rootfs generator, and we believe our users are not
+                        // morons.
+                        let mut file = File::create_new(OsStr::from_bytes(&path));
+                        if let Err(ref e) = file
+                            && e.kind() == io::ErrorKind::AlreadyExists
+                        {
+                            // Either the chroot creator is, in fact, a moron, or some of our
+                            // processes is in a racy "openat is just about to run" state.
+                            log!(
+                                warn,
+                                "A file matching the pattern /memfd:... exists in the root \
+                                 filesystem. This indicated either that a race condition in \
+                                 memfd_create logic was triggered, or that such a file exists in \
+                                 the chroot passed to sunwalker-box. In the former case, please \
+                                 report this if it happens in the wild so that we can workaround \
+                                 it or prioritize a proper fix. In the latter case, please remove \
+                                 or rename the file."
+                            );
+                            // Assume the latter and rename the file to something random.
+                            path = Vec::from(b"/memfd:fallback");
+                            path.extend(rand::random::<u64>().to_string().as_bytes());
+                            file = File::create_new(OsStr::from_bytes(&path));
+                        }
+
+                        // Any other error isn't supposed to happen under any condition.
+                        if file.is_err() {
+                            log!(
+                                impossible,
+                                "An attempt to create /memfd:... failed. This is a bug in \
+                                 sunwalker-box."
+                            );
                             Err(std::io::Error::from_raw_os_error(libc::ENOMEM))?;
                         }
 
