@@ -368,6 +368,10 @@ impl TracedProcess {
         self._store_registers()?;
         ptrace::cont(self.pid, None).context("Failed to ptrace-resume the child")
     }
+    pub fn resume_syscall(&mut self) -> Result<()> {
+        self._store_registers()?;
+        ptrace::syscall(self.pid, None).context("Failed to ptrace-resume the child")
+    }
     // We need to support realtime signals, which nix doesn't support -- that's why we're using i32
     // and wrapping libc here
     pub fn resume_signal(&mut self, signal: i32) -> Result<()> {

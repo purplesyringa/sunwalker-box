@@ -66,6 +66,7 @@ enum ProcessState {
     AwaitingForkNotification,
     JustStarted,
     Alive,
+    AfterOpenMemfd(Vec<u8>),
 }
 
 struct ProcessInfo {
@@ -90,7 +91,7 @@ struct SingleRun<'a> {
 
 enum EmulatedSyscall {
     Result(usize),
-    Redirect([usize; 7]),
+    Redirect([usize; 7], ProcessState),
 }
 
 impl EmulatedSyscall {
@@ -106,21 +107,23 @@ impl EmulatedSyscall {
         Self::result(result)
     }
 
-    fn redirect<Args: tracing::SyscallArgs>(args: Args) -> Self
+    fn redirect<Args: tracing::SyscallArgs>(args: Args, state: ProcessState) -> Self
     where
         [(); Args::N]:,
     {
         let mut ext_args = [0; 7];
         ext_args[..Args::N].copy_from_slice(&args.to_usize_slice());
-        Self::Redirect(ext_args)
+        Self::Redirect(ext_args, state)
     }
 
-    fn redirect_with_errno<Args: tracing::SyscallArgs>(args: io::Result<Args>) -> Self
+    fn redirect_with_errno<Args: tracing::SyscallArgs>(
+        result: io::Result<(Args, ProcessState)>,
+    ) -> Self
     where
         [(); Args::N]:,
     {
-        match args {
-            Ok(args) => Self::redirect(args),
+        match result {
+            Ok((args, state)) => Self::redirect(args, state),
             Err(err) => Self::result(-err.raw_os_error().unwrap_or(libc::EINVAL)),
         }
     }
@@ -532,18 +535,24 @@ impl SingleRun<'_> {
                 }
                 process.traced_process.set_syscall_result(result)?;
                 process.traced_process.set_syscall_no(-1)?; // skip syscall
+                process.state = ProcessState::Alive;
             }
-            EmulatedSyscall::Redirect(args) => {
+            EmulatedSyscall::Redirect(args, state) => {
                 log!(
                     "Emulating <pid {pid}> {syscall_text} -> {} (redirect)",
                     args.debug()
                 );
                 process.traced_process.set_syscall(args)?;
+                process.state = state;
             }
         }
 
-        process.state = ProcessState::Alive;
-        process.traced_process.resume()?;
+        if process.state == ProcessState::Alive {
+            process.traced_process.resume()?;
+        } else {
+            process.traced_process.resume_syscall()?;
+        }
+
         Ok(())
     }
 
@@ -694,14 +703,19 @@ impl SingleRun<'_> {
                         // memory cgroup of the current process (see e.g.
                         // mm/shmem.c:mem_cgroup_charge:1679 on Linux v6.7.9). Therefore, memfd is
                         // effectively treated as an extension to RAM, which is what it is supposed
-                        // to be anwyay.
+                        // to be anyway.
+
+                        path.pop().unwrap();
 
                         (
-                            libc::SYS_openat,
-                            libc::AT_FDCWD,
-                            file_name_addr,
-                            open_flags,
-                            0,
+                            (
+                                libc::SYS_openat,
+                                libc::AT_FDCWD,
+                                file_name_addr,
+                                open_flags,
+                                0,
+                            ),
+                            ProcessState::AfterOpenMemfd(path),
                         )
                     },
                 ))
@@ -1020,8 +1034,15 @@ impl SingleRun<'_> {
 
             system::WaitStatus::PtraceSyscall(pid) => {
                 let process = self.processes.get_mut(&pid).unwrap().get_mut();
-                process.state = ProcessState::Alive;
-                process.traced_process.resume()?;
+                match &process.state {
+                    ProcessState::AfterOpenMemfd(path) => {
+                        std::fs::remove_file(OsStr::from_bytes(path))
+                            .context("Failed to unlink /memfd:...")?;
+                        process.state = ProcessState::Alive;
+                        process.traced_process.resume()?;
+                    }
+                    _ => bail!("Unexpected process state in PtraceSyscall"),
+                }
             }
 
             _ => {

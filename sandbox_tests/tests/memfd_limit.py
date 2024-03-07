@@ -6,7 +6,6 @@ script: |
 
 import os
 
-for i in range(20):
-    with open(os.memfd_create(f"test{i}"), "wb") as f:
-        for _ in range(1024):
-            f.write(b"\x00" * 1024)
+with open(os.memfd_create("test"), "wb") as f:
+    for _ in range(20 * 1024):
+        f.write(b"\x00" * 1024)
