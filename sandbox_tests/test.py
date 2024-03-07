@@ -228,7 +228,8 @@ def expect(result, previous_values={}, **expect):
     stderr = box.cat(stderr_path).decode() if stderr_path else ''
 
     def expect_key(key, result, expected):
-        assert result == expected, contextify(f"Expected {key}: {expected}, actual: {result}\n\nstdout:\n{stdout}\nstderr:\n{stderr}", context)
+        assert result == expected, contextify(
+            f"Expected {key}: {expected}, actual: {result}\nVerdict: {pretty_result}\n\nstdout:\n{stdout}\nstderr:\n{stderr}", context)
 
     limit_verdict = expect.get("limit_verdict", "OK")
     expect_key("verdict", result["limit_verdict"], limit_verdict)
