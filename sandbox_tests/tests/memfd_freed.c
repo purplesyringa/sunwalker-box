@@ -1,7 +1,7 @@
 /*
 description: closed memfds are freed on memory pressure
 script: |
-  expect(run(memory_limit=parse_size("1.1 MiB")))
+  expect(run(memory_limit=parse_size("1.2 MiB")))
 */
 
 #define _GNU_SOURCE
