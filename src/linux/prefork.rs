@@ -67,8 +67,6 @@ pub struct Suspender<'a> {
     forbidden_transferred_fds: HashSet<RawFd>,
     stemcell_state: MaybeUninit<StemcellState>,
     control_tx: Option<UnixStream>,
-    // rseq_info: Option<RSeqInfo>,
-    // started: Instant,
 }
 
 #[repr(C)]
@@ -121,16 +119,6 @@ struct rseq_cs {
     start_ip: u64,
     post_commit_offset: u64,
     abort_ip: u64,
-}
-
-#[derive(Clone, Object)]
-#[repr(C)]
-pub struct RSeqInfo {
-    rseq_abi_pointer: usize,
-    rseq_abi_size: u32,
-    flags: u32,
-    signature: u32,
-    rseq_cs: usize,
 }
 
 #[cfg(target_arch = "x86_64")]
@@ -199,6 +187,7 @@ struct StemcellState {
     mm_options: prctl_mm_map,
     personality: usize,
     robust_list: RobustList,
+    rseq: Rseq,
     signal_handlers: [kernel_sigaction; 64],
     thp_options: usize,
     tid_address: usize,
@@ -262,6 +251,14 @@ struct MemoryMap {
     flags: i32,
     fd: RawFd,
     offset: off_t,
+}
+
+#[repr(C)]
+struct Rseq {
+    rseq: usize,
+    rseq_len: u32,
+    flags: i32,
+    sig: u32,
 }
 
 impl SuspendOptions {
@@ -688,7 +685,8 @@ impl<'a> Suspender<'a> {
 
         // It's important to get the kernel messing with IP due to rseq out of the way as fast as
         // possible
-        let rseq_info = self.save_rseq_info().context("Saving rseq info")?;
+        self.collect_rseq(&mut registers)
+            .context("Failed to handle rseq")?;
 
         // The working directory always exists because we don't allow deleting files before suspend
         let pid = self.orig.get_pid();
@@ -736,34 +734,63 @@ impl<'a> Suspender<'a> {
         })
     }
 
-    fn save_rseq_info(&self) -> Result<Option<RSeqInfo>> {
-        // Check if IP is inside a restartable sequence. If it is, the kernel might jump to the
-        // abort handler when we don't expect that to happen. Prevent this by resetting the
-        // information about the critical section, if present.
+    fn collect_rseq(&mut self, cloned_registers: &mut tracing::Registers) -> Result<()> {
         let rseq = self
             .orig
             .get_rseq_configuration()
             .context("Failed to get rseq configuration")?;
+
+        let stemcell_state_mut = unsafe { self.stemcell_state.assume_init_mut() };
+        stemcell_state_mut.rseq.rseq = rseq.rseq_abi_pointer as usize;
+        stemcell_state_mut.rseq.rseq_len = rseq.rseq_abi_size;
+        stemcell_state_mut.rseq.flags = rseq.flags as i32;
+        stemcell_state_mut.rseq.sig = rseq.signature;
+
         if rseq.rseq_abi_pointer == 0 {
-            return Ok(None);
+            // If the user process doesn't use rseq at all, we don't need to handle anything
+            return Ok(());
         }
-        let rseq_cs_ptr = rseq.rseq_abi_pointer as usize + std::mem::offset_of!(rseq_abi, rseq_cs);
-        let rseq_cs = self
+
+        let rseq_cs_ptr_ptr =
+            rseq.rseq_abi_pointer as usize + std::mem::offset_of!(rseq_abi, rseq_cs);
+        let rseq_cs_ptr = self
             .orig
-            .read_word(rseq_cs_ptr)
+            .read_word(rseq_cs_ptr_ptr)
             .context("Failed to read rseq CS pointer")?;
-        if rseq_cs != 0 {
-            self.orig
-                .write_word(rseq_cs_ptr, 0)
-                .context("Failed to override rseq CS pointer to 0")?;
+
+        if rseq_cs_ptr == 0 {
+            // If we are outside the critical section, we don't need to handle anything
+            return Ok(());
         }
-        Ok(Some(RSeqInfo {
-            rseq_abi_pointer: rseq.rseq_abi_pointer as usize,
-            rseq_abi_size: rseq.rseq_abi_size,
-            flags: rseq.flags,
-            signature: rseq.signature,
-            rseq_cs,
-        }))
+
+        // Either we are in a critical section and need to get out of it (as if preempted) and reset
+        // rseq_cs to zero, or we are outside a critical section and need to reset rseq_cs to zero.
+        self.orig
+            .write_word(rseq_cs_ptr_ptr, 0)
+            .context("Failed to override rseq CS pointer to 0")?;
+
+        let mut rseq_cs_data = MaybeUninit::<rseq_cs>::uninit();
+        self.orig
+            .read_memory(rseq_cs_ptr, unsafe {
+                MaybeUninit::slice_assume_init_mut(rseq_cs_data.as_bytes_mut())
+            })
+            .context("Failed to read rseq CS data")?;
+        let rseq_cs_data = unsafe { rseq_cs_data.assume_init() };
+
+        // This pointer is the address of the syscall instruction that triggered suspension. (At
+        // least, that's what the caller of collect_rseq is supposed to guarantee.) We simulate what
+        // *should* have happened if a preemption was caused just before the syscall, i.e. at this
+        // very IP.
+        let ip = cloned_registers.get_instruction_pointer();
+
+        if (ip as u64).wrapping_sub(rseq_cs_data.start_ip) < rseq_cs_data.post_commit_offset {
+            // We are inside the critical section. A syscall instruction in a critical section is
+            // typically UB--unless it's the last instruction, in which case it's just fine! Thus,
+            // get our hands off kill(SIGSEGV) and faithfully update the continuation IP.
+            cloned_registers.set_instruction_pointer(rseq_cs_data.abort_ip as usize);
+        }
+
+        Ok(())
     }
 
     fn infect_orig(&mut self) -> Result<()> {
