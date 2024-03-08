@@ -11,7 +11,7 @@ CARGO_TARGET := $(shell echo "$(TARGET)" | tr a-z- A-Z_)
 CARGO := CARGO_TARGET_$(CARGO_TARGET)_LINKER="$(CC)" RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly
 CARGO_OPTIONS := --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release
 
-SECCOMP_FILTERS := filter filter_restricted
+SECCOMP_FILTERS := filter
 
 .PHONY: target/$(TARGET)/release/sunwalker_box test clean bloat check clippy
 
