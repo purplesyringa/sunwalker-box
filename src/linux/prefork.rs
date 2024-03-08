@@ -563,7 +563,7 @@ impl PreForkRun<'_> {
                     }
                 }
             }
-            // TODO: pipe, sysinfo, modify_ldt, epoll*
+            // TODO: pipe, modify_ldt, epoll*
             // TODO: move simple cases to seccomp filter for efficiency
             _ => {
                 self.suspend(orig, SuspendOptions::new_seccomp())?;
@@ -819,7 +819,6 @@ impl<'a> Suspender<'a> {
             .write_memory(self.inject_location, PARASITE)
             .context("Failed to write parasite segment")?;
 
-        // XXX does this work on aarch64??
         // Reset processor stack (direction flag, x87 state, etc.). This should prevent the original
         // process from configuring the CPU in a way the parasite doesn't expect
         let regs = self.orig.registers_mut()?;
