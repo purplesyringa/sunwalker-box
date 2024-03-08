@@ -41,7 +41,7 @@ int main(int argc, char **argv) {
   scanf("%d", &run);
 
   unsigned long long before = load_register(run);
-  if (usleep(300000) == -1) {
+  if (usleep(400000) == -1) {
     perror("usleep");
     return 1;
   }
@@ -51,6 +51,6 @@ int main(int argc, char **argv) {
     asm volatile("udf #0");
   }
 
-  printf("Counter %s had values %llu and %llu, indicating uptime of more than 30ms\n", names[run], before, after);
+  printf("Counter %s had values %llu and %llu, indicating uptime of more than 40ms\n", names[run], before, after);
   return 0;
 }
