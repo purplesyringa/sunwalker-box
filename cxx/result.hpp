@@ -26,48 +26,18 @@ struct Error {
 
 Error _global_error;
 
-template <typename T> struct [[nodiscard]] Result {
+template <typename Result, typename T> struct _result_base {
     Error _error;
-    union {
-        T _success_value;
-    };
-
-    Result() : _error{} {}
-    Result(const Error &error) : _error(error) {}
-    Result(const T &success_value) : _error{}, _success_value(success_value) {}
-    Result(T &&success_value) : _error{}, _success_value(std::move(success_value)) {}
-
-    Result(const Result &rhs)
-        requires std::copy_constructible<T>
-        : _error(rhs._error) {
-        if (std::is_trivially_copy_constructible_v<T> || is_ok()) {
-            new (&_success_value) T(rhs._success_value);
-        }
-    }
-    Result(Result &&rhs) : _error(rhs._error) {
-        if (std::is_trivially_move_constructible_v<T> || is_ok()) {
-            new (&_success_value) T(std::move(rhs._success_value));
-        }
-    }
-
-    ~Result() {
-        if (is_ok()) {
-            _success_value.~T();
-        }
-    }
-
-    Result &operator=(const Result &rhs) = delete;
-    Result &operator=(Result &&rhs) = delete;
+    _result_base() : _error{} {}
+    _result_base(Error error) : _error(error) {}
 
     Result context(size_t index) && {
         if (is_ok()) {
-            return std::move(*this);
+            return static_cast<Result &&>(*this);
         } else {
             return _error.context(index);
         }
     }
-
-    T unwrap() && { return std::move(_success_value); }
 
     bool is_ok() const { return _error.is_ok(); }
 
@@ -81,66 +51,74 @@ template <typename T> struct [[nodiscard]] Result {
 
     bool is_errno(int errno) const { return _error.errno() == errno; }
 
+    Result _bind_global() && {
+        _global_error = _error;
+        return static_cast<Result &&>(*this);
+    }
+    Result _bind_global() const & {
+        _global_error = _error;
+        return static_cast<const Result &>(*this);
+    }
+
+    T _unwrap_int(int) && { return static_cast<Result &&>(*this).unwrap(); }
+};
+
+template <typename T> struct [[nodiscard]] Result : _result_base<Result<T>, T> {
+    using Base = _result_base<Result<T>, T>;
+
+    union {
+        T _success_value;
+    };
+
+    using Base::_result_base;
+    Result(const T &success_value) : _success_value(success_value) {}
+    Result(T &&success_value) : _success_value(std::move(success_value)) {}
+
+    Result(const Result &rhs)
+        requires std::copy_constructible<T>
+        : Base(rhs._error) {
+        if (std::is_trivially_copy_constructible_v<T> || this->is_ok()) {
+            new (&_success_value) T(rhs._success_value);
+        }
+    }
+    Result(Result &&rhs) : Base(rhs._error) {
+        if (std::is_trivially_move_constructible_v<T> || this->is_ok()) {
+            new (&_success_value) T(std::move(rhs._success_value));
+        }
+    }
+
+    ~Result() {
+        if (this->is_ok()) {
+            _success_value.~T();
+        }
+    }
+
+    Result &operator=(const Result &rhs) = delete;
+    Result &operator=(Result &&rhs) = delete;
+
+    T unwrap() && { return std::move(_success_value); }
+
     Result swallow(int errno, const T &def) && {
-        if (is_errno(errno)) {
+        if (this->is_errno(errno)) {
             return def;
         } else {
             return std::move(*this);
         }
     }
-
-    Result _bind_global() && {
-        _global_error = _error;
-        return std::move(*this);
-    }
-    Result _bind_global() const & {
-        _global_error = _error;
-        return *this;
-    }
-
-    T _unwrap_int(int) && { return std::move(*this).unwrap(); }
 };
 
-template <> struct [[nodiscard]] Result<void> {
-    Error _error;
-
-    Result() : _error{} {}
-    Result(const Error &error) : _error(error) {}
-
-    Result context(size_t index) && {
-        if (is_ok()) {
-            return {};
-        } else {
-            return _error.context(index);
-        }
-    }
+template <> struct [[nodiscard]] Result<void> : _result_base<Result<void>, void> {
+    using _result_base<Result<void>, void>::_result_base;
 
     void unwrap() && {}
 
-    bool is_ok() const { return _error.is_ok(); }
-
-    int unwrap_errno() const {
-        int errno = _error.errno();
-        if (errno == 0) {
-            __builtin_unreachable();
-        }
-        return errno;
-    }
-
     Result swallow(int errno) && {
-        if (_error.errno() == errno) {
+        if (is_errno(errno)) {
             return {};
         } else {
             return std::move(*this);
         }
     }
-
-    Result _bind_global() {
-        _global_error = _error;
-        return *this;
-    }
-
-    void _unwrap_int(int) && {}
 };
 
 // Even though _global_error is global, it is implicitly static and thus is subject to storage
