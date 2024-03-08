@@ -655,11 +655,13 @@ impl SingleRun<'_> {
             .context("Failed to get syscall info")?;
         let syscall_info = unsafe { syscall_info.u.seccomp };
 
-        let syscall_args = tracing::SyscallArgs {
-            syscall_no: syscall_info.nr as i32,
-            args: syscall_info.args.map(|arg| arg as usize),
-        };
-        log!("seccomp triggered on <pid {pid}> {syscall_args}");
+        log!(
+            "seccomp triggered on <pid {pid}> {}",
+            tracing::SyscallArgs {
+                syscall_no: syscall_info.nr as i32,
+                args: syscall_info.args.map(|arg| arg as usize),
+            }
+        );
 
         match self.options.mode {
             Mode::Run | Mode::Resume => self

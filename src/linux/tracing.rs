@@ -642,7 +642,7 @@ impl TracedProcess {
         );
     }
 
-    pub fn exec_syscall(&mut self, args: SyscallArgs, inside_syscall: bool) -> Result<usize> {
+    pub fn exec_syscall(&mut self, syscall: SyscallArgs, inside_syscall: bool) -> Result<usize> {
         // Assuming that the instruction pointer points to a syscall instruction, execute one
         // syscall. set_syscall_no modifies orig_rax, which only makes sense after the syscall has
         // been entered.
@@ -651,20 +651,20 @@ impl TracedProcess {
             self.resume_syscall()?;
             self.wait_for_ptrace_syscall()?;
         }
-        self.set_syscall(args.clone())?;
+        self.set_syscall(syscall)?;
         self.resume_syscall()?;
         self.wait_for_ptrace_syscall()?;
         let result = self.get_syscall_result()?;
         if (-4095..0).contains(&(result as isize)) {
             let errno = -(result as i32);
             log!(
-                "<pid {}> {args} = -{}",
+                "<pid {}> {syscall} = -{}",
                 self.pid,
                 string_table::errno_to_name(errno)
             );
             Err(io::Error::from_raw_os_error(errno))?
         } else {
-            log!("<pid {}> {args} = {result}", self.pid);
+            log!("<pid {}> {syscall} = {result}", self.pid);
             Ok(result)
         }
     }
