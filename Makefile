@@ -53,12 +53,8 @@ target/libc.hpp: generate_syscall_table.py
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
 	mkdir -p target && seccomp-tools asm $^ -o $@ -f raw
 
-target/exec_wrapper: target/$(ARCH)/exec_wrapper.o
-	$(CC) $^ -o $@ -static -nostartfiles -n -s
-target/x86_64/exec_wrapper.o: src/linux/x86_64/exec_wrapper.asm
-	mkdir -p target/x86_64 && nasm $^ -o $@ -f elf64
-target/aarch64/exec_wrapper.o: src/linux/aarch64/exec_wrapper.asm
-	mkdir -p target/aarch64 && aarch64-linux-gnu-as $^ -o $@
+target/exec_wrapper: cxx/exec_wrapper.cpp cxx/exec_wrapper.ld $(shell find cxx -maxdepth 1 -name '*.hpp') target/libc.hpp
+	$(CXX) $< -o $@ -T cxx/exec_wrapper.ld -static-pie $(CXX_OPTIONS) -s
 
 target/sunwalker.ko: kmodule/$(ARCH)/sunwalker.ko
 	mkdir -p target && cp $^ $@

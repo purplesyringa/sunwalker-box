@@ -71,6 +71,14 @@ template <typename T> struct [[nodiscard]] Result {
 
     bool is_ok() const { return _error.is_ok(); }
 
+    int unwrap_errno() const {
+        int errno = _error.errno();
+        if (errno == 0) {
+            __builtin_unreachable();
+        }
+        return errno;
+    }
+
     bool is_errno(int errno) const { return _error.errno() == errno; }
 
     Result swallow(int errno, const T &def) && {
@@ -110,6 +118,14 @@ template <> struct [[nodiscard]] Result<void> {
     void unwrap() && {}
 
     bool is_ok() const { return _error.is_ok(); }
+
+    int unwrap_errno() const {
+        int errno = _error.errno();
+        if (errno == 0) {
+            __builtin_unreachable();
+        }
+        return errno;
+    }
 
     Result swallow(int errno) && {
         if (_error.errno() == errno) {
