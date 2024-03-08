@@ -9,6 +9,7 @@
 #include "remembrances/mm_options.hpp"
 #include "remembrances/personality.hpp"
 #include "remembrances/robust_list.hpp"
+#include "remembrances/rseq.hpp"
 #include "remembrances/signal_handlers.hpp"
 #include "remembrances/thp_options.hpp"
 #include "remembrances/tid_address.hpp"
@@ -28,6 +29,7 @@ struct State {
     mm_options::State mm_options;
     personality::State personality;
     robust_futexes::State robust_list;
+    rsequence::State rseq;
     signal_handlers::State signal_handlers;
     thp_options::State thp_options;
     tid_address::State tid_address;
@@ -85,6 +87,9 @@ Result<void> run() {
     // best-effort, and hope the most dangerous ones aren't really used. Luckily, stemcell is
     // untrusted, so this can cause odd behavior at worst
     personality::load(state.personality).CONTEXT("Failed to load personality").TRY();
+    // rseq is inherited after fork. We also ensure rseq_cs is reset to 0 while suspending, so
+    // stemcell code won't be interpreted as a critical section and aborted.
+    rsequence::load(state.rseq).CONTEXT("Failed to load rseq").TRY();
     // We aren't going to intentionally cause any signals to be delivered, except SIGSTOP.
     // Unintentional ones, like SIGSEGV, are unlikely and shall be considered bugs by themselves.
     // The only potential issue is SIGCONT, which we'll trigger inadvertently when starting user
