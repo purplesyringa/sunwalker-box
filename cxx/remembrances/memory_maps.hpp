@@ -13,7 +13,6 @@ Result<void> mmap_thp(uintptr_t base, size_t length, int prot, int flags, int fd
     // We want THP, because we're going to clone lots of page tables, and they better be small. The
     // "correct" solution is enabling THP in "always" mode as opposed to "madvise" system-wide, but
     // let's at least try to handle the worse case gracefully
-    // FIXME: This is only valid for x86-64
     libc::mmap(base, length, prot, flags, fd, offset).CONTEXT("Failed to mmap section").TRY();
     // If kernel is built without CONFIG_TRANSPARENT_HUGEPAGE, like `linux-rt` in Arch Linux,
     // madvise THP will return EINVAL. We can't do anything about it and will just swallow the error
