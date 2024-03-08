@@ -5,7 +5,7 @@ PHDRS {
 }
 
 SECTIONS {
-    . = SIZEOF_HEADERS;
+    . = 0x40000 + SIZEOF_HEADERS;
     .text : {
         *(.text .text.*)
         *(.rodata .rodata.* .gnu.linkonce.r.*)

@@ -8,7 +8,7 @@ use nix::{
     errno, libc,
     libc::pid_t,
     sched,
-    sys::{epoll, ptrace, resource, signal, signalfd, sysinfo, time, wait},
+    sys::{epoll, ptrace, signal, signalfd, sysinfo, wait},
     unistd,
     unistd::Pid,
 };
@@ -143,9 +143,11 @@ impl Runner {
             )
             .context("Failed to configure epoll")?;
 
-        let exec_wrapper =
-            system::make_memfd("exec_wrapper", include_bytes!("../../target/exec_wrapper"))
-                .context("Failed to create memfd for exec_wrapper")?;
+        let exec_wrapper = system::make_memfd(
+            "exec_wrapper",
+            include_bytes!("../../target/exec_wrapper.stripped"),
+        )
+        .context("Failed to create memfd for exec_wrapper")?;
 
         Ok(Runner {
             proc_cgroup,
@@ -237,7 +239,6 @@ impl SingleRun<'_> {
                 stdout,
                 stderr,
                 theirs,
-                self.options.cpu_time_limit,
                 self.runner
                     .exec_wrapper
                     .try_clone()
@@ -275,8 +276,33 @@ impl SingleRun<'_> {
             .add_process(self.main_pid.as_raw())
             .context("Failed to move the child to user cgroup")?;
 
-        // execve() the real program
         let mut traced_process = tracing::TracedProcess::new(self.main_pid)?;
+
+        if let Some(cpu_time_limit) = self.options.cpu_time_limit {
+            // An additional optimization for finer handling of cpu time limit. An ITIMER_PROF timer
+            // can emit a signal when the given limit is exceeded and is not reset upon execve. This
+            // only applies to a single process, not a cgroup, and can be overwritten by the user
+            // program, but this feature is not mission-critical. It merely saves us a few precious
+            // milliseconds due to the (somewhat artificially deliberate) inefficiency of polling.
+            //
+            // We set itimer after adding the process to the cgroup so that when SIGPROF fires, it
+            // is guaranteed that the cgroup limit has indeed been exceeded.
+
+            const EXEC_WRAPPER_ITIMER_VALUE: usize =
+                include!("../../target/exec_wrapper.itimer_prof");
+            let timeval = libc::timeval {
+                tv_sec: cpu_time_limit.as_secs() as i64,
+                tv_usec: cpu_time_limit.subsec_micros() as i64,
+            };
+
+            traced_process
+                .write_memory(EXEC_WRAPPER_ITIMER_VALUE + 16, &unsafe {
+                    std::mem::transmute::<libc::timeval, [u8; 16]>(timeval)
+                })
+                .context("Failed to write itimer_value to exec_wrapper memory")?;
+        }
+
+        // execve() the real program
         log!("Starting user process");
         traced_process.resume()?;
 
@@ -1144,19 +1170,9 @@ fn executor_worker(
     stdout: File,
     stderr: File,
     mut pipe: crossmist::Sender<String>,
-    cpu_time_limit: Option<Duration>,
     exec_wrapper: File,
 ) -> ! {
-    let e = executor_worker_impl(
-        argv,
-        env,
-        stdin,
-        stdout,
-        stderr,
-        cpu_time_limit,
-        exec_wrapper,
-    )
-    .into_err();
+    let e = executor_worker_impl(argv, env, stdin, stdout, stderr, exec_wrapper).into_err();
 
     // Ignore errors while sending error as we can't really do anything with them. stderr is now broken, so, silent death is the best solution
     let _ = pipe.send(&format!("{e:?}"));
@@ -1169,7 +1185,6 @@ fn executor_worker_impl(
     stdin: File,
     stdout: File,
     stderr: File,
-    cpu_time_limit: Option<Duration>,
     exec_wrapper: File,
 ) -> Result<!> {
     // We want to disable rdtsc. Turns out, ld.so always calls rdtsc when it starts and keeps
@@ -1217,47 +1232,6 @@ fn executor_worker_impl(
     }
 
     ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
-
-    if let Some(cpu_time_limit) = cpu_time_limit {
-        // An additional optimization for finer handling of cpu time limit. An ITIMER_PROF timer
-        // can emit a signal when the given limit is exceeded and is not reset upon execve. This
-        // only applies to a single process, not a cgroup, and can be overwritten by the user
-        // program, but this feature is not mission-critical. It merely saves us a few precious
-        // milliseconds due to the (somewhat artificially deliberate) inefficiency of polling.
-        //
-        // We set itimer after adding the process to the cgroup so that when SIGPROF fires, it
-        // is guaranteed that the cgroup limit has indeed been exceeded.
-
-        // rusage is preserved across execve, so we have to account for the CPU time we have
-        // already spent
-        let rusage =
-            resource::getrusage(resource::UsageWho::RUSAGE_SELF).context("Failed to getrusage")?;
-        let delay = rusage.user_time()
-            + rusage.system_time()
-            + time::TimeVal::new(
-                cpu_time_limit.as_secs() as i64,
-                cpu_time_limit.subsec_micros() as i64,
-            );
-
-        let timer = libc::itimerval {
-            it_interval: libc::timeval {
-                tv_sec: 0,
-                tv_usec: 0,
-            },
-            it_value: *delay.as_ref(),
-        };
-        if unsafe {
-            libc::syscall(
-                libc::SYS_setitimer,
-                libc::ITIMER_PROF,
-                &timer as *const libc::itimerval,
-                std::ptr::null_mut::<libc::itimerval>(),
-            )
-        } == -1
-        {
-            Err(std::io::Error::last_os_error()).context("Failed to set interval timer")?;
-        }
-    }
 
     // We don't need to reset signals because we didn't configure them inside executor_worker()
 

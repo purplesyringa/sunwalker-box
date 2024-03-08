@@ -33,7 +33,7 @@ sunwalker_box: $(ARCH)-sunwalker_box
 $(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
 	strip $^ -o $@
 
-DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper target/sunwalker.ko target/syscall_table.offsets
+DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper.stripped target/exec_wrapper.itimer_prof target/sunwalker.ko target/syscall_table.offsets
 
 target/$(TARGET)/release/sunwalker_box: $(DEPS)
 	$(CARGO) build $(CARGO_OPTIONS)
@@ -53,8 +53,12 @@ target/libc.hpp: generate_syscall_table.py
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
 	mkdir -p target && seccomp-tools asm $^ -o $@ -f raw
 
+target/exec_wrapper.stripped: target/exec_wrapper
+	strip $^ -o $@
+target/exec_wrapper.itimer_prof: target/exec_wrapper
+	readelf -s $< | awk '/OBJECT.*itimer_prof/{ print strtonum("0x" $$2) }' >$@
 target/exec_wrapper: cxx/exec_wrapper.cpp cxx/exec_wrapper.ld $(shell find cxx -maxdepth 1 -name '*.hpp') target/libc.hpp
-	$(CXX) $< -o $@ -T cxx/exec_wrapper.ld -static-pie $(CXX_OPTIONS) -s
+	$(CXX) $< -o $@ -T cxx/exec_wrapper.ld -static $(CXX_OPTIONS)
 
 target/sunwalker.ko: kmodule/$(ARCH)/sunwalker.ko
 	mkdir -p target && cp $^ $@
