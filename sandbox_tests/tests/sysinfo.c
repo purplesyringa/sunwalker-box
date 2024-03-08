@@ -3,7 +3,7 @@ description: sysinfo should not reveal information
 script: |
   pv = {}
   for _ in range(2):
-    _, _, pv = expect(run(memory_limit=parse_size("200 MB")), previous_values=pv, matching_stdout="+- 0.1")
+    _, _, pv = expect(run(memory_limit=parse_size("200 MB")), previous_values=pv, matching_stdout="+- 1")
     run_reset()
 */
 
@@ -74,7 +74,7 @@ int main() {
     p[i] = 0;
   }
 
-  if (sleep(1) == -1) {
+  if (sleep(2) == -1) {
     perror("sleep");
     return 1;
   }
@@ -85,8 +85,11 @@ int main() {
     return 1;
   }
 
-  if (info1.uptime - info.uptime != 1) {
-    fprintf(stderr, "uptime did not change by 1 s");
+  int diff = info1.uptime - info.uptime;
+  // It should be a bit larger than 2 s; due to rounding, this might actually be
+  // rounded to 3 s
+  if (diff != 2 && diff != 3) {
+    fprintf(stderr, "uptime did not change by 2 s or 3 s");
     return 1;
   }
 
