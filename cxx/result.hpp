@@ -24,6 +24,8 @@ struct Error {
     }
 };
 
+Error _global_error;
+
 template <typename T> struct [[nodiscard]] Result {
     Error _error;
     union {
@@ -78,6 +80,17 @@ template <typename T> struct [[nodiscard]] Result {
             return std::move(*this);
         }
     }
+
+    Result _bind_global() && {
+        _global_error = _error;
+        return std::move(*this);
+    }
+    Result _bind_global() const & {
+        _global_error = _error;
+        return *this;
+    }
+
+    T _unwrap_int(int) && { return std::move(*this).unwrap(); }
 };
 
 template <> struct [[nodiscard]] Result<void> {
@@ -105,16 +118,24 @@ template <> struct [[nodiscard]] Result<void> {
             return std::move(*this);
         }
     }
+
+    Result _bind_global() {
+        _global_error = _error;
+        return *this;
+    }
+
+    void _unwrap_int(int) && {}
 };
 
-#define TRY(result)                                                                                \
-    ({                                                                                             \
-        auto res = (result);                                                                       \
-        if (!res.is_ok()) {                                                                        \
-            return res._error;                                                                     \
+// Even though _global_error is global, it is implicitly static and thus is subject to storage
+// optimization. The generated code uses only registers.
+#define TRY()                                                                                      \
+    _bind_global()._unwrap_int(({                                                                  \
+        if (!_global_error.is_ok()) {                                                              \
+            return _global_error;                                                                  \
         }                                                                                          \
-        std::move(res).unwrap();                                                                   \
-    })
+        0;                                                                                         \
+    }))
 
 // This is a horrible hack. I don't give a fuck.
 #pragma GCC diagnostic push
