@@ -48,7 +48,7 @@ Result<void> add_dummy_timer(const int next_timer_id) {
 }
 
 Result<void> load(const State &state) {
-    int next_timer_id = 0;
+    static int next_timer_id = 0;
 
     ENSURE(state.count <= 64, "Too many timers!");
 
