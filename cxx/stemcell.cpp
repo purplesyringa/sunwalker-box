@@ -190,10 +190,21 @@ Result<void> loop() {
     for (;;) {
         msg.msg_controllen = sizeof(cmsg);
 
-        ssize_t n_received = libc::recvmsg(state.controlling_fd, &msg, 0)
-                                 .CONTEXT("Failed to receive messagr from controlling fd")
-                                 .TRY();
-        ENSURE(n_received != 0, "Unexpected EOF on controlling fd");
+        // Avoid raising SIGSTOP on failure to recvmsg: an error or EOF likely indicates the runner
+        // does not care about this process at the moment and will notice the SIGSTOP during the
+        // next waitid, where such a singal on a "new" process will be interpreted as a fork
+        // notification. Any other signal will correctly crash the sandbox if it isn't ignored. To
+        // avoid accidentally sending an ignored signal, always use SIGKILL for simplicity. This can
+        // be reworked later if greater flexibility is needed.
+        ssize_t n_received = 0;
+        auto result = libc::recvmsg(state.controlling_fd, &msg, 0);
+        if (result.is_ok()) {
+            n_received = std::move(result).unwrap();
+        }
+        if (n_received == 0) {
+            (void)libc::kill(libc::getpid().unwrap(), SIGKILL);
+            __builtin_unreachable();
+        }
         ENSURE(n_received == sizeof(control_message), "Unexpected size of control message");
 
         cmsghdr *cmsgp = CMSG_FIRSTHDR(&msg);
