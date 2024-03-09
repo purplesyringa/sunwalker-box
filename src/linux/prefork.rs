@@ -1370,7 +1370,8 @@ impl<'a> Suspender<'a> {
         let stemcell_result = u64::from_ne_bytes(stemcell_result);
 
         if stemcell_result != 0 {
-            master.detach()?;
+            master.resume_signal(libc::SIGKILL)?;
+            wait_for_sigkill(master)?;
             return Err(
                 recover_cxx_error(stemcell_result, STEMCELL_CONTEXTS).context("In stemcell")
             );
