@@ -1,4 +1,5 @@
 #![feature(
+    array_try_from_fn,
     concat_idents,
     io_error_more,
     let_chains,
