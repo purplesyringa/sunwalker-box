@@ -225,8 +225,6 @@ Result<void> loop() {
         }
         libc::close(fds.cwd).unwrap();
     }
-
-    return {};
 }
 
 extern "C" __attribute__((naked, flatten, externally_visible)) void _start() {
