@@ -1255,6 +1255,18 @@ impl SingleRun<'_> {
             ._handle_event(wait_status)
             .context("Failed to handle event");
         if let Err(ref e) = res {
+            match self.options.mode {
+                Mode::PreFork => {
+                    // In prefork, a failed resume may lead to termination of the process--without
+                    // notifying the runner about that! Therefore, remove it from the process list
+                    // if it's dead.
+                    if signal::kill(self.main_pid, None).is_err() {
+                        self.processes.remove(&self.main_pid);
+                    }
+                }
+                Mode::Run | Mode::Resume => {}
+            }
+
             // Not the nicest solution, certainly
             if let Some(errno::Errno::ESRCH) = e.root_cause().downcast_ref::<errno::Errno>() {
                 log!(
