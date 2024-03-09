@@ -1267,8 +1267,7 @@ impl<'a> Suspender<'a> {
             .recv()
             .context("Failed to receive transferred fds from master copy")?
             .context("Master didn't deliver any transferred fds")?;
-        self.patch_transferred_fds(&transferred_fds)
-            .context("Failed to to patch transferred fds")?;
+        self.patch_transferred_fds(&transferred_fds);
 
         // The child will either exit or trigger SIGTRAP on execve() to stemcell due to ptrace
         let wait_status =
@@ -1295,7 +1294,7 @@ impl<'a> Suspender<'a> {
         Ok(())
     }
 
-    fn patch_transferred_fds(&mut self, fds: &[RawFd]) -> Result<()> {
+    fn patch_transferred_fds(&mut self, fds: &[RawFd]) {
         log!("Patching transferred fds");
 
         let state = unsafe { self.stemcell_state.assume_init_mut() };
@@ -1332,8 +1331,6 @@ impl<'a> Suspender<'a> {
         }
 
         state.controlling_fd = fds[state.controlling_fd as usize];
-
-        Ok(())
     }
 
     fn restore_via_master(&mut self) -> Result<()> {
