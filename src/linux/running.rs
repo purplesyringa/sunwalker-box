@@ -1146,10 +1146,10 @@ impl SingleRun<'_> {
             let mut wait_status = system::WaitStatus::StillAlive;
             while !self.is_exceeding_limits() {
                 wait_status = self.wait_for_event()?;
+                self.update_metrics()?;
                 if self.handle_event(&wait_status)? {
                     break;
                 }
-                self.update_metrics()?;
             }
 
             self.results.memory = self.box_cgroup.as_mut().unwrap().get_memory_peak()?;
