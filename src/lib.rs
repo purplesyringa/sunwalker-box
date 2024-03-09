@@ -1,4 +1,5 @@
 #![feature(
+    array_try_from_fn,
     io_error_more,
     macro_metavar_expr_concat,
     maybe_uninit_as_bytes,
