@@ -55,6 +55,7 @@ pub struct SuspendData {
     control_tx: UnixStream,
     registers: tracing::Registers,
     signal_mask: u64,
+    rlimits: [libc::rlimit; 16],
 }
 
 // MaybeUninit is used to avoid data leaks via padding
@@ -415,6 +416,14 @@ impl PreForkManager {
             .set_signal_mask(data.signal_mask)
             .context("Failed to restore signal mask")?;
 
+        // Only restore rlimits just before running the child in user code, so that the limits don't
+        // bring down the parasite
+        for (i, rlimit) in data.rlimits.iter().enumerate() {
+            child
+                .set_rlimit(i as i32, *rlimit)
+                .context("Failed to restore rlimit")?;
+        }
+
         // Finally, restore CPU state
         child.set_registers(data.registers.clone());
 
@@ -721,6 +730,10 @@ impl<'a> Suspender<'a> {
         self.restore_via_master()
             .context("Failed to restore via master")?;
 
+        let rlimits = self
+            .collect_rlimits()
+            .context("Failed to collect orig rlimits")?;
+
         log!("Suspend finished in {:?}", started.elapsed());
 
         Ok(SuspendData {
@@ -731,6 +744,7 @@ impl<'a> Suspender<'a> {
             control_tx: self.control_tx.unwrap(),
             registers,
             signal_mask,
+            rlimits,
         })
     }
 
@@ -1209,6 +1223,18 @@ impl<'a> Suspender<'a> {
         self.control_tx = Some(tx);
 
         Ok(())
+    }
+
+    fn collect_rlimits(&self) -> Result<[libc::rlimit; 16]> {
+        // This does not *quite* cover RLIMIT_CPU. Say, if a process spends half a second in
+        // prefork, SIGXCPU will fire half a second later than expected. This is a bad thing if
+        // someone uses SIGXCPU to abort computations just before TLE. This should be a rare case,
+        // as this is not applicable to the typical time limit of 1 second, and there are more
+        // popular ways to trigger a signal upon timer expiration, both simpler (e.g. alarm(2)) and
+        // more precise (e.g. setitimer(2), which uses the same timer with ITIMER_PROF). An accurate
+        // emulation of RLIMIT_CPU is complicated at best, so it'll likely stay a TODO until anyone
+        // halloos.
+        std::array::try_from_fn(|i| self.orig.get_rlimit(i as i32)).context("Failed to get rlimit")
     }
 
     fn start_master(&mut self) -> Result<()> {
