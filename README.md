@@ -71,7 +71,7 @@ Cross-compilation for x86-64 is supported by passing `CC=x86_64-linux-gnu-gcc` (
 
 > TL;DR: Isolate the cores you want sunwalker-box to run user processes on with `sunwalker_box isolate --core {CORE}`, then start the sandbox with `sunwalker_box start --core {CORE}` (but you should add a few more options for security).
 
-Sunwalker manipulates the system configuration quite a bit, so all commands have to be run under root. If, for some reason, you need to run sunwalker-box in Docker (and that's very, very inefficient and makes absolutely no sense if you're spawning a container per user submission because Docker's just duplicating what sunwalker-box does, just worse), `--privileged` suffices.
+Sunwalker manipulates the system configuration quite a bit, so all commands have to be run under root. If, for some reason, you need to run sunwalker-box in Docker (and that's very, very inefficient and makes absolutely no sense if you're spawning a container per user submission because Docker's just duplicating what sunwalker-box does, just worse), `--privileged --cgroupns=host` suffices.
 
 Firstly, reserve the cores you want sunwalker to use exclusively for running untrusted code. The preferred way to do this is to start the Linux kernel with the `isolcpus` option. If you can't or won't use `isolcpus`, sunwalker will work fine anyway, but then Linux might use the cores for kernel tasks, so the testing results might be somewhat unstable.
 
