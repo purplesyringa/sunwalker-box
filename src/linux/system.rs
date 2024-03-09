@@ -103,7 +103,7 @@ pub fn open_pidfd(pid: Pid) -> Result<OwnedFd> {
 // We need to roll our own nix::wait because nix's version doesn't support realtime signals -- and
 // not only does it not support them, it also fails to handle waitpid() in this case, making Mono
 // runtime die.
-#[derive(Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum WaitStatus {
     Exited(Pid, i32),
     Signaled(Pid, i32),
