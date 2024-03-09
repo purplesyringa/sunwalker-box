@@ -863,7 +863,6 @@ impl<'a> Suspender<'a> {
         // these syscalls include ones blocked by seccomp due to the nature of prefork, so we have
         // to explicitly allow them via ptrace.
 
-        self.orig.init()?;
         self.orig.resume()?;
 
         wait_for_raised_sigstop(self.orig, false)
