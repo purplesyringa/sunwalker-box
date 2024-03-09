@@ -449,6 +449,15 @@ impl PreForkRun<'_> {
         }
     }
 
+    pub fn abort(self) -> Result<()> {
+        let State::Suspended(SuspendData { mut master, .. }) = self.state.into_inner() else {
+            return Ok(());
+        };
+        signal::kill(master.get_pid(), signal::Signal::SIGKILL)
+            .context("Failed to SIGKILL master")?;
+        wait_for_sigkill(&mut master).context("Failed to wait for SIGKILL on master")
+    }
+
     pub fn on_seccomp(&self, orig: &mut tracing::TracedProcess) -> Result<bool> {
         let syscall_info = orig
             .get_syscall_info()
