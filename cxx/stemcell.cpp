@@ -221,9 +221,9 @@ Result<void> loop() {
         // Make sure not to cause any errors between clone3 and recvmsg -- these would be caught by
         // running, which has no idea what to do about them
         for (int i = 0; i < 3; i++) {
-            libc::close(fds.stdio[i]).unwrap();
+            (void)libc::close(fds.stdio[i]);
         }
-        libc::close(fds.cwd).unwrap();
+        (void)libc::close(fds.cwd);
     }
 }
 
