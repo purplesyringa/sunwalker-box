@@ -479,7 +479,7 @@ impl SingleRun<'_> {
             || Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time)
     }
 
-    fn compute_verdict(&mut self, wait_status: system::WaitStatus) -> Result<Verdict> {
+    fn compute_verdict(&mut self, wait_status: system::WaitStatus) -> Result<Option<Verdict>> {
         if Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time) {
             if let system::WaitStatus::Stopped(_, libc::SIGPROF) = wait_status {
             } else {
@@ -490,11 +490,11 @@ impl SingleRun<'_> {
                      is unexpected, consider reporting an inefficiency."
                 );
             }
-            return Ok(Verdict::CPUTimeLimitExceeded);
+            return Ok(Some(Verdict::CPUTimeLimitExceeded));
         } else if Self::is_exceeding(self.options.real_time_limit, self.results.real_time) {
-            return Ok(Verdict::RealTimeLimitExceeded);
+            return Ok(Some(Verdict::RealTimeLimitExceeded));
         } else if Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time) {
-            return Ok(Verdict::IdlenessTimeLimitExceeded);
+            return Ok(Some(Verdict::IdlenessTimeLimitExceeded));
         } else if self.box_cgroup.as_ref().unwrap().was_oom_killed()? {
             // Do not blame the user for invoker's failure. Verify OOM authenticity by checking if
             // the limit was about to be exceeded.
@@ -531,7 +531,7 @@ impl SingleRun<'_> {
                 "OOM killer was invoked even though memory use is in check; the invoker is likely \
                  overloaded"
             );
-            return Ok(Verdict::MemoryLimitExceeded);
+            return Ok(Some(Verdict::MemoryLimitExceeded));
         } else if Self::is_exceeding(self.options.memory_limit, self.results.memory) {
             log!(
                 impossible,
@@ -539,34 +539,12 @@ impl SingleRun<'_> {
                  might indicate something has gone horribly wrong with cgroups, or a race \
                  condition. Either way, you need to figure this out."
             );
-            return Ok(Verdict::MemoryLimitExceeded);
+            return Ok(Some(Verdict::MemoryLimitExceeded));
         }
         match wait_status {
-            system::WaitStatus::Exited(_, exit_code) => return Ok(Verdict::ExitCode(exit_code)),
-            system::WaitStatus::Signaled(_, signal) => return Ok(Verdict::Signaled(signal)),
-            _ => {}
-        }
-        match self.options.mode {
-            Mode::Run | Mode::Resume => {
-                bail!("waitpid returned unexpected status: {wait_status:?}")
-            }
-            Mode::PreFork => {
-                let data = self.prefork.take().unwrap().get_suspend_data()?;
-                let orig_pid = data.orig_pid;
-                let mut suspended_runs = self.runner.suspended_runs.borrow_mut();
-                suspended_runs.push(SuspendedRun {
-                    data: Rc::new(RefCell::new(data)),
-                    real_time_limit: self.options.real_time_limit,
-                    cpu_time_limit: self.options.cpu_time_limit,
-                    idleness_time_limit: self.options.idleness_time_limit,
-                    memory_limit: self.options.memory_limit,
-                    processes_limit: self.options.processes_limit,
-                });
-                Ok(Verdict::Suspended(pack_prefork_id(
-                    suspended_runs.len() - 1,
-                    orig_pid,
-                )))
-            }
+            system::WaitStatus::Exited(_, exit_code) => Ok(Some(Verdict::ExitCode(exit_code))),
+            system::WaitStatus::Signaled(_, signal) => Ok(Some(Verdict::Signaled(signal))),
+            _ => Ok(None),
         }
     }
 
@@ -1419,9 +1397,47 @@ impl SingleRun<'_> {
             }
 
             self.results.memory = self.box_cgroup.as_mut().unwrap().get_memory_peak()?;
-            self.results.verdict = self
+
+            let verdict = self
                 .compute_verdict(wait_status)
                 .context("Failed to compute verdict")?;
+
+            match self.options.mode {
+                Mode::Run | Mode::Resume => {
+                    self.results.verdict = verdict.with_context(|| {
+                        format!("waitpid returned unexpected status: {wait_status:?}")
+                    })?;
+                }
+                Mode::PreFork => {
+                    let prefork = self.prefork.take().unwrap();
+                    match verdict {
+                        // If we have already spawned a process, we have to gracefully terminate it
+                        // so that we don't receive a notification about stemcell reaching EOF on
+                        // controlling fd during the next waitpid.
+                        Some(verdict) => {
+                            self.results.verdict = verdict;
+                            prefork.abort().context("Failed to abort prefork")?;
+                        }
+                        None => {
+                            let data = prefork.get_suspend_data()?;
+                            let orig_pid = data.orig_pid;
+                            let mut suspended_runs = self.runner.suspended_runs.borrow_mut();
+                            suspended_runs.push(SuspendedRun {
+                                data: Rc::new(RefCell::new(data)),
+                                real_time_limit: self.options.real_time_limit,
+                                cpu_time_limit: self.options.cpu_time_limit,
+                                idleness_time_limit: self.options.idleness_time_limit,
+                                memory_limit: self.options.memory_limit,
+                                processes_limit: self.options.processes_limit,
+                            });
+                            self.results.verdict = Verdict::Suspended(pack_prefork_id(
+                                suspended_runs.len() - 1,
+                                orig_pid,
+                            ));
+                        }
+                    }
+                }
+            }
         };
 
         if let Err(ref e) = result {
