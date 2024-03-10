@@ -675,7 +675,7 @@ impl SingleRun<'_> {
                 .prefork
                 .as_ref()
                 .unwrap()
-                .on_seccomp(&mut process.traced_process),
+                .on_seccomp(&mut process.traced_process, syscall_info),
         }
     }
 
