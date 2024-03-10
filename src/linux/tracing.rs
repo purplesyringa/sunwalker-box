@@ -1067,7 +1067,7 @@ impl TracedProcess {
         Ok(res)
     }
 
-    pub fn get_rlimit(&self, resource: i32) -> Result<libc::rlimit> {
+    pub fn get_rlimit(&self, resource: i32) -> io::Result<libc::rlimit> {
         let mut rlimit = std::mem::MaybeUninit::uninit();
         if unsafe {
             libc::prlimit(
@@ -1076,19 +1076,20 @@ impl TracedProcess {
                 std::ptr::null(),
                 rlimit.as_mut_ptr(),
             )
-        } == -1
+        } == 0
         {
-            return Err(std::io::Error::last_os_error())?;
+            Ok(unsafe { rlimit.assume_init() })
+        } else {
+            Err(std::io::Error::last_os_error())
         }
-        Ok(unsafe { rlimit.assume_init() })
     }
 
-    pub fn set_rlimit(&self, resource: i32, rlimit: libc::rlimit) -> Result<()> {
+    pub fn set_rlimit(&self, resource: i32, rlimit: libc::rlimit) -> io::Result<()> {
         if unsafe { libc::prlimit(self.pid.as_raw(), resource, &rlimit, std::ptr::null_mut()) } == 0
         {
             Ok(())
         } else {
-            Err(std::io::Error::last_os_error().into())
+            Err(std::io::Error::last_os_error())
         }
     }
 }
