@@ -1,7 +1,7 @@
 #pragma once
 
 #include "result.hpp"
-#include <sys/syscall.h>
+#include <asm/unistd.h>
 
 #ifdef __x86_64__
 long raw_syscall(long number) {
@@ -124,6 +124,4 @@ template <typename... Args> Result<long> syscall(Args... args) {
     }
 }
 
-namespace libc {
 #include "../target/libc.hpp"
-}

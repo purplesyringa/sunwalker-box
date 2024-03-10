@@ -47,8 +47,12 @@ check: $(DEPS)
 clippy: $(DEPS)
 	$(CARGO) clippy $(CARGO_OPTIONS) $(OPTIONS)
 
-target/libc.hpp: generate_syscall_table.py
-	mkdir -p target && CC=$(CC) python3 $< >$@
+generate/syscall_table_x86_64.json:
+	wget --output-document $@ https://raw.githubusercontent.com/mebeim/linux-syscalls/master/db/x86/64/x64/v5.19/table.json
+generate/syscall_table_aarch64.json:
+	wget --output-document $@ https://raw.githubusercontent.com/mebeim/linux-syscalls/master/db/arm64/64/aarch64/v6.2/table.json
+target/libc.hpp: generate/syscall_wrappers.py
+	mkdir -p target && ARCH=$(ARCH) python3 $< >$@
 
 target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
 	mkdir -p target && seccomp-tools asm $^ -o $@ -f raw
@@ -68,8 +72,8 @@ kmodule/aarch64/sunwalker.ko: kmodule/aarch64/sunwalker.c
 	$(MAKE) -C kmodule/aarch64
 
 # This actually generates more files; we list just one and depend on just one
-target/syscall_table.offsets: generate_string_tables.py
-	mkdir -p target && CC=$(CC) python3 generate_string_tables.py
+target/syscall_table.offsets: generate/string_tables.py
+	mkdir -p target && CC=$(CC) python3 $<
 
 
 test:

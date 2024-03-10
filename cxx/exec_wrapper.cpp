@@ -1,24 +1,24 @@
 #include "libc.hpp"
-#include <sys/resource.h>
-#include <sys/time.h>
+#include <linux/resource.h>
+#include <linux/time.h>
 
-itimerval itimer_prof __attribute__((externally_visible));
+__kernel_old_itimerval itimer_prof __attribute__((externally_visible));
 
 Result<void> adjust_itimer() {
-    timeval &val = itimer_prof.it_value;
+    auto &val = itimer_prof.it_value;
 
     if (0 == val.tv_sec && 0 == val.tv_usec) {
         return {};
     }
 
-    static struct rusage usage;
+    static rusage usage;
 
     // rusage is preserved across execve, so we have to account for the CPU time we have already
     // spent
     libc::getrusage(RUSAGE_SELF, &usage).TRY();
 
-    timeval &user = usage.ru_utime;
-    timeval &system = usage.ru_stime;
+    auto &user = usage.ru_utime;
+    auto &system = usage.ru_stime;
 
     const int usec_per_sec = 1000000;
 
@@ -44,8 +44,8 @@ extern "C" __attribute__((naked, flatten, externally_visible)) void _start() {
 #endif
 
     long argc = *stack_pointer;
-    long *argv = stack_pointer + 1;
-    long *envp = argv + argc + 1;
+    char **argv = (char **)(stack_pointer + 1);
+    char **envp = argv + argc + 1;
 
     (void)libc::exit(libc::execve(argv[1], argv + 1, envp).unwrap_errno());
 
