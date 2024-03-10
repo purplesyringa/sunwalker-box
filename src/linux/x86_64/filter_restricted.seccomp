@@ -4,6 +4,21 @@ A == ARCH_X86_64 ? next : kill
 
 A = sys_number
 
+A == close ? first_arg_fd : next
+A == 436 ? first_arg_fd : next  # close_range
+A == read ? first_arg_fd : next
+A == pread64 ? first_arg_fd : next
+A == readv ? first_arg_fd : next
+A == dup ? first_arg_fd : next
+A == preadv ? first_arg_fd : next
+A == preadv2 ? first_arg_fd : next
+
+A == dup2 ? first_two_args_fds : next
+A == dup3 ? first_two_args_fds : next
+
+A == fcntl ? fcntl : next
+A == ioctl ? ioctl : next
+A == lseek ? lseek : next
 A == mmap ? mmap : next
 A == prctl ? prctl : next
 A == sysinfo ? trace : next
@@ -140,6 +155,46 @@ A == 449 ? allow : next  # futex_waitv
 A &= 0x40000000
 A == 0 ? trace : kill
 
+first_two_args_fds:
+A = args[1]
+A &= 0xffffffff
+A < 3 ? trace : first_arg_fd
+
+first_arg_fd:
+A = args[0]
+A &= 0xffffffff
+A < 3 ? trace : allow
+
+fcntl:
+A = args[0]
+A &= 0xffffffff
+A < 3 ? next : allow
+A = args[1]
+A &= 0xffffffff
+A == 1 ? allow : next  # F_GETFD
+A == 2 ? allow : next  # F_SETFD
+A == 3 ? allow : trace  # F_GETFL
+
+ioctl:
+A = args[0]
+A &= 0xffffffff
+A < 3 ? next : allow
+A = args[1]
+# These will return ENOTTY/ENOTSOCK anyway
+A == 0x5401 ? allow : next  # TCGETS
+A == 0x540f ? allow : trace  # TIOCGPGRP
+
+lseek:
+A = args[0]
+A &= 0xffffffff
+A >= 3 ? allow : next
+# Disallow seeking to anywhere but the beginning
+A = args[1]
+A == 0 ? next : trace
+A = args[2]
+A == 0 ? allow : next  # SEEK_SET
+A == 1 ? allow : trace  # SEEK_CUR
+
 mmap:
 # A = args[3]
 # A &= 0x02  # MAP_PRIVATE
@@ -151,8 +206,27 @@ A < 3 ? trace : allow
 prctl:
 A = args[0]
 A &= 0xffffffff
+A == 2 ? allow : next  # PR_GET_PDEATHSIG
+A == 3 ? allow : next  # PR_GET_DUMPABLE
+A == 7 ? allow : next  # PR_GET_KEEPCAPS
+A == 13 ? allow : next  # PR_GET_TIMING
+A == 16 ? allow : next  # PR_GET_NAME
+A == 21 ? allow : next  # PR_GET_SECCOMP
+A == 23 ? allow : next  # PR_CAPBSET_READ
+A == 25 ? allow : next  # PR_GET_TSC
+A == 27 ? allow : next  # PR_GET_SECUREBITS
+A == 30 ? allow : next  # PR_GET_TIMERSLACK
+A == 34 ? allow : next  # PR_MCE_KILL_GET
+A == 37 ? allow : next  # PR_GET_CHILD_SUBREAPER
+A == 39 ? allow : next  # PR_GET_NO_NEW_PRIVS
+A == 40 ? allow : next  # PR_GET_TID_ADDRESS
+A == 41 ? allow : next  # PR_SET_THP_DISABLE
 A == 42 ? allow : next  # PR_GET_THP_DISABLE
-A == 40 ? allow : trace  # PR_GET_TID_ADDRESS
+A == 47 ? pr_cap_ambient : trace  # PR_CAP_AMBIENT
+
+pr_cap_ambient:
+A = args[1]
+A == 1 ? allow : trace  # PR_CAP_AMBIENT_IS_SET
 
 arch_prctl:
 A = args[0]
