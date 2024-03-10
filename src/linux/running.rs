@@ -410,21 +410,41 @@ impl SingleRun<'_> {
         } else if Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time) {
             return Ok(Verdict::IdlenessTimeLimitExceeded);
         } else if self.box_cgroup.as_ref().unwrap().was_oom_killed()? {
-            if !self
-                .options
-                .memory_limit
-                .is_some_and(|limit| self.results.memory >= limit)
-            {
-                log!(
-                    impossible,
-                    "The user process has triggered OOM killer without reaching memory limits. \
-                     This either indicates too high memory pressure, making the verdict horribly \
-                     wrong by blaming the participant instead of the invoker, or means that the \
-                     user attempted to allocate too much in one shot. Whether the latter case is \
-                     possible is up in the air: it seems like you can only populate one page at a \
-                     time -- but if it is, please notify us."
-                );
-            }
+            // Do not blame the user for invoker's failure. Verify OOM authenticity by checking if
+            // the limit was about to be exceeded.
+            //
+            // Clearly, `memory == limit` indicates the OOM is reasonable. At worst, we mis-blame
+            // the user if they are exactly at the limit, *and* the invoker OOMs. That's a terribly
+            // rare condition, and the OOM is likely to manifest as a check failure elsewhere, which
+            // someone will hopefully react to.
+            //
+            // Can we assume a benevolent OOM implies `memory == limit`, though? Turns out, we can.
+            // Indeed, OOM killer can only be triggered on page fault, and the kernel serves page
+            // faults on a per-page basis. Even if the kernel has to allocate a PTE (or PMD, or PUD)
+            // before allocating the page, it will do that in sequence, allocating just one page at
+            // each step, so we *will* get to `memory == limit` (that is, provided that the limit
+            // is a whole number of pages) and only then trigger OOM.
+            //
+            // Even if the page fault is triggered on a huge page, the kernel tries its best to
+            // handle the fault and resorts to a smaller page size on failure before resorting to
+            // OOM. This is evidenced e.g. by existence of VM_FAULT_FALLBACK in the kernel, see e.g.
+            // mm/memory.c:__handle_mm_fault:5138 on Linux v6.7.9. Therefore, the following
+            // situation is impossible:
+            // - there is just 12k of memory left
+            // - a 2M page is touched and has to be allocated
+            // - the 2M allocation fails and OOM is triggered with memory = limit - 12k
+            // Instead, this happens:
+            // - there is just 12k of memory left
+            // - a 2M page is touched and has to be allocated
+            // - the 2M allocation fails
+            // - PF resolution resorts to a 4k page, which can be allocated without OOM
+            ensure!(
+                self.options
+                    .memory_limit
+                    .is_some_and(|limit| self.results.memory >= limit),
+                "OOM killer was invoked even though memory use is in check; the invoker is likely \
+                 overloaded"
+            );
             return Ok(Verdict::MemoryLimitExceeded);
         } else if Self::is_exceeding(self.options.memory_limit, self.results.memory) {
             log!(
