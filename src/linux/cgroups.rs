@@ -217,7 +217,7 @@ impl BoxCgroup {
         Ok(())
     }
 
-    pub fn get_cpu_stats(&self) -> Result<CpuStats> {
+    pub fn get_cpu_time(&self) -> Result<Duration> {
         let mut buf = String::new();
         self.proc_cgroup_fd
             .open_file(format!("box-{}/cpu.stat", self.box_id))
@@ -225,35 +225,34 @@ impl BoxCgroup {
             .read_to_string(&mut buf)
             .context("Failed to read cpu.stat")?;
 
-        let mut stat = CpuStats {
-            user: Duration::ZERO,
-            system: Duration::ZERO,
-            total: Duration::ZERO,
-        };
+        // Compute CPU time as usage_user + usage_system as opposed to usage_usec. The reason for
+        // such a strange choice is that usage_usec also includes stolen time, which logically
+        // shouldn't be time spent by user code.
+        let mut user = None;
+        let mut system = None;
 
         for line in buf.lines() {
             let target;
             if line.starts_with("user_usec ") {
-                target = &mut stat.user;
+                target = &mut user;
             } else if line.starts_with("system_usec ") {
-                target = &mut stat.system;
+                target = &mut system;
             } else {
                 continue;
             }
 
             let mut it = line.split_ascii_whitespace();
             it.next();
-            *target = Duration::from_micros(
+            *target = Some(Duration::from_micros(
                 it.next()
                     .context("Invalid cpu.stat format")?
                     .parse()
                     .context("Invalid cpu.stat format")?,
-            );
+            ));
         }
 
-        stat.total = stat.user + stat.system;
-
-        Ok(stat)
+        Ok(user.context("Missing user_usec field in cpu.stat")?
+            + system.context("Missing system_usec field in cpu.stat")?)
     }
 
     pub fn get_memory_peak(&self) -> Result<usize> {
@@ -518,13 +517,6 @@ fn kill_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
     }
 
     Ok(())
-}
-
-#[derive(Clone, Copy)]
-pub struct CpuStats {
-    pub user: Duration,
-    pub system: Duration,
-    pub total: Duration,
 }
 
 #[derive(Clone, Copy)]

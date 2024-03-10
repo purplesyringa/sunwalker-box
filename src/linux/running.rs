@@ -487,8 +487,7 @@ impl SingleRun<'_> {
     }
 
     fn update_metrics(&mut self) -> Result<()> {
-        let cpu_stats = self.box_cgroup.as_mut().unwrap().get_cpu_stats()?;
-        self.results.cpu_time = cpu_stats.total;
+        self.results.cpu_time = self.box_cgroup.as_mut().unwrap().get_cpu_time()?;
         self.results.real_time = self.start_time.unwrap().elapsed();
         self.results.idleness_time = self.results.real_time.saturating_sub(self.results.cpu_time);
         Ok(())
