@@ -239,30 +239,19 @@ fn reaper_impl(
             signal::Signal::SIGCHLD => {
                 // Child (or several) died
                 loop {
-                    match wait::waitpid(None, Some(wait::WaitPidFlag::WNOHANG)) {
-                        Ok(res) => {
-                            if res.pid() == Some(nix::unistd::Pid::from_raw(child.id())) {
-                                // Manager died
-                                log!("Manager has died");
-                                break;
-                            }
-                            if res == wait::WaitStatus::StillAlive {
-                                break;
-                            }
-                        }
-                        Err(e) => {
-                            if e == nix::errno::Errno::ECHILD {
-                                // Manager terminated
-                                log!(
-                                    impossible,
-                                    "No children found but SIGCHLD was sent (or manager death has \
-                                     not been handled correctly)"
-                                );
-                                break 'main;
-                            } else {
-                                bail!("Failed to waitpid: {e:?}");
-                            }
-                        }
+                    let wait_status = wait::waitpid(None, Some(wait::WaitPidFlag::WNOHANG));
+                    if wait_status == Err(nix::errno::Errno::ECHILD) {
+                        break;
+                    }
+                    let wait_status = wait_status.context("Failed to waitpid")?;
+                    if wait_status.pid() == Some(nix::unistd::Pid::from_raw(child.id())) {
+                        log!("Manager has died");
+                        // We can't break 'main; here, as termination of reaper before termination
+                        // of entry is going to trigger a failure in the thread started by the
+                        // controller to monitor the reaper.
+                    }
+                    if wait_status == wait::WaitStatus::StillAlive {
+                        break;
                     }
                 }
             }
