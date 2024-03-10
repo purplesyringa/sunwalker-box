@@ -387,11 +387,10 @@ impl SingleRun<'_> {
         limit.is_some_and(|limit| value > limit)
     }
 
-    fn is_exceeding_limits(&self) -> bool {
+    fn is_exceeding_time_limits(&self) -> bool {
         Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time)
             || Self::is_exceeding(self.options.real_time_limit, self.results.real_time)
             || Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time)
-            || Self::is_exceeding(self.options.memory_limit, self.results.memory)
     }
 
     fn compute_verdict(&self, wait_status: system::WaitStatus) -> Result<Verdict> {
@@ -411,15 +410,19 @@ impl SingleRun<'_> {
         } else if Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time) {
             return Ok(Verdict::IdlenessTimeLimitExceeded);
         } else if self.box_cgroup.as_ref().unwrap().was_oom_killed()? {
-            if !Self::is_exceeding(self.options.memory_limit, self.results.memory) {
+            if !self
+                .options
+                .memory_limit
+                .is_some_and(|limit| self.results.memory >= limit)
+            {
                 log!(
                     impossible,
-                    "The user process has triggered OOM killer without exceeding memory limits. \
-                     This is either indicates too high memory pressure, making the verdict \
-                     horribly wrong by blaming the participant instead of the invoker, or means \
-                     that the user attempted to allocate too much in one shot. Whether the latter
-                     case is possible is up in the air: it seems like you can only populate one \
-                     page at a time -- but if it is, please notify us."
+                    "The user process has triggered OOM killer without reaching memory limits. \
+                     This either indicates too high memory pressure, making the verdict horribly \
+                     wrong by blaming the participant instead of the invoker, or means that the \
+                     user attempted to allocate too much in one shot. Whether the latter case is \
+                     possible is up in the air: it seems like you can only populate one page at a \
+                     time -- but if it is, please notify us."
                 );
             }
             return Ok(Verdict::MemoryLimitExceeded);
@@ -1153,7 +1156,7 @@ impl SingleRun<'_> {
         // Either way, we're doing the right thing without handling SIGPROF in a special way.
         let result = try {
             let mut wait_status = system::WaitStatus::StillAlive;
-            while !self.is_exceeding_limits() {
+            while !self.is_exceeding_time_limits() {
                 wait_status = self.wait_for_event()?;
                 self.update_metrics()?;
                 if self.handle_event(&wait_status)? {
