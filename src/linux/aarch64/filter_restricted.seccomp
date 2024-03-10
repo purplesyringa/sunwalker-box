@@ -7,6 +7,7 @@ A = sys_number
 A == mmap ? mmap : next
 A == prctl ? prctl : next
 A == sysinfo ? trace : next
+A == reboot ? reboot : next
 
 A == getxattr ? allow : next
 A == lgetxattr ? allow : next
@@ -134,6 +135,17 @@ A &= 0xffffffff
 A == 42 ? allow : next  # PR_GET_THP_DISABLE
 A == 40 ? allow : trace  # PR_GET_TID_ADDRESS
 
+reboot:
+A = args[0]
+A &= 0xffffffff
+A == 0xfee1dead ? next : einval
+A = args[1]
+A &= 0xffffffff
+A == 0x11092001 ? next : allow
+A = args[2]
+A &= 0xffffffff
+A == 0 ? skip : enosys  # reboot(..., 0) = 0 is prefork mode marker
+
 trace:
 return TRACE
 
@@ -142,3 +154,12 @@ return ALLOW
 
 kill:
 return KILL
+
+einval:
+return ERRNO(22)  # EINVAL
+
+enosys:
+return ERRNO(38)  # ENOSYS
+
+skip:
+return ERRNO(0)
