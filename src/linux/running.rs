@@ -1124,6 +1124,13 @@ impl SingleRun<'_> {
                 memory_limit >= 43 * 4096,
                 "Memory limit lower than 172 KiB cannot be enforced"
             );
+
+            // Round the limit down to page size. This ensures that if the maximum amount of pages
+            // is allocated, the limit is exceeded (as opposed to slightly unreachable).
+            let page_size = unistd::sysconf(unistd::SysconfVar::PAGE_SIZE)
+                .context("Failed to get page size")?
+                .context("PAGE_SIZE is unavailable")? as usize;
+            self.options.memory_limit = Some(memory_limit & !(page_size - 1));
         }
 
         self.runner
