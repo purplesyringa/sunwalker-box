@@ -458,12 +458,11 @@ impl PreForkRun<'_> {
         wait_for_sigkill(&mut master).context("Failed to wait for SIGKILL on master")
     }
 
-    pub fn on_seccomp(&self, orig: &mut tracing::TracedProcess) -> Result<bool> {
-        let syscall_info = orig
-            .get_syscall_info()
-            .context("Failed to get syscall info")?;
-        let syscall_info = unsafe { syscall_info.u.seccomp };
-
+    pub fn on_seccomp(
+        &self,
+        orig: &mut tracing::TracedProcess,
+        syscall_info: tracing::ptrace_syscall_info_seccomp,
+    ) -> Result<bool> {
         // Allow all operations we can checkpoint-restore that don't touch the filesystem in an
         // impure way, e.g. open an fd to a file that can later be written to or to the standard
         // stream that might later be redirected somewhere else
