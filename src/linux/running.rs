@@ -671,11 +671,11 @@ impl SingleRun<'_> {
                 self.commit_syscall_emulation(process, syscall)?;
                 Ok(false)
             }
-            None => self
-                .prefork
-                .as_ref()
-                .unwrap()
-                .on_seccomp(&mut process.traced_process, syscall_info),
+            None => self.prefork.as_ref().unwrap().on_seccomp(
+                &mut process.traced_process,
+                syscall_info,
+                self.box_cgroup.as_ref().unwrap(),
+            ),
         }
     }
 
@@ -1233,7 +1233,10 @@ impl SingleRun<'_> {
                             .prefork
                             .as_mut()
                             .unwrap()
-                            .handle_syscall(&mut process.traced_process)
+                            .handle_syscall(
+                                &mut process.traced_process,
+                                self.box_cgroup.as_ref().unwrap(),
+                            )
                             .context("Failed to handle syscall in prefork mode");
                     }
                 }

@@ -61,6 +61,7 @@ pub struct SuspendData {
 // MaybeUninit is used to avoid data leaks via padding
 pub struct Suspender<'a> {
     orig: &'a mut tracing::TracedProcess,
+    orig_cgroup: &'a cgroups::BoxCgroup,
     options: SuspendOptions,
     inject_location: usize,
     master: Option<tracing::TracedProcess>,
@@ -435,9 +436,15 @@ impl PreForkManager {
 }
 
 impl PreForkRun<'_> {
-    fn suspend(&self, orig: &mut tracing::TracedProcess, options: SuspendOptions) -> Result<()> {
-        self.state
-            .set(State::Suspended(Suspender::new(orig, options).suspend()?));
+    fn suspend(
+        &self,
+        orig: &mut tracing::TracedProcess,
+        orig_cgroup: &cgroups::BoxCgroup,
+        options: SuspendOptions,
+    ) -> Result<()> {
+        self.state.set(State::Suspended(
+            Suspender::new(orig, orig_cgroup, options).suspend()?,
+        ));
         Ok(())
     }
 
@@ -462,6 +469,7 @@ impl PreForkRun<'_> {
         &self,
         orig: &mut tracing::TracedProcess,
         syscall_info: tracing::ptrace_syscall_info_seccomp,
+        box_cgroup: &cgroups::BoxCgroup,
     ) -> Result<bool> {
         // Allow all operations we can checkpoint-restore that don't touch the filesystem in an
         // impure way, e.g. open an fd to a file that can later be written to or to the standard
@@ -485,20 +493,24 @@ impl PreForkRun<'_> {
             _ => {
                 // If the seccomp filter returns TRACE for any other syscall, it has decided that
                 // a suspend is necessary.
-                self.suspend(orig, SuspendOptions::new_seccomp())
+                self.suspend(orig, box_cgroup, SuspendOptions::new_seccomp())
                     .context("Failed to suspend on seccomp")?;
                 Ok(true)
             }
         }
     }
 
-    pub fn handle_syscall(&mut self, orig: &mut tracing::TracedProcess) -> Result<bool> {
+    pub fn handle_syscall(
+        &mut self,
+        orig: &mut tracing::TracedProcess,
+        box_cgroup: &cgroups::BoxCgroup,
+    ) -> Result<bool> {
         match self
             .should_suspend_after_syscall(orig)
             .context("Failed to check if should suspend after syscsall")?
         {
             Some(options) => {
-                self.suspend(orig, options)
+                self.suspend(orig, box_cgroup, options)
                     .context("Failed to suspend after syscall")?;
                 Ok(true)
             }
@@ -568,9 +580,14 @@ impl PreForkRun<'_> {
 }
 
 impl<'a> Suspender<'a> {
-    pub fn new(orig: &'a mut tracing::TracedProcess, options: SuspendOptions) -> Self {
+    pub fn new(
+        orig: &'a mut tracing::TracedProcess,
+        orig_cgroup: &'a cgroups::BoxCgroup,
+        options: SuspendOptions,
+    ) -> Self {
         Self {
             orig,
+            orig_cgroup,
             options,
             inject_location: 0,
             master: None,
@@ -625,6 +642,8 @@ impl<'a> Suspender<'a> {
         self.translate_memory_maps(&memory_maps)
             .context("Failed to translate memory maps")?;
 
+        self.unchain_orig()
+            .context("Failed to unchain original process")?;
         self.infect_orig()
             .context("Failed to infect original process")?;
         self.collect_info_via_parasite()
@@ -713,6 +732,30 @@ impl<'a> Suspender<'a> {
         }
 
         Ok(())
+    }
+
+    fn unchain_orig(&mut self) -> Result<()> {
+        // If we are close to ML, we wish to let the parasite perform work anyway. We could just
+        // pretend OOM happened, but that's not fair to the user process. Indeed, the kernel avoids
+        // doing any user-accountable allocations in the background, and many syscalls don't alloc
+        // either. Therefore, "allocate as much memory as possible, do heavy computations and then
+        // deallocate in one go" is more or less valid.
+        //
+        // Therefore, we might need to increase ML in some rare cases. We decided to *always* update
+        // ML to current use plus a bit of memory for the parasite so that this code is tested more
+        // thoroughly. How much memory do we allocate? PARASITE_MEMORY_SIZE should suffice, but the
+        // kernel might need additional pages for its memory management, e.g. to allocate page
+        // tables or VMAs. For simplicity, add 128k. On 64k-page kernels, that rounds the parasite
+        // up to 64k, and then adds 64k more for page table entries. If it works for 64k page size,
+        // it'll work for 4k page size too.
+        const KERNEL_ALLOCATION_OVERHEAD: usize = 128 * 1024;
+        let memory_use = self
+            .orig_cgroup
+            .get_memory_use()
+            .context("Failed to get memory use")?;
+        self.orig_cgroup
+            .set_memory_limit(memory_use + PARASITE_MEMORY_SIZE + KERNEL_ALLOCATION_OVERHEAD)
+            .context("Failed to update ML")
     }
 
     fn infect_orig(&mut self) -> Result<()> {
