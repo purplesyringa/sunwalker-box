@@ -275,6 +275,16 @@ impl BoxCgroup {
         buf.trim().parse().context("Invalid memory.peak format")
     }
 
+    pub fn get_memory_use(&self) -> Result<usize> {
+        let mut buf = String::new();
+        self.proc_cgroup_fd
+            .open_file(format!("box-{}/memory.current", self.box_id))
+            .context("Failed to open memory.current for reading")?
+            .read_to_string(&mut buf)
+            .context("Failed to read memory.current")?;
+        buf.trim().parse().context("Invalid memory.current format")
+    }
+
     pub fn get_memory_stats(&self) -> Result<MemoryStats> {
         let mut buf = String::new();
         self.proc_cgroup_fd
