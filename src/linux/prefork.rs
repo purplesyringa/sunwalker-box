@@ -475,102 +475,21 @@ impl PreForkRun<'_> {
             libc::SYS_open | libc::SYS_openat => {
                 self.state.set(State::WaitingOnOpen);
                 orig.resume_syscall()?;
-                return Ok(false);
+                Ok(false)
             }
             #[cfg(target_arch = "aarch64")]
             libc::SYS_openat => {
                 self.state.set(State::WaitingOnOpen);
                 orig.resume_syscall()?;
-                return Ok(false);
+                Ok(false)
             }
-            _ => {}
-        }
-
-        if self.should_suspend_on_seccomp(syscall_info) {
-            self.suspend(orig, SuspendOptions::new_seccomp())
-                .context("Failed to suspend on seccomp")?;
-            Ok(true)
-        } else {
-            orig.resume()?;
-            Ok(false)
-        }
-    }
-
-    fn should_suspend_on_seccomp(
-        &self,
-        syscall_info: tracing::ptrace_syscall_info_seccomp,
-    ) -> bool {
-        let is_stdio_fd = |fd| (0..3).contains(&fd);
-
-        match syscall_info.nr as i64 {
-            libc::SYS_close
-            | libc::SYS_close_range
-            | libc::SYS_read
-            | libc::SYS_pread64
-            | libc::SYS_readv
-            | libc::SYS_dup
-            | libc::SYS_preadv
-            | libc::SYS_preadv2 => {
-                let fd = syscall_info.args[0] as RawFd;
-                is_stdio_fd(fd)
+            _ => {
+                // If the seccomp filter returns TRACE for any other syscall, it has decided that
+                // a suspend is necessary.
+                self.suspend(orig, SuspendOptions::new_seccomp())
+                    .context("Failed to suspend on seccomp")?;
+                Ok(true)
             }
-            libc::SYS_lseek => {
-                let fd = syscall_info.args[0] as RawFd;
-                let offset = syscall_info.args[1] as off_t;
-                let whence = syscall_info.args[2] as i32;
-                // Disallow seeking to anywhere but the beginning
-                is_stdio_fd(fd) && !matches!((offset, whence), (0, libc::SEEK_SET | libc::SEEK_CUR))
-            }
-            libc::SYS_mmap => true,
-            // XXX This WILL break on non-(x86_64|aarch64) architectures!
-            #[cfg(target_arch = "x86_64")]
-            libc::SYS_dup2 | libc::SYS_dup3 => {
-                let oldfd = syscall_info.args[0] as RawFd;
-                let newfd = syscall_info.args[1] as RawFd;
-                is_stdio_fd(oldfd) || is_stdio_fd(newfd)
-            }
-            #[cfg(target_arch = "aarch64")]
-            libc::SYS_dup3 => {
-                let oldfd = syscall_info.args[0] as RawFd;
-                let newfd = syscall_info.args[1] as RawFd;
-                is_stdio_fd(oldfd) || is_stdio_fd(newfd)
-            }
-            libc::SYS_fcntl => {
-                let fd = syscall_info.args[0] as RawFd;
-                let cmd = syscall_info.args[1] as i32;
-                is_stdio_fd(fd) && !matches!(cmd, libc::F_GETFD | libc::F_SETFD | libc::F_GETFL)
-            }
-            libc::SYS_ioctl => {
-                let fd = syscall_info.args[0] as RawFd;
-                let request = syscall_info.args[1] as i32;
-                // These will return ENOTTY/ENOTSOCK anyway
-                is_stdio_fd(fd) && !matches!(request, libc::TCGETS | libc::TIOCGPGRP)
-            }
-            libc::SYS_prctl => {
-                let option = syscall_info.args[0] as i32;
-                let arg2 = syscall_info.args[1] as i32;
-                !matches!(
-                    (option, arg2),
-                    (libc::PR_CAP_AMBIENT, libc::PR_CAP_AMBIENT_IS_SET)
-                        | (libc::PR_CAPBSET_READ, _)
-                        | (libc::PR_GET_CHILD_SUBREAPER, _)
-                        | (libc::PR_GET_DUMPABLE, _)
-                        | (libc::PR_GET_KEEPCAPS, _)
-                        | (libc::PR_MCE_KILL_GET, _)
-                        | (libc::PR_GET_NAME, _)
-                        | (libc::PR_GET_NO_NEW_PRIVS, _)
-                        | (libc::PR_GET_PDEATHSIG, _)
-                        | (libc::PR_GET_SECCOMP, _)
-                        | (libc::PR_GET_SECUREBITS, _)
-                        | (libc::PR_SET_THP_DISABLE, _)
-                        | (libc::PR_GET_TIMERSLACK, _)
-                        | (libc::PR_GET_TIMING, _)
-                        | (libc::PR_GET_TSC, _)
-                )
-            }
-            // TODO: pipe, modify_ldt, epoll*
-            // TODO: move simple cases to seccomp filter for efficiency
-            _ => true,
         }
     }
 
