@@ -419,7 +419,7 @@ impl PreForkManager {
             .context("Failed to restore signal mask")?;
 
         // Only restore rlimits just before running the child in user code, so that the limits don't
-        // bring down the parasite
+        // bring down the stemcell
         for (i, rlimit) in data.rlimits.iter().enumerate() {
             child
                 .set_rlimit(i as i32, *rlimit)
