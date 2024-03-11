@@ -651,6 +651,10 @@ impl<'a> Suspender<'a> {
         self.translate_memory_maps(&memory_maps)
             .context("Failed to translate memory maps")?;
 
+        let rlimits = self
+            .collect_rlimits()
+            .context("Failed to collect orig rlimits")?;
+
         self.unchain_orig()
             .context("Failed to unchain original process")?;
         self.infect_orig()
@@ -665,10 +669,6 @@ impl<'a> Suspender<'a> {
 
         self.restore_via_master()
             .context("Failed to restore via master")?;
-
-        let rlimits = self
-            .collect_rlimits()
-            .context("Failed to collect orig rlimits")?;
 
         log!("Suspend finished in {:?}", started.elapsed());
 
@@ -764,7 +764,29 @@ impl<'a> Suspender<'a> {
             .context("Failed to get memory use")?;
         self.orig_cgroup
             .set_memory_limit(memory_use + PARASITE_MEMORY_SIZE + KERNEL_ALLOCATION_OVERHEAD)
-            .context("Failed to update ML")
+            .context("Failed to update ML")?;
+
+        // The user program may have configured rlimits to enforce limits we might want to break. We
+        // virtualize hard rlimits, so it shouldn't be a problem to raise the necessary limits to
+        // infinity.
+        for resource in [
+            libc::RLIMIT_AS,
+            libc::RLIMIT_CPU,
+            libc::RLIMIT_DATA,
+            libc::RLIMIT_RTTIME,
+        ] {
+            self.orig
+                .set_rlimit(
+                    resource,
+                    libc::rlimit {
+                        rlim_cur: libc::RLIM_INFINITY,
+                        rlim_max: libc::RLIM_INFINITY,
+                    },
+                )
+                .context("Failed to raise rlimit to infinity")?;
+        }
+
+        Ok(())
     }
 
     fn infect_orig(&mut self) -> Result<()> {
