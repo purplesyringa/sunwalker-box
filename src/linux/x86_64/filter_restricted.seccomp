@@ -60,7 +60,6 @@ A == fchdir ? allow : next
 A == readlink ? allow : next
 A == umask ? allow : next
 A == gettimeofday ? allow : next
-A == getrlimit ? allow : next
 A == getrusage ? allow : next
 A == times ? allow : next
 A == getuid ? allow : next
@@ -90,7 +89,6 @@ A == sched_getscheduler ? allow : next
 A == sched_get_priority_min ? allow : next
 A == sched_rr_get_interval ? allow : next
 A == arch_prctl ? arch_prctl : next
-A == setrlimit ? allow : next
 A == sync ? allow : next
 A == quotactl ? allow : next
 A == gettid ? allow : next
@@ -136,7 +134,6 @@ A == sync_file_range ? allow : next
 A == eventfd ? allow : next
 A == eventfd2 ? allow : next  # for Ruby
 A == rt_tgsigqueueinfo ? allow : next
-A == prlimit64 ? allow : next
 A == syncfs ? allow : next
 A == getcpu ? allow : next
 A == process_vm_readv ? allow : next

@@ -8,7 +8,7 @@ use nix::{
     errno, libc,
     libc::pid_t,
     sched,
-    sys::{epoll, prctl, ptrace, signal, signalfd, sysinfo, wait},
+    sys::{epoll, prctl, ptrace, resource, signal, signalfd, sysinfo, wait},
     unistd,
     unistd::Pid,
 };
@@ -30,6 +30,7 @@ pub struct Runner {
     exec_wrapper: File,
     proc_cgroup: cgroups::ProcCgroup,
     suspended_runs: RefCell<Vec<SuspendedRun>>,
+    original_hard_rlimits: [libc::rlim_t; 16],
 }
 
 #[derive(Debug, Object)]
@@ -91,9 +92,10 @@ struct SuspendedRun {
     processes_limit: Option<usize>,
 }
 
-struct ProcessInfo {
+pub struct ProcessInfo {
     state: ProcessState,
-    traced_process: tracing::TracedProcess,
+    pub traced_process: tracing::TracedProcess,
+    pub prefork_hard_rlimits: Option<[libc::rlim_t; 16]>,
 }
 
 struct SingleRun<'a> {
@@ -124,6 +126,13 @@ impl EmulatedSyscall {
             result = -errno::errno() as usize;
         }
         Self::Result(result)
+    }
+
+    fn result_with_errno(result: io::Result<usize>) -> Self {
+        match result {
+            Ok(result) => Self::Result(result),
+            Err(err) => Self::Result(-err.raw_os_error().unwrap_or(libc::EINVAL) as usize),
+        }
     }
 
     fn redirect_with_errno(result: io::Result<(tracing::SyscallArgs, ProcessState)>) -> Self {
@@ -203,6 +212,10 @@ impl Runner {
             .context("Failed to create memfd for exec_wrapper")?,
             proc_cgroup,
             suspended_runs: RefCell::new(Vec::new()),
+            original_hard_rlimits: std::array::try_from_fn(|i| {
+                nix::Result::Ok(resource::getrlimit(unsafe { std::mem::transmute(i as u32) })?.1)
+            })
+            .context("Failed to getrlimit")?,
         })
     }
 
@@ -672,7 +685,7 @@ impl SingleRun<'_> {
                 Ok(false)
             }
             None => self.prefork.as_ref().unwrap().on_seccomp(
-                &mut process.traced_process,
+                process,
                 syscall_info,
                 self.box_cgroup.as_ref().unwrap(),
             ),
@@ -910,6 +923,129 @@ impl SingleRun<'_> {
     ) -> Result<Option<EmulatedSyscall>> {
         match syscall_info.nr as i64 {
             libc::SYS_sysinfo => Ok(Some(self.emulate_sysinfo(process, syscall_info)?)),
+            libc::SYS_getrlimit => Ok(Some(EmulatedSyscall::result_with_errno(
+                try {
+                    let resource = syscall_info.args[0] as i32;
+                    let rlim = syscall_info.args[0];
+
+                    let mut rlim_data =
+                        tracing::get_rlimit(process.traced_process.get_pid(), resource)?;
+                    rlim_data.rlim_max =
+                        process.prefork_hard_rlimits.as_mut().unwrap()[resource as usize];
+                    process
+                        .traced_process
+                        .write_memory(rlim as usize, &unsafe {
+                            std::mem::transmute::<libc::rlimit, [u8; 16]>(rlim_data)
+                        })?;
+                    0
+                },
+            ))),
+            libc::SYS_setrlimit => Ok(Some(EmulatedSyscall::result_with_errno(
+                try {
+                    let resource = syscall_info.args[0] as i32;
+                    let rlim = syscall_info.args[0];
+
+                    if !(0..16).contains(&resource) {
+                        Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+                    }
+
+                    let mut rlim_data = MaybeUninit::<libc::rlimit>::uninit();
+                    process.traced_process.read_memory(rlim as usize, unsafe {
+                        MaybeUninit::slice_assume_init_mut(rlim_data.as_bytes_mut())
+                    })?;
+                    let rlim_data = unsafe { rlim_data.assume_init() };
+
+                    if rlim_data.rlim_cur > rlim_data.rlim_max {
+                        Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+                    }
+
+                    let hard_limit =
+                        &mut process.prefork_hard_rlimits.as_mut().unwrap()[resource as usize];
+                    if rlim_data.rlim_max > *hard_limit {
+                        Err(std::io::Error::from_raw_os_error(libc::EPERM))?;
+                    }
+
+                    process.traced_process.set_rlimit(
+                        resource,
+                        libc::rlimit {
+                            rlim_cur: rlim_data.rlim_cur,
+                            rlim_max: self.runner.original_hard_rlimits[resource as usize],
+                        },
+                    )?;
+                    *hard_limit = rlim_data.rlim_max;
+
+                    0
+                },
+            ))),
+            libc::SYS_prlimit64 => Ok(Some(EmulatedSyscall::result_with_errno(
+                try {
+                    let mut pid = Pid::from_raw(syscall_info.args[0] as pid_t);
+                    let resource = syscall_info.args[1] as i32;
+                    let new_limit = syscall_info.args[2];
+                    let old_limit = syscall_info.args[3];
+
+                    if !(0..16).contains(&resource) {
+                        Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+                    }
+
+                    let self_pid = process.traced_process.get_pid();
+                    if pid == Pid::from_raw(0) {
+                        pid = self_pid;
+                    }
+
+                    let is_self = pid == self_pid;
+
+                    // Check for ESRCH before EPERM, otherwise it looks like a non-existent process
+                    // cannot be configured due to permission issues
+                    let mut rlim = tracing::get_rlimit(pid, resource)?;
+
+                    if !is_self && new_limit != 0 {
+                        Err(std::io::Error::from_raw_os_error(libc::EPERM))?;
+                    }
+
+                    let self_hard_limit =
+                        &mut process.prefork_hard_rlimits.as_mut().unwrap()[resource as usize];
+                    if is_self {
+                        rlim.rlim_max = *self_hard_limit;
+                    }
+
+                    if old_limit != 0 {
+                        process
+                            .traced_process
+                            .write_memory(old_limit as usize, &unsafe {
+                                std::mem::transmute::<libc::rlimit, [u8; 16]>(rlim)
+                            })?;
+                    }
+
+                    if new_limit != 0 {
+                        let mut new_limit_data = MaybeUninit::<libc::rlimit>::uninit();
+                        process
+                            .traced_process
+                            .read_memory(new_limit as usize, unsafe {
+                                MaybeUninit::slice_assume_init_mut(new_limit_data.as_bytes_mut())
+                            })?;
+                        let new_limit_data = unsafe { new_limit_data.assume_init() };
+
+                        if new_limit_data.rlim_cur > new_limit_data.rlim_max {
+                            Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+                        }
+                        if new_limit_data.rlim_max > *self_hard_limit {
+                            Err(std::io::Error::from_raw_os_error(libc::EPERM))?;
+                        }
+
+                        process.traced_process.set_rlimit(
+                            resource,
+                            libc::rlimit {
+                                rlim_cur: new_limit_data.rlim_cur,
+                                rlim_max: self.runner.original_hard_rlimits[resource as usize],
+                            },
+                        )?;
+                        *self_hard_limit = new_limit_data.rlim_max;
+                    }
+
+                    0
+                },
+            ))),
             _ => Ok(None),
         }
     }
@@ -1117,6 +1253,7 @@ impl SingleRun<'_> {
                             RefCell::new(ProcessInfo {
                                 state: ProcessState::AwaitingForkNotification,
                                 traced_process: tracing::TracedProcess::new(pid)?,
+                                prefork_hard_rlimits: None,
                             }),
                         );
 
@@ -1154,12 +1291,17 @@ impl SingleRun<'_> {
                     //   attached to PGID 2
                     // - Process with PID 3 executes execve, resulting in a new process with PID 2
                     //   appearing seemingly from nowhere
+                    let traced_process = tracing::TracedProcess::new(pid)?;
+                    let old_pid = Pid::from_raw(traced_process.get_event_msg()? as pid_t);
+                    let old_process = self
+                        .processes
+                        .remove(&old_pid)
+                        .with_context(|| format!("Unknown pid {old_pid} did execve"))?;
                     let mut process = ProcessInfo {
                         state: ProcessState::Alive,
-                        traced_process: tracing::TracedProcess::new(pid)?,
+                        traced_process,
+                        prefork_hard_rlimits: old_process.into_inner().prefork_hard_rlimits,
                     };
-                    let old_pid = Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
-                    self.processes.remove(&old_pid);
                     self.on_after_execve(&mut process)?;
                     process.traced_process.resume()?;
                     self.processes.insert(pid, RefCell::new(process));
@@ -1203,6 +1345,7 @@ impl SingleRun<'_> {
                                     RefCell::new(ProcessInfo {
                                         state: ProcessState::JustStarted,
                                         traced_process: tracing::TracedProcess::new(child_pid)?,
+                                        prefork_hard_rlimits: None,
                                     }),
                                 );
                             }
@@ -1233,10 +1376,7 @@ impl SingleRun<'_> {
                             .prefork
                             .as_mut()
                             .unwrap()
-                            .handle_syscall(
-                                &mut process.traced_process,
-                                self.box_cgroup.as_ref().unwrap(),
-                            )
+                            .handle_syscall(process, self.box_cgroup.as_ref().unwrap())
                             .context("Failed to handle syscall in prefork mode");
                     }
                 }
@@ -1355,6 +1495,7 @@ impl SingleRun<'_> {
                 let mut main_process = ProcessInfo {
                     state: ProcessState::Alive,
                     traced_process,
+                    prefork_hard_rlimits: Some(self.runner.original_hard_rlimits),
                 };
                 self.on_after_execve(&mut main_process)?;
                 self.on_after_fork(&mut main_process)?;
@@ -1387,6 +1528,7 @@ impl SingleRun<'_> {
                     RefCell::new(ProcessInfo {
                         state: ProcessState::Alive,
                         traced_process,
+                        prefork_hard_rlimits: None,
                     }),
                 );
             }
