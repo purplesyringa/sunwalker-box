@@ -1,5 +1,5 @@
 use crate::{
-    linux::{cgroups, ids, string_table, system, timens, tracing, tracing::Timer, userns},
+    linux::{cgroups, ids, running, string_table, system, timens, tracing, tracing::Timer, userns},
     log, syscall,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
@@ -61,6 +61,7 @@ pub struct SuspendData {
 // MaybeUninit is used to avoid data leaks via padding
 pub struct Suspender<'a> {
     orig: &'a mut tracing::TracedProcess,
+    hard_rlimits: [libc::rlim_t; 16],
     orig_cgroup: &'a cgroups::BoxCgroup,
     options: SuspendOptions,
     inject_location: usize,
@@ -438,12 +439,18 @@ impl PreForkManager {
 impl PreForkRun<'_> {
     fn suspend(
         &self,
-        orig: &mut tracing::TracedProcess,
+        orig: &mut running::ProcessInfo,
         orig_cgroup: &cgroups::BoxCgroup,
         options: SuspendOptions,
     ) -> Result<()> {
         self.state.set(State::Suspended(
-            Suspender::new(orig, orig_cgroup, options).suspend()?,
+            Suspender::new(
+                &mut orig.traced_process,
+                orig.prefork_hard_rlimits.unwrap(),
+                orig_cgroup,
+                options,
+            )
+            .suspend()?,
         ));
         Ok(())
     }
@@ -467,7 +474,7 @@ impl PreForkRun<'_> {
 
     pub fn on_seccomp(
         &self,
-        orig: &mut tracing::TracedProcess,
+        orig: &mut running::ProcessInfo,
         syscall_info: tracing::ptrace_syscall_info_seccomp,
         box_cgroup: &cgroups::BoxCgroup,
     ) -> Result<bool> {
@@ -481,13 +488,13 @@ impl PreForkRun<'_> {
             #[cfg(target_arch = "x86_64")]
             libc::SYS_open | libc::SYS_openat => {
                 self.state.set(State::WaitingOnOpen);
-                orig.resume_syscall()?;
+                orig.traced_process.resume_syscall()?;
                 Ok(false)
             }
             #[cfg(target_arch = "aarch64")]
             libc::SYS_openat => {
                 self.state.set(State::WaitingOnOpen);
-                orig.resume_syscall()?;
+                orig.traced_process.resume_syscall()?;
                 Ok(false)
             }
             _ => {
@@ -502,11 +509,11 @@ impl PreForkRun<'_> {
 
     pub fn handle_syscall(
         &mut self,
-        orig: &mut tracing::TracedProcess,
+        orig: &mut running::ProcessInfo,
         box_cgroup: &cgroups::BoxCgroup,
     ) -> Result<bool> {
         match self
-            .should_suspend_after_syscall(orig)
+            .should_suspend_after_syscall(&mut orig.traced_process)
             .context("Failed to check if should suspend after syscsall")?
         {
             Some(options) => {
@@ -515,7 +522,7 @@ impl PreForkRun<'_> {
                 Ok(true)
             }
             None => {
-                orig.resume()?;
+                orig.traced_process.resume()?;
                 Ok(false)
             }
         }
@@ -582,11 +589,13 @@ impl PreForkRun<'_> {
 impl<'a> Suspender<'a> {
     pub fn new(
         orig: &'a mut tracing::TracedProcess,
+        hard_rlimits: [libc::rlim_t; 16],
         orig_cgroup: &'a cgroups::BoxCgroup,
         options: SuspendOptions,
     ) -> Self {
         Self {
             orig,
+            hard_rlimits,
             orig_cgroup,
             options,
             inject_location: 0,
@@ -1184,7 +1193,14 @@ impl<'a> Suspender<'a> {
         // more precise (e.g. setitimer(2), which uses the same timer with ITIMER_PROF). An accurate
         // emulation of RLIMIT_CPU is complicated at best, so it'll likely stay a TODO until anyone
         // halloos.
-        std::array::try_from_fn(|i| self.orig.get_rlimit(i as i32)).context("Failed to get rlimit")
+        std::array::try_from_fn(|i| {
+            Ok(libc::rlimit {
+                rlim_cur: tracing::get_rlimit(self.orig.get_pid(), i as i32)
+                    .context("Failed to get rlimit")?
+                    .rlim_cur,
+                rlim_max: self.hard_rlimits[i],
+            })
+        })
     }
 
     fn start_master(&mut self) -> Result<()> {

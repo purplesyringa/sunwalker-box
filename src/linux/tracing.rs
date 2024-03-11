@@ -1067,23 +1067,6 @@ impl TracedProcess {
         Ok(res)
     }
 
-    pub fn get_rlimit(&self, resource: i32) -> io::Result<libc::rlimit> {
-        let mut rlimit = std::mem::MaybeUninit::uninit();
-        if unsafe {
-            libc::prlimit(
-                self.pid.as_raw(),
-                resource,
-                std::ptr::null(),
-                rlimit.as_mut_ptr(),
-            )
-        } == 0
-        {
-            Ok(unsafe { rlimit.assume_init() })
-        } else {
-            Err(std::io::Error::last_os_error())
-        }
-    }
-
     pub fn set_rlimit(&self, resource: i32, rlimit: libc::rlimit) -> io::Result<()> {
         if unsafe { libc::prlimit(self.pid.as_raw(), resource, &rlimit, std::ptr::null_mut()) } == 0
         {
@@ -1097,6 +1080,24 @@ impl TracedProcess {
 impl Debug for TracedProcess {
     fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(fmt, "traced process {}", self.pid)
+    }
+}
+
+// We want this callable for processes without writable /proc/.../mem
+pub fn get_rlimit(pid: Pid, resource: i32) -> io::Result<libc::rlimit> {
+    let mut rlimit = std::mem::MaybeUninit::uninit();
+    if unsafe {
+        libc::prlimit(
+            pid.as_raw(),
+            resource,
+            std::ptr::null(),
+            rlimit.as_mut_ptr(),
+        )
+    } == 0
+    {
+        Ok(unsafe { rlimit.assume_init() })
+    } else {
+        Err(std::io::Error::last_os_error())
     }
 }
 
