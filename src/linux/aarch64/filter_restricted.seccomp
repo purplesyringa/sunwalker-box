@@ -93,8 +93,6 @@ A == getpgid ? allow : next
 A == getsid ? allow : next
 A == getgroups ? allow : next
 A == uname ? allow : next
-A == getrlimit ? allow : next
-A == setrlimit ? allow : next
 A == getrusage ? allow : next
 A == umask ? allow : next
 A == getcpu ? allow : next
@@ -121,7 +119,6 @@ A == remap_file_pages ? allow : next
 A == get_mempolicy ? allow : next
 A == rt_tgsigqueueinfo ? allow : next
 A == wait4 ? allow : next
-A == prlimit64 ? allow : next
 A == syncfs ? allow : next
 A == process_vm_readv ? allow : next
 A == process_vm_writev ? allow : next
