@@ -24,6 +24,15 @@ int main() {
             perror("setrlimit");
             return 1;
         }
+        if (getrlimit(i, &rlim) == -1) {
+            perror("getrlimit");
+            return 1;
+        }
+        if (rlim.rlim_cur != 10000 + i || rlim.rlim_max != 20000 + i) {
+            fprintf(stderr, "rlimit %d was not saved (read out cur=%llu, max=%llu)\n", i,
+                    rlim.rlim_cur, rlim.rlim_max);
+            return 1;
+        }
     }
 
     puts("Suspend here");
