@@ -640,6 +640,15 @@ impl<'a> Suspender<'a> {
             .orig
             .get_signal_mask()
             .context("Failed to get signal mask")?;
+        // Make sure no signal except SIGSEGV, SIGBUS, SIGILL, SIGKILL, and SIGSTOP can affect the
+        // parasite
+        self.orig
+            .set_signal_mask(
+                !((1 << (libc::SIGSEGV - 1))
+                    | (1 << (libc::SIGBUS - 1))
+                    | (1 << (libc::SIGILL - 1))),
+            )
+            .context("Failed to block most signals")?;
 
         self.collect_file_descriptors()
             .context("Failed to collect file descriptors")?;
