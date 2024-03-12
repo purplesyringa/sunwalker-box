@@ -14,6 +14,10 @@ pub const EXTERNAL_USER_UID: uid_t = 2;
 // The UID the sandboxed program sees
 pub const INTERNAL_USER_UID: uid_t = 1000;
 
+// Sandboxed enclave user:
+pub const EXTERNAL_ENCLAVE_UID: uid_t = 3;
+pub const INTERNAL_ENCLAVE_UID: uid_t = 1001;
+
 pub const NOBODY_UID: uid_t = 65534;
 
 // The GIDs, inferred in the same way
