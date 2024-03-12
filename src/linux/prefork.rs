@@ -163,7 +163,6 @@ struct ParasiteState {
     arch_prctl_options: ArchPrctlOptions,
     itimers: ItimersState,
     program_break: usize,
-    pending_signals: u64,
     personality: usize,
     robust_list: RobustList,
     signal_handlers: [kernel_sigaction; 64],
@@ -188,6 +187,7 @@ struct StemcellState {
     itimers: ItimersState,
     memory_maps: MemoryMaps,
     mm_options: prctl_mm_map,
+    pending_signals: PendingSignals,
     personality: usize,
     robust_list: RobustList,
     rseq: Rseq,
@@ -262,6 +262,16 @@ struct Rseq {
     rseq_len: u32,
     flags: i32,
     sig: u32,
+}
+
+pub const MAX_PENDING_SIGNALS: usize = 1024;
+
+#[repr(C)]
+struct PendingSignals {
+    count_per_thread: usize,
+    count_per_process: usize,
+    pending_per_thread: [libc::siginfo_t; MAX_PENDING_SIGNALS],
+    pending_per_process: [libc::siginfo_t; MAX_PENDING_SIGNALS],
 }
 
 impl SuspendOptions {
@@ -650,6 +660,8 @@ impl<'a> Suspender<'a> {
             )
             .context("Failed to block most signals")?;
 
+        self.collect_pending_signals()
+            .context("Failed to collect pending signals")?;
         self.collect_file_descriptors()
             .context("Failed to collect file descriptors")?;
         self.collect_mm_options()
@@ -748,6 +760,38 @@ impl<'a> Suspender<'a> {
             // get our hands off kill(SIGSEGV) and faithfully update the continuation IP.
             cloned_registers.set_instruction_pointer(rseq_cs_data.abort_ip as usize);
         }
+
+        Ok(())
+    }
+
+    fn collect_pending_signals(&mut self) -> Result<()> {
+        // This detects all pending signals, including their attached data (this is critical for
+        // realtime signals, but also important for e.g. SIGSEGV). This is inherently racy, but we
+        // have masked all signals save for SIGSEGV, SIGBUS, and SIGILL, and we ensure those aren't
+        // delivered asynchronously via other ways (TODO).
+        let state = &mut unsafe { self.stemcell_state.assume_init_mut() }.pending_signals;
+
+        let per_thread = self
+            .orig
+            .get_pending_signals(tracing::SignalQueue::PerThread)?;
+        let per_process = self
+            .orig
+            .get_pending_signals(tracing::SignalQueue::PerProcess)?;
+        // This should be infallible given the rlimit set in running
+        ensure!(
+            per_thread.len() <= MAX_PENDING_SIGNALS,
+            "Too many pending signals"
+        );
+        ensure!(
+            per_process.len() <= MAX_PENDING_SIGNALS,
+            "Too many pending signals"
+        );
+        state.count_per_thread = per_thread.len();
+        state.count_per_process = per_process.len();
+        // The kernel ensures there is no padding in siginfo_t and zeroes out the padding at the
+        // end, thus a copy_from_slice is fine here.
+        state.pending_per_thread[..per_thread.len()].copy_from_slice(&per_thread);
+        state.pending_per_process[..per_process.len()].copy_from_slice(&per_process);
 
         Ok(())
     }
