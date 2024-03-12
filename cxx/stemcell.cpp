@@ -142,13 +142,10 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // be shared between runs
     file_descriptors::load(state.file_descriptors).CONTEXT("Failed to load file descriptors").TRY();
 
-    // Loading itimers has to happen at each run to preserve expiration times so that time doesn't
-    // flow between suspend and resume
+    // Loading timers has to happen at each run to preserve expiration times so that time doesn't
+    // flow between suspend and resume. Also, timers aren't even inherited.
     itimers::load(state.itimers).CONTEXT("Failed to load interval timers").TRY();
-
-    // Timers can trigger user code execution and therefore need to be restored as near to the end
-    // of restoring as possible
-    timers::load(state.timers).CONTEXT("Failed to load timers").TRY();
+    timers::load(state.timers).CONTEXT("Failed to load POSIX timers").TRY();
 
     // Unmap self, finally. We have to somehow specify we're ready for that and the SIGSEGV is not
     // just a bug, so put a magic value to a register beforehand. We can't put it to memory (say,
