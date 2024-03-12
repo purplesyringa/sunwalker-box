@@ -1,6 +1,5 @@
 #![feature(
     concat_idents,
-    generic_const_exprs,
     io_error_more,
     let_chains,
     maybe_uninit_as_bytes,
