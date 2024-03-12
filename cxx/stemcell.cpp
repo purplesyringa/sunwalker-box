@@ -19,6 +19,7 @@
 #include <linux/sched.h>
 #include <sched.h>
 #include <signal.h>
+#include <sys/ptrace.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <unistd.h>
@@ -245,6 +246,11 @@ Result<void> loop() {
 
 extern "C" __attribute__((naked, flatten, externally_visible)) void _start() {
     pid_t pid = libc::getpid().unwrap();
+    if (!libc::ptrace(PTRACE_TRACEME).is_ok()) {
+        (void)libc::kill(pid, SIGKILL);
+        __builtin_unreachable();
+    }
+    (void)libc::kill(pid, SIGSTOP);
     state.result = run();
     (void)libc::kill(pid, SIGSTOP);
     state.result = loop();
