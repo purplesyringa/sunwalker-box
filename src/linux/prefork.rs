@@ -434,6 +434,8 @@ impl PreForkManager {
         // I dare you
         child.resume().context("Failed to resume child")?;
 
+        log!("Restore complete");
+
         Ok(child)
     }
 }
