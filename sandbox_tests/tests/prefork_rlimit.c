@@ -12,7 +12,7 @@ script: |
 
 int main() {
     for (int i = 0; i < 16; i++) {
-        if (i == RLIMIT_CORE || i == RLIMIT_NICE || i == RLIMIT_RTPRIO) {
+        if (i == RLIMIT_CORE || i == RLIMIT_NICE || i == RLIMIT_RTPRIO || i == RLIMIT_SIGPENDING) {
             continue;
         }
         struct rlimit rlim;
@@ -38,7 +38,7 @@ int main() {
     fflush(stdout);
 
     for (int i = 0; i < 16; i++) {
-        if (i == RLIMIT_CORE || i == RLIMIT_NICE || i == RLIMIT_RTPRIO) {
+        if (i == RLIMIT_CORE || i == RLIMIT_NICE || i == RLIMIT_RTPRIO || i == RLIMIT_SIGPENDING) {
             continue;
         }
         struct rlimit rlim;

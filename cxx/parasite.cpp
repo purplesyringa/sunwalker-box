@@ -4,7 +4,6 @@
 #include "remembrances/arch_prctl_options.hpp"
 #endif
 #include "remembrances/itimers.hpp"
-#include "remembrances/pending_signals.hpp"
 #include "remembrances/personality.hpp"
 #include "remembrances/program_break.hpp"
 #include "remembrances/robust_list.hpp"
@@ -21,7 +20,6 @@ struct State {
 #endif
     itimers::State itimers;
     program_break::State program_break;
-    pending_signals::State pending_signals;
     personality::State personality;
     robust_futexes::State robust_list;
     signal_handlers::State signal_handlers;
@@ -41,7 +39,6 @@ Result<void> run() {
 #endif
     itimers::save(state.itimers).CONTEXT("Failed to save interval timers").TRY();
     program_break::save(state.program_break).CONTEXT("Failed to save program break").TRY();
-    pending_signals::save(state.pending_signals).CONTEXT("Failed to save pending signals").TRY();
     personality::save(state.personality).CONTEXT("Failed to save personality").TRY();
     robust_futexes::save(state.robust_list).CONTEXT("Failed to save robust list").TRY();
     signal_handlers::save(state.signal_handlers).CONTEXT("Failed to save signal handlers").TRY();

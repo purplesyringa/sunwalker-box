@@ -2,15 +2,29 @@
 
 namespace pending_signals {
 
-using State = uint64_t;
+static constexpr size_t MAX_PENDING_SIGNALS = 1024;
 
-Result<void> save(State &state) {
-    // TODO: we'd better lift this restriction somehow
-    // XXX: sigset_t has a repr(u64)
-    libc::rt_sigpending(reinterpret_cast<sigset_t *>(&state), 8)
-        .CONTEXT("Failed to run rt_sigpending")
-        .TRY();
-    ENSURE(state == 0, "sunwalker cannot suspend processes with pending signals");
+struct State {
+    size_t count_per_thread;
+    size_t count_per_process;
+    std::array<siginfo_t, MAX_PENDING_SIGNALS> pending_per_thread;
+    std::array<siginfo_t, MAX_PENDING_SIGNALS> pending_per_process;
+};
+
+Result<void> load(const State &state) {
+    pid_t pid = libc::getpid().unwrap();
+    for (size_t i = 0; i < state.count_per_thread; i++) {
+        const siginfo_t &info = state.pending_per_thread[i];
+        libc::rt_tgsigqueueinfo(pid, pid, info.si_signo, const_cast<siginfo_t *>(&info))
+            .CONTEXT("Failed to inject per-thread signal")
+            .TRY();
+    }
+    for (size_t i = 0; i < state.count_per_process; i++) {
+        const siginfo_t &info = state.pending_per_process[i];
+        libc::rt_sigqueueinfo(pid, info.si_signo, const_cast<siginfo_t *>(&info))
+            .CONTEXT("Failed to inject per-process signal")
+            .TRY();
+    }
     return {};
 }
 
