@@ -7,7 +7,7 @@ use crossmist::{Object, Sender};
 use nix::{
     fcntl, libc,
     libc::{dev_t, mode_t, off_t, pid_t, siginfo_t},
-    sys::{prctl, ptrace, signal, stat, wait},
+    sys::{prctl, signal, stat, wait},
     unistd,
     unistd::Pid,
 };
@@ -1302,23 +1302,18 @@ impl<'a> Suspender<'a> {
             .context("Master didn't deliver any transferred fds")?;
         self.patch_transferred_fds(&transferred_fds);
 
-        // The child will either exit or trigger SIGTRAP on execve() to stemcell due to ptrace
+        if let Some(error) = ours
+            .recv()
+            .context("Failed to read an error from the child")?
+        {
+            bail!("{error}");
+        }
+
         let wait_status =
             wait::waitpid(master_pid, None).context("Failed to waitpid for process")?;
-        match wait_status {
-            wait::WaitStatus::Exited(_, _) => {
-                bail!(
-                    "{}",
-                    ours.recv()
-                        .context("Failed to read an error from the child")?
-                        .context("The child terminated but did not report any error")?
-                );
-            }
-            wait::WaitStatus::Stopped(_, signal::Signal::SIGTRAP) => {}
-            _ => {
-                bail!("waitpid returned unexpected status at stemcell: {wait_status:?}");
-            }
-        }
+        let wait::WaitStatus::Stopped(_, signal::Signal::SIGSTOP) = wait_status else {
+            bail!("waitpid returned unexpected status at stemcell: {wait_status:?}");
+        };
 
         let master = tracing::TracedProcess::new(master_pid)?;
         master.init().context("Failed to init master")?;
@@ -1588,7 +1583,6 @@ fn prefork_master(
         userns::drop_privileges().context("Failed to drop privileges")?;
         // FIXME: chdir, stdio
 
-        ptrace::traceme().context("Failed to ptrace(PTRACE_TRACEME)")?;
         tracing::apply_seccomp_filter(false).context("Failed to apply seccomp filter")?;
         let argv = [CStr::from_bytes_with_nul(b"stemcell\0").unwrap()];
         let envp: [&CStr; 0] = [];
