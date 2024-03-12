@@ -92,6 +92,7 @@ struct SuspendedRun {
     processes_limit: Option<usize>,
     real_time: Duration,
     cpu_time: Duration,
+    memory: usize,
 }
 
 pub struct ProcessInfo {
@@ -117,6 +118,7 @@ struct SingleRun<'a> {
     suspend_data: Option<Rc<RefCell<prefork::SuspendData>>>,
     real_time_adjustment: Duration,
     cpu_time_adjustment: Duration,
+    memory_adjustment: usize,
 }
 
 enum EmulatedSyscall {
@@ -237,6 +239,7 @@ impl Runner {
         let suspend_data;
         let mut real_time_adjustment = Duration::ZERO;
         let mut cpu_time_adjustment = Duration::ZERO;
+        let mut memory_adjustment = 0;
         match options.mode {
             Mode::Run => {
                 prefork = None;
@@ -263,6 +266,7 @@ impl Runner {
                 suspend_data = Some(suspended_run.data.clone());
                 real_time_adjustment = suspended_run.real_time;
                 cpu_time_adjustment = suspended_run.cpu_time;
+                memory_adjustment = suspended_run.memory;
             }
         }
         let mut single_run = SingleRun {
@@ -288,6 +292,7 @@ impl Runner {
             suspend_data,
             real_time_adjustment,
             cpu_time_adjustment,
+            memory_adjustment,
         };
         single_run.run()?;
         Ok(single_run.results)
@@ -1573,7 +1578,12 @@ impl SingleRun<'_> {
                 }
             }
 
-            self.results.memory = self.box_cgroup.as_mut().unwrap().get_memory_peak()?;
+            self.results.memory = self
+                .box_cgroup
+                .as_mut()
+                .unwrap()
+                .get_memory_peak()?
+                .max(self.memory_adjustment);
 
             let verdict = self
                 .compute_verdict(wait_status)
@@ -1608,6 +1618,7 @@ impl SingleRun<'_> {
                                 processes_limit: self.options.processes_limit,
                                 real_time: self.results.real_time,
                                 cpu_time: self.results.cpu_time,
+                                memory: self.results.memory,
                             });
                             self.results.verdict = Verdict::Suspended(pack_prefork_id(
                                 suspended_runs.len() - 1,
