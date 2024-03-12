@@ -100,9 +100,14 @@ Result<void> run() {
     signal_handlers::load(state.signal_handlers).CONTEXT("Failed to load signal handlers").TRY();
     umask::load(state.umask).CONTEXT("Failed to load umask").TRY();
 
-    // Block signals delivered by interval timers. These are going to cause problems if sent while
-    // in stemcell
-    static uint64_t sigset = SIGALRM | SIGVTALRM | SIGPROF;
+    // Block all signals except SIGSEGV, SIGBUS, and SIGILL (and also SIGSTOP/SIGKILL). Signals
+    // might cause problems if delivered by interval timers or POSIX timers while we're in stemcell.
+    // Actually, all signals will, but SIGSEGV/SIGBUS/SIGILL may actually indicate problems within
+    // the stemcell, and we don't want to swallow them. To make sure no one can actually send
+    // SIGSEGV/SIGBUS/SIGILL to the stemcell (and parasite), we should (TODO) emulate timer_create.
+    static uint64_t sigset =
+        ~((static_cast<uint64_t>(1) << (SIGSEGV - 1)) | (static_cast<uint64_t>(1) << (SIGBUS - 1)) |
+          (static_cast<uint64_t>(1) << (SIGILL - 1)));
     libc::rt_sigprocmask(SIG_SETMASK, &sigset, nullptr, sizeof(sigset))
         .CONTEXT("Failed to disable interval timers signals")
         .TRY();
