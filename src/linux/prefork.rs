@@ -439,6 +439,11 @@ impl PreForkManager {
         // Finally, restore CPU state
         child.set_registers(data.registers.clone());
 
+        // And restrict the process
+        cgroup
+            .add_process(child_pid.as_raw())
+            .context("Failed to move process to cgroup")?;
+
         // I dare you
         child.resume().context("Failed to resume child")?;
 
