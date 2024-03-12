@@ -7,6 +7,7 @@
 #include "remembrances/itimers.hpp"
 #include "remembrances/memory_maps.hpp"
 #include "remembrances/mm_options.hpp"
+#include "remembrances/pending_signals.hpp"
 #include "remembrances/personality.hpp"
 #include "remembrances/robust_list.hpp"
 #include "remembrances/rseq.hpp"
@@ -33,6 +34,7 @@ struct State {
     itimers::State itimers;
     memory_maps::State memory_maps;
     mm_options::State mm_options;
+    pending_signals::State pending_signals;
     personality::State personality;
     robust_list::State robust_list;
     rseq::State rseq;
@@ -148,6 +150,9 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // descriptor but uses the same one, and thus updates to file offset and other information would
     // be shared between runs
     file_descriptors::load(state.file_descriptors).CONTEXT("Failed to load file descriptors").TRY();
+
+    // Pending signals have to be injected after fork
+    pending_signals::load(state.pending_signals).CONTEXT("Failed to load pending signals").TRY();
 
     // Loading timers has to happen at each run to preserve expiration times so that time doesn't
     // flow between suspend and resume. Also, timers aren't even inherited.

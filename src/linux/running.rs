@@ -200,6 +200,15 @@ impl Runner {
             )
             .context("Failed to configure epoll")?;
 
+        // Lower maximum number of pending signals, as prefork wants it to be lower than the typical
+        // default.
+        resource::setrlimit(
+            resource::Resource::RLIMIT_SIGPENDING,
+            prefork::MAX_PENDING_SIGNALS as u64,
+            prefork::MAX_PENDING_SIGNALS as u64,
+        )
+        .context("Failed to set RLIMIT_SIGPENDING")?;
+
         Ok(Runner {
             prefork_manager: prefork::PreForkManager::new(stdio_subst)?,
             timens_controller: RefCell::new(timens_controller),

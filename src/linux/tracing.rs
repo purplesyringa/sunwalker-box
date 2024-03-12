@@ -82,6 +82,18 @@ pub struct ptrace_rseq_configuration {
     pub pad: u32,
 }
 
+#[repr(C)]
+struct ptrace_peeksiginfo_args {
+    off: u64,
+    flags: u32,
+    nr: i32,
+}
+
+pub enum SignalQueue {
+    PerThread,
+    PerProcess,
+}
+
 trait RegSet: Sized {
     fn ptrace_get(pid: Pid) -> Result<Self, Errno>;
     fn ptrace_set(&self, pid: Pid) -> Result<()>;
@@ -1074,6 +1086,38 @@ impl TracedProcess {
         } else {
             Err(std::io::Error::last_os_error())
         }
+    }
+
+    pub fn get_pending_signals(&self, queue: SignalQueue) -> Result<Vec<libc::siginfo_t>> {
+        const PTRACE_PEEKSIGINFO_SHARED: u32 = 1;
+        let flags = match queue {
+            SignalQueue::PerThread => 0,
+            SignalQueue::PerProcess => PTRACE_PEEKSIGINFO_SHARED,
+        };
+        let mut pending_signals = Vec::new();
+        while pending_signals.len() == pending_signals.capacity() {
+            pending_signals.reserve(1);
+            let n_signals = unsafe {
+                libc::ptrace(
+                    libc::PTRACE_PEEKSIGINFO,
+                    self.pid,
+                    &ptrace_peeksiginfo_args {
+                        off: pending_signals.len() as u64,
+                        flags,
+                        nr: (pending_signals.capacity() - pending_signals.len()) as i32,
+                    },
+                    pending_signals.as_mut_ptr_range().end,
+                )
+            };
+            if n_signals == -1 {
+                return Err(std::io::Error::last_os_error())
+                    .context("Failed to ptrace-resume the child");
+            }
+            unsafe {
+                pending_signals.set_len(pending_signals.len() + n_signals as usize);
+            }
+        }
+        Ok(pending_signals)
     }
 }
 
