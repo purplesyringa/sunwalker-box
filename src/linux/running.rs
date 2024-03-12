@@ -90,6 +90,8 @@ struct SuspendedRun {
     idleness_time_limit: Option<Duration>,
     memory_limit: Option<usize>,
     processes_limit: Option<usize>,
+    real_time: Duration,
+    cpu_time: Duration,
 }
 
 pub struct ProcessInfo {
@@ -113,6 +115,8 @@ struct SingleRun<'a> {
     shm_next_id: Cell<isize>,
     prefork: Option<prefork::PreForkRun<'a>>,
     suspend_data: Option<Rc<RefCell<prefork::SuspendData>>>,
+    real_time_adjustment: Duration,
+    cpu_time_adjustment: Duration,
 }
 
 enum EmulatedSyscall {
@@ -231,6 +235,8 @@ impl Runner {
     pub fn run(&self, mut options: Options) -> Result<RunResults> {
         let prefork;
         let suspend_data;
+        let mut real_time_adjustment = Duration::ZERO;
+        let mut cpu_time_adjustment = Duration::ZERO;
         match options.mode {
             Mode::Run => {
                 prefork = None;
@@ -255,6 +261,8 @@ impl Runner {
                 options.memory_limit = suspended_run.memory_limit;
                 options.processes_limit = suspended_run.processes_limit;
                 suspend_data = Some(suspended_run.data.clone());
+                real_time_adjustment = suspended_run.real_time;
+                cpu_time_adjustment = suspended_run.cpu_time;
             }
         }
         let mut single_run = SingleRun {
@@ -278,6 +286,8 @@ impl Runner {
             shm_next_id: Cell::new(0),
             prefork,
             suspend_data,
+            real_time_adjustment,
+            cpu_time_adjustment,
         };
         single_run.run()?;
         Ok(single_run.results)
@@ -619,8 +629,9 @@ impl SingleRun<'_> {
     }
 
     fn update_metrics(&mut self) -> Result<()> {
-        self.results.cpu_time = self.box_cgroup.as_mut().unwrap().get_cpu_time()?;
-        self.results.real_time = self.start_time.unwrap().elapsed();
+        self.results.cpu_time =
+            self.cpu_time_adjustment + self.box_cgroup.as_mut().unwrap().get_cpu_time()?;
+        self.results.real_time = self.real_time_adjustment + self.start_time.unwrap().elapsed();
         self.results.idleness_time = self.results.real_time.saturating_sub(self.results.cpu_time);
         Ok(())
     }
@@ -1528,7 +1539,7 @@ impl SingleRun<'_> {
                     )
                     .context("Failed to resume preforked process")?;
 
-                // clone has just happened
+                // user code is about to start running
                 self.start_time = Some(Instant::now());
 
                 self.main_pid = traced_process.get_pid();
@@ -1595,6 +1606,8 @@ impl SingleRun<'_> {
                                 idleness_time_limit: self.options.idleness_time_limit,
                                 memory_limit: self.options.memory_limit,
                                 processes_limit: self.options.processes_limit,
+                                real_time: self.results.real_time,
+                                cpu_time: self.results.cpu_time,
                             });
                             self.results.verdict = Verdict::Suspended(pack_prefork_id(
                                 suspended_runs.len() - 1,
