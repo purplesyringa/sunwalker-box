@@ -10,7 +10,7 @@ struct Timer {
     void *sigev_value;
     int mechanism;
     pid_t target;
-    long clock_id;
+    int clock_id;
 };
 
 struct State {
