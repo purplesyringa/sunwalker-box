@@ -16,6 +16,7 @@
 #include "remembrances/tid_address.hpp"
 #include "remembrances/timers.hpp"
 #include "remembrances/umask.hpp"
+#include <linux/ptrace.h>
 
 struct State {
     Result<void> result;
@@ -243,6 +244,11 @@ Result<void> loop() {
 
 extern "C" __attribute__((naked, flatten, externally_visible)) void _start() {
     pid_t pid = libc::getpid().unwrap();
+    if (!libc::ptrace(PTRACE_TRACEME, 0, 0, 0).is_ok()) {
+        (void)libc::kill(pid, SIGKILL);
+        __builtin_unreachable();
+    }
+    (void)libc::kill(pid, SIGSTOP);
     state.result = run();
     (void)libc::kill(pid, SIGSTOP);
     state.result = loop();
