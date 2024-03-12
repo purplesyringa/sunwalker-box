@@ -16,6 +16,7 @@
 #include "remembrances/tid_address.hpp"
 #include "remembrances/timers.hpp"
 #include "remembrances/umask.hpp"
+#include <linux/prctl.h>
 #include <linux/ptrace.h>
 
 struct State {
@@ -52,6 +53,13 @@ extern char start_of_text;
 extern char end_of_bss;
 
 Result<void> run() {
+    // Parent sets us to 1001/1000/1001, but that results in just 1001/1000/1000 in child because
+    // that's how execve works. Fix this so that our rUID/sUID aren't 1000 and we can't be killed.
+    // This is inherently racy, but everyone else is supposed to be stopped at this moment.
+    libc::setresuid(1001, 1000, 1001).CONTEXT("Failed to drop privileges").TRY();
+
+    libc::prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0).CONTEXT("Failed to set no_new_privs").TRY();
+
     // Unmap everything the kernel has mapped for us, including stack, because we aren't using it
     // (provided the stemcell was compiled correctly)
     libc::munmap(0, reinterpret_cast<size_t>(&start_of_text))
@@ -113,6 +121,9 @@ Result<void> run() {
 }
 
 Result<void> init_child(const ControlMessageFds &fds) {
+    // Stop us from being able to touch the parent process in any way
+    libc::setresuid(1000, 1000, 1000).CONTEXT("Failed to drop privileges").TRY();
+
     // Shared pages have to be unshared between instances of clones, so do this after fork
     memory_maps::load_after_fork(state.memory_maps)
         .CONTEXT("Failed to load shared memory maps")

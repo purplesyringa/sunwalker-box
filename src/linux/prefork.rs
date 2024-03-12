@@ -7,7 +7,7 @@ use crossmist::{Object, Sender};
 use nix::{
     fcntl, libc,
     libc::{dev_t, mode_t, off_t, pid_t, siginfo_t},
-    sys::{prctl, signal, stat, wait},
+    sys::{signal, stat, wait},
     unistd,
     unistd::Pid,
 };
@@ -1578,12 +1578,27 @@ fn prefork_master(
         // This mostly repeats the code in running::executor_worker
         timens::disable_native_instructions()
             .context("Failed to disable native timens instructions")?;
-        prctl::set_no_new_privs().context("Failed to set no_new_privs")?;
-        // FIXME: we should stop the user from interactive with the master copy
-        userns::drop_privileges().context("Failed to drop privileges")?;
-        // FIXME: chdir, stdio
-
         tracing::apply_seccomp_filter(false).context("Failed to apply seccomp filter")?;
+
+        // We cannot set NO_NEW_PRIVS here, nor initiate PTRACE_TRACEME, because that's going to
+        // break UIDs on execve. There's no *good* reason they break UIDs, but due to a quirk in
+        // Linux (bug. it's a bug. it's not POSIX compliant in the slightest.), those have to be
+        // delayed until stemcell is executed. Otherwise, Linux will believe *something* might be
+        // insecure, and reset eUID to rUID. Indeed, eUID != rUID is interpreted as an indicator of
+        // a SUID executable, which it clearly isn't, and NO_NEW_PRIVS disables that. Even without
+        // NO_NEW_PRIVS, Linux recognizes that the stemcell's ptracer (i.e. the manager) does not
+        // hold CAP_SYS_PTRACE in the user namespace, and tries to be "helpful" again. (I'm not sure
+        // why it thinks it doesn't hold CAP_SYS_PTRACE, actually, because root is supposed to hold
+        // all capabilities, but here we are.)
+
+        // We don't immediately switch all UIDs to the user, as we don't want the stemcell children
+        // to touch the stemcell. Instead, we only switch the *effective* UID to the user UID, and
+        // make real and saved UIDs point at another entity. This way, no one can signal the
+        // stemcell or hurt it in any other way, because its real/saved UID is not the user UID, but
+        // it can still switch to user UID completely afterwards, because it retains it as an
+        // effective UID.
+        userns::drop_privileges_untouchable().context("Failed to drop privileges")?;
+
         let argv = [CStr::from_bytes_with_nul(b"stemcell\0").unwrap()];
         let envp: [&CStr; 0] = [];
         match unistd::fexecve(stemcell.as_raw_fd(), &argv, &envp).context("execv failed")? {}

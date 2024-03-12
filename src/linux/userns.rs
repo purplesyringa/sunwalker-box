@@ -44,7 +44,7 @@ fn configure_ns_impl(mut rx: crossmist::Receiver<()>) -> Result<()> {
         format!("/newroot/proc/{ppid}/uid_map"),
         format!(
             "{INTERNAL_ROOT_UID} {EXTERNAL_ROOT_UID} 1\n{INTERNAL_USER_UID} {EXTERNAL_USER_UID} \
-             1\n{NOBODY_UID} {NOBODY_UID} 1\n"
+             1\n{INTERNAL_ENCLAVE_UID} {EXTERNAL_ENCLAVE_UID} 1\n{NOBODY_UID} {NOBODY_UID} 1\n"
         ),
     )
     .context("Failed to fill uid_map")?;
@@ -76,5 +76,24 @@ pub fn drop_privileges() -> Result<()> {
         .context("Failed to setgroups")?;
     unistd::setgid(unistd::Gid::from_raw(INTERNAL_USER_GID)).context("Failed to setgid to user")?;
     unistd::setuid(unistd::Uid::from_raw(INTERNAL_USER_UID)).context("Failed to setuid to user")?;
+    Ok(())
+}
+
+pub fn drop_privileges_untouchable() -> Result<()> {
+    // This switches from root to non-root just like drop_privileges, except that the UID is
+    // different. It also ensures that
+    // a) processes that used drop_privileged() cannot touch the new process,
+    // b) the new process can later re-drop permissions to become just like if it called
+    //    drop_privileged initially.
+    // This is used to prevent the stemcell from being touched by its children.
+    unistd::setgroups(&[unistd::Gid::from_raw(INTERNAL_USER_GID)])
+        .context("Failed to setgroups")?;
+    unistd::setgid(unistd::Gid::from_raw(INTERNAL_USER_GID)).context("Failed to setgid to user")?;
+    unistd::setresuid(
+        unistd::Uid::from_raw(INTERNAL_ENCLAVE_UID),
+        unistd::Uid::from_raw(INTERNAL_USER_UID),
+        unistd::Uid::from_raw(INTERNAL_ENCLAVE_UID),
+    )
+    .context("Failed to setresuid")?;
     Ok(())
 }

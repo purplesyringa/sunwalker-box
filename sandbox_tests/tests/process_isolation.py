@@ -2,6 +2,10 @@
 description: Cannot signal or access fds of other processes
 script: |
     expect(run())
+
+    pid = prefork()
+    expect(pid, verdict=Suspended)
+    expect(resume(pid))
 """
 
 import os
@@ -10,6 +14,8 @@ import os
 def list_pids():
     return [int(pid) for pid in os.listdir("/proc") if pid.isdigit()]
 
+
+print("Suspend here", flush=True)
 
 for pid in list_pids():
     if pid != os.getpid():
