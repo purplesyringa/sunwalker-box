@@ -652,15 +652,10 @@ impl<'a> Suspender<'a> {
             .orig
             .get_signal_mask()
             .context("Failed to get signal mask")?;
-        // Make sure no signal except SIGSEGV, SIGBUS, SIGILL, SIGKILL, and SIGSTOP can affect the
-        // parasite
+        // Make sure no asynchronous signal can affect the parasite
         self.orig
-            .set_signal_mask(
-                !((1 << (libc::SIGSEGV - 1))
-                    | (1 << (libc::SIGBUS - 1))
-                    | (1 << (libc::SIGILL - 1))),
-            )
-            .context("Failed to block most signals")?;
+            .set_signal_mask(!0)
+            .context("Failed to block all signals")?;
 
         self.collect_pending_signals()
             .context("Failed to collect pending signals")?;
@@ -769,8 +764,7 @@ impl<'a> Suspender<'a> {
     fn collect_pending_signals(&mut self) -> Result<()> {
         // This detects all pending signals, including their attached data (this is critical for
         // realtime signals, but also important for e.g. SIGSEGV). This is inherently racy, but we
-        // have masked all signals save for SIGSEGV, SIGBUS, and SIGILL, and we ensure those aren't
-        // delivered asynchronously via other ways (TODO).
+        // have masked all signals, so asynchronous notifications cannot arrive.
         let state = &mut unsafe { self.stemcell_state.assume_init_mut() }.pending_signals;
 
         let per_thread = self
