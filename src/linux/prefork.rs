@@ -1167,18 +1167,29 @@ impl<'a> Suspender<'a> {
                 alloced.flags |= libc::MAP_GROWSDOWN | libc::MAP_STACK;
             }
 
-            // Private file-backed mappings differ from private anonymous mappings in three major
-            // ways:
-            // - they are pre-populated with the file contents as opposed to zeroes,
-            // - they are indicated differently in procfs, and
-            // - they don't support transparent huge pages.
-            // The former doesn't matter to us, because we always read-out pages of private mappings
-            // from the original process into the stemcell. The latter is a major setback: PyPy, for
-            // instance, maps 60 MB of .text/.data, which makes significantly slows down clone and
-            // exit unless huge pages are used. Therefore, we have to make a compromise between
-            // identical replication (including procfs state) and efficiency. We chose the latter.
-            // If this turns out to be the wrong decision, toggle this constant.
-            const REMAP_PRIVATE_AS_ANONYMOUS: bool = true;
+            // We used to transform private file-backend mappings to *anonymous* mappings on
+            // suspend. This was not entirely *correct*, e.g. the map gets denolted differently in
+            // procfs, but it lead to a significant increase of performance (10% on Python A+B),
+            // because Linux supports THP for anonymous pages but not for file-backed mappings.
+            // Using THP would significantly decrease the number of page table entires to
+            // allocate/deallocate during fork/exit, and these two syscall take a large portion of
+            // time in short-lived tasks.
+            //
+            // Unfortunately, we had to disable this later when an accounting problem turned up.
+            // Suppose we map the same relatively large file 60000 times as PROT_READ. As the pages
+            // are never written to, they are deduplicated and take little space. However, if we
+            // transform the file-backed mapping to an anonymous mapping, this deduplication is lost
+            // and we OOM during suspend, when we read the file into memory for the Nth time.
+            //
+            // This set-back is compensated by existence of CONFIG_READ_ONLY_THP_FOR_FS, which lets
+            // file-backed mappings use THP too. It applies to non-executable mappings only since
+            // v6.8, however. And, mind you, it doesn't resolve the problem *completely*, as this
+            // adds the requirement that 'base' and 'offset' are congruent. However, this sort of
+            // performance loss (or complexity increase) if perhaps reasonable for increased safety.
+            //
+            // If we ever find a better work around (and update the code in memory_maps.hpp too!!),
+            // toggle this constant.
+            const REMAP_PRIVATE_AS_ANONYMOUS: bool = false;
 
             if map.inode == 0 || (REMAP_PRIVATE_AS_ANONYMOUS && !map.shared) {
                 alloced.flags |= libc::MAP_ANONYMOUS;
