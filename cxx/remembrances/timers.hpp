@@ -18,13 +18,20 @@ struct State {
     size_t count;
 };
 
+// Workaround for glibc bug https://sourceware.org/bugzilla/show_bug.cgi?id=27417
+// I hate glibc. Where is this field/define from man sigevent(3type), which exists in musl, but is
+// absent from actual glibc headers? Nowhere to be seen. Fucking morons.
+#ifndef sigev_notify_thread_id
+#define sigev_notify_thread_id _sigev_un._tid
+#endif
+
 Result<void> add_timer(const Timer &timer) {
     static int timer_id;
     static sigevent sev;
     sev.sigev_value.sival_ptr = timer.sigev_value;
     sev.sigev_signo = timer.signal;
     sev.sigev_notify = timer.mechanism;
-    sev._sigev_un._tid = timer.target;
+    sev.sigev_notify_thread_id = timer.target;
 
     // timer_create(3p) in libc says that SIGEV_THREAD creates new thread for signal handler, but
     // proc(5) for `/proc/[pid]/timers` has zero information on what the function for SIGEV_THREAD
