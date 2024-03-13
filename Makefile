@@ -56,7 +56,7 @@ target/%.seccomp.out: src/linux/$(ARCH)/%.seccomp
 target/exec_wrapper.stripped: target/exec_wrapper
 	strip $^ -o $@
 target/exec_wrapper.itimer_prof: target/exec_wrapper
-	readelf -s $< | awk '/OBJECT.*itimer_prof/{ print strtonum("0x" $$2) }' >$@
+	readelf -s $< | awk '/OBJECT.*itimer_prof/{ print "0x" $$2 }' >$@
 target/exec_wrapper: cxx/exec_wrapper.cpp cxx/exec_wrapper.ld $(shell find cxx -maxdepth 1 -name '*.hpp') target/libc.hpp
 	$(CXX) $< -o $@ -T cxx/exec_wrapper.ld -static $(CXX_OPTIONS)
 
