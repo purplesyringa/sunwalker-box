@@ -30,6 +30,6 @@ pty.openpty()
 print(os.listdir("/dev/pts"), file=sys.stderr)
 
 
-pty.spawn(["/usr/bin/echo", "Hello, world!"], read)
+pty.spawn(["/bin/echo", "Hello, world!"], read)
 
 assert result == b"Hello, world!\r\n", result

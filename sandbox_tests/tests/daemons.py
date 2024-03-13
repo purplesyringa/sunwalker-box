@@ -15,6 +15,6 @@ def list_pids():
     return [int(pid) for pid in os.listdir("/proc") if pid.isdigit()]
 
 
-subprocess.Popen(["/usr/bin/sleep", "inf"])
+subprocess.Popen(["/bin/sleep", "inf"])
 
 print(list_pids())

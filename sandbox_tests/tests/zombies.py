@@ -17,7 +17,7 @@ def list_pids():
 
 
 if sys.argv[-1] == "stage2":
-    subprocess.Popen(["/usr/bin/true"])
+    subprocess.Popen(["/bin/true"])
 else:
     old_pids = list_pids()
     subprocess.run([sys.executable] + sys.argv + ["stage2"], check=True)
