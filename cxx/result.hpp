@@ -65,12 +65,12 @@ template <typename Result, typename T> struct _result_base {
 
 template <typename T> struct [[nodiscard]] Result : _result_base<Result<T>, T> {
     using Base = _result_base<Result<T>, T>;
+    using Base::Base;
 
     union {
         T _success_value;
     };
 
-    using Base::_result_base;
     Result(const T &success_value) : _success_value(success_value) {}
     Result(T &&success_value) : _success_value(std::move(success_value)) {}
 
