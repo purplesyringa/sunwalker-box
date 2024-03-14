@@ -42,7 +42,7 @@ struct MemoryMap {
     off_t offset;
 
     // This function is not supposed to be invoked for shared file-backed mappings.
-    Result<void> do_map(const State& state) const;
+    Result<void> do_map(const State &state) const;
 };
 
 struct State {
@@ -52,7 +52,7 @@ struct State {
     std::array<MemoryMap, MAX_MEMORY_MAPS> maps;
 };
 
-Result<void> MemoryMap::do_map(const State& state) const {
+Result<void> MemoryMap::do_map(const State &state) const {
     mmap_thp(base, end - base, (prot & 0x7fffffff) | PROT_WRITE, flags, fd, offset)
         .CONTEXT("Failed to mmap-THP")
         .TRY();
@@ -72,15 +72,21 @@ Result<void> MemoryMap::do_map(const State& state) const {
         // We could use vmsplice here. Unfortunately, that isn't going to be zero-copy, so any
         // performance improvements are unlikely. https://lwn.net/Articles/571748/ would have fixed
         // this, but it hasn't ever been merged.
-        size_t n_read = libc::pread64(state.orig_mem_fd, region_start, region_end - region_start, region_start)
-                          .CONTEXT("Failed to copy memory")
-                          .TRY();
+        size_t n_read =
+            libc::pread64(state.orig_mem_fd, region_start, region_end - region_start, region_start)
+                .CONTEXT("Failed to copy memory")
+                .TRY();
         ENSURE(n_read == region_end - region_start, "Unexpected read size");
         return {};
     };
 
     while (cur_base < end) {
-        size_t n_entries = libc::pread64(state.orig_pagemap_fd, pagemap_entries.data(), std::min(pagemap_entries.size(), (end - cur_base) / page_size) * 8, cur_base / page_size * 8).CONTEXT("Failed to read pagemap").TRY();
+        size_t n_entries =
+            libc::pread64(state.orig_pagemap_fd, pagemap_entries.data(),
+                          std::min(pagemap_entries.size(), (end - cur_base) / page_size) * 8,
+                          cur_base / page_size * 8)
+                .CONTEXT("Failed to read pagemap")
+                .TRY();
         n_entries /= 8;
         ENSURE(n_entries > 0, "Nothing could be read from pagemap");
 
