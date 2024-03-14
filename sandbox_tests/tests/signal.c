@@ -7,6 +7,6 @@ script: |
 #include <stddef.h>
 
 int main() {
-  *(int *)NULL = 1;
-  return 0;
+    *(int *)NULL = 1;
+    return 0;
 }

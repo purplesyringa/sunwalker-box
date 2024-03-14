@@ -14,15 +14,15 @@ script: |
 #endif
 
 int main() {
-  int namespaces[] = {CLONE_NEWCGROUP, CLONE_NEWIPC, CLONE_NEWIPC,
-                      CLONE_NEWIPC,    CLONE_NEWPID, CLONE_NEWTIME,
-                      CLONE_NEWUSER,   CLONE_NEWUTS, 0};
-  for (int *p = namespaces; *p; p++) {
-    int flag = *p;
-    if (unshare(flag) == 0) {
-      fprintf(stderr, "unshare(%x) unexpectedly succeeded\n", flag);
-      return 1;
+    int namespaces[] = {CLONE_NEWCGROUP, CLONE_NEWIPC, CLONE_NEWIPC,
+                        CLONE_NEWIPC,    CLONE_NEWPID, CLONE_NEWTIME,
+                        CLONE_NEWUSER,   CLONE_NEWUTS, 0};
+    for (int *p = namespaces; *p; p++) {
+        int flag = *p;
+        if (unshare(flag) == 0) {
+            fprintf(stderr, "unshare(%x) unexpectedly succeeded\n", flag);
+            return 1;
+        }
     }
-  }
-  return 0;
+    return 0;
 }
