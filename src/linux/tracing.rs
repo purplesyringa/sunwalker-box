@@ -598,6 +598,15 @@ impl TracedProcess {
             .with_context(|| format!("Failed to open {path}"))
     }
 
+    pub fn open_pagemap(&self) -> Result<File> {
+        let path = self.get_procfs_path("pagemap");
+        File::options()
+            .read(true)
+            .write(true)
+            .open(&path)
+            .with_context(|| format!("Failed to open {path}"))
+    }
+
     fn get_procfs_path(&self, name: &str) -> String {
         let prefix = if self.external { "/newroot" } else { "" };
         format!("{prefix}/proc/{}/{name}", self.pid)
