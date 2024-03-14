@@ -242,6 +242,7 @@ const MAX_MEMORY_MAPS: usize = 65530;
 #[repr(C)]
 struct MemoryMaps {
     orig_mem_fd: RawFd,
+    orig_pagemap_fd: RawFd,
     count: usize,
     maps: [MemoryMap; MAX_MEMORY_MAPS],
 }
@@ -1115,6 +1116,14 @@ impl<'a> Suspender<'a> {
                 .into(),
         );
 
+        translated_maps_mut.orig_pagemap_fd = self.transferred_fds.len() as RawFd;
+        self.transferred_fds.push(
+            self.orig
+                .open_pagemap()
+                .context("Failed to open /proc/.../pagemap of original process")?
+                .into(),
+        );
+
         let mut file_indices = HashMap::new();
 
         for map in memory_maps {
@@ -1165,6 +1174,10 @@ impl<'a> Suspender<'a> {
                 // same thing as what the kernel does when allocating the main stack, so we should
                 // figure that out.
                 alloced.flags |= libc::MAP_GROWSDOWN | libc::MAP_STACK;
+            }
+
+            if map.inode == 0 {
+                alloced.prot |= -0x80000000;
             }
 
             // We used to transform private file-backend mappings to *anonymous* mappings on
@@ -1339,6 +1352,7 @@ impl<'a> Suspender<'a> {
         let state = unsafe { self.stemcell_state.assume_init_mut() };
 
         state.memory_maps.orig_mem_fd = fds[state.memory_maps.orig_mem_fd as usize];
+        state.memory_maps.orig_pagemap_fd = fds[state.memory_maps.orig_pagemap_fd as usize];
         for map in &mut state.memory_maps.maps[..state.memory_maps.count] {
             if map.fd != -1 {
                 map.fd = fds[map.fd as usize];
