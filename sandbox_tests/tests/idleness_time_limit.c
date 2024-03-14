@@ -16,10 +16,10 @@ script: |
 #include <unistd.h>
 
 int main() {
-  while (clock() < CLOCKS_PER_SEC / 10) {
-  }
-  for (;;) {
-    pause();
-  }
-  return 0;
+    while (clock() < CLOCKS_PER_SEC / 10) {
+    }
+    for (;;) {
+        pause();
+    }
+    return 0;
 }

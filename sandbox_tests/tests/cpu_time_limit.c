@@ -11,7 +11,7 @@ script: |
 */
 
 int main() {
-  for (;;) {
-  }
-  return 0;
+    for (;;) {
+    }
+    return 0;
 }

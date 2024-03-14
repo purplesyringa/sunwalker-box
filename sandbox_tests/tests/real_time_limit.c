@@ -13,8 +13,8 @@ script: |
 #include <unistd.h>
 
 int main() {
-  for (;;) {
-    pause();
-  }
-  return 0;
+    for (;;) {
+        pause();
+    }
+    return 0;
 }

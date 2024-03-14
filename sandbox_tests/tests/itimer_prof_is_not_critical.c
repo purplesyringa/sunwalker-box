@@ -16,13 +16,13 @@ script:
 #include <sys/time.h>
 
 int main() {
-  struct itimerval timer;
-  memset(&timer, 0, sizeof(timer));
-  if (setitimer(ITIMER_PROF, &timer, NULL) == -1) {
-    perror("setitimer");
-    return 1;
-  }
-  for (;;) {
-  }
-  return 0;
+    struct itimerval timer;
+    memset(&timer, 0, sizeof(timer));
+    if (setitimer(ITIMER_PROF, &timer, NULL) == -1) {
+        perror("setitimer");
+        return 1;
+    }
+    for (;;) {
+    }
+    return 0;
 }
