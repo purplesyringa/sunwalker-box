@@ -3,10 +3,10 @@ description: Filesystem is totally restored on reset
 root: {}
 static: true
 script: |
-  pv = {}
-  for i in range(3):
-    _, _, pv = expect(run(context=i), previous_values=pv, matching_stdout=True)
-    run_reset()
+    pv = dict(stdout=PreviousOutput())
+    for i in range(3):
+        pv = expect(run(context=i), **pv)
+        run_reset()
 */
 
 #include <dirent.h>

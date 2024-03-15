@@ -1,14 +1,10 @@
 /*
 description: sysinfo should not reveal information
 script: |
-  pv = {}
-  for _ in range(2):
-    _, _, pv = expect(
-      run(memory_limit=parse_size("200 MB")),
-      previous_values=pv,
-      matching_stdout="+- 1"
-    )
-    run_reset()
+    pv = dict(stdout=PreviousOutput(bias="+- 1"))
+    for _ in range(2):
+        pv = expect(run(limits=Metrics(memory="200 MB")), **pv)
+        run_reset()
 */
 
 #include <stdio.h>

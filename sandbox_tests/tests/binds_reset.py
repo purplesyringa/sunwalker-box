@@ -1,15 +1,15 @@
 """
 description: Bind-mounts are removed on reset
 assets:
-  dir:
-    file: text
+    dir:
+        file: text
 script: |
-  mkdir("/space/dir")
-  bind("dir", "/space/dir")
-  bind("dir", "/var")
-  expect(run(input="0"))
-  run_reset()
-  expect(run(input="1"))
+    mkdir("/space/dir")
+    bind("dir", "/space/dir")
+    bind("dir", "/var")
+    expect(run(input="0"))
+    run_reset()
+    expect(run(input="1"))
 """
 
 import os

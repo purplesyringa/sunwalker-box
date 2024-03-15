@@ -1,7 +1,7 @@
 """
 description: /dev has no unsafe mounts
 script: |
-  expect(run())
+    expect(run())
 """
 
 import os

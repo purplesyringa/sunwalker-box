@@ -1,10 +1,10 @@
 """
 description: Pseudoterminals work and are reset correctly
 script: |
-  pv = {}
-  for _ in range(2):
-    _, _, pv = expect(run(), previous_values=pv, matching_stderr=True)
-    run_reset()
+    pv = dict(stderr=PreviousOutput())
+    for _ in range(2):
+        pv = expect(run(), **pv)
+        run_reset()
 """
 
 import os

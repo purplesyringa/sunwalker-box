@@ -1,9 +1,9 @@
 /*
 description: Large files cannot be created
 quotas:
-  space: 10000
+    space: 10000
 script: |
-  expect(run())
+    expect(run())
 */
 
 #include <errno.h>

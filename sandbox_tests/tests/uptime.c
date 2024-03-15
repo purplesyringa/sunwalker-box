@@ -1,10 +1,10 @@
 /*
 description: Uptime should be zero
 script: |
-  pv = {}
-  for _ in range(2):
-    _, _, pv = expect(run(), previous_values=pv, matching_stdout="+- 0.1")
-    run_reset()
+    pv = dict(stdout=PreviousOutput(bias="+- 0.1"))
+    for _ in range(2):
+        pv = expect(run(), **pv)
+        run_reset()
 */
 
 #include <stdio.h>

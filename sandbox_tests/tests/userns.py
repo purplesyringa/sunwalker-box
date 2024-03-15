@@ -1,7 +1,7 @@
 """
 description: Running in userns
 script: |
-  expect(run())
+    expect(run())
 """
 
 import os

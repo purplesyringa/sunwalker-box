@@ -3,13 +3,9 @@ description: arm64 counter-timer registers (cntpct[ss], cntvct[ss]) are unavaila
 arch:
 - aarch64
 script: |
-  for i in range(4):
-    expect(
-      run(input=str(i), context=str(i)),
-      limit_verdict="Signaled",
-      exit_code=-4
-    )
-    run_reset()
+    for i in range(4):
+        expect(run(input=str(i), context=i), verdict=Signaled(-4))
+        run_reset()
 */
 
 #pragma GCC target("arch=armv8.6-a")

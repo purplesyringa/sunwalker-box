@@ -3,36 +3,36 @@ description: Binds are preserved after commit
 assets:
     file: Pre-uploaded
     dir:
-      file: Pre-uploaded 2
+        file: Pre-uploaded 2
 script: |
-  touch("/space/file")
-  bind("file", "/space/file")
-  
-  mkdir("/space/dir")
-  bind("dir", "/space/dir")
-  
-  expect(run(input="0"))
-  run_reset()
-  expect(run(input="1"))
-  run_reset()
+    touch("/space/file")
+    bind("file", "/space/file")
 
-  touch("/space/file_ro")
-  bind_ro("file", "/space/file_ro")
-  
-  touch("/space/file_rw")
-  bind("file", "/space/file_rw")
-  
-  mkdir("/space/dir_ro")
-  bind_ro("dir", "/space/dir_ro")
-  
-  mkdir("/space/dir_rw")
-  bind("dir", "/space/dir_rw")
-  commit()
-  
-  expect(run(input="2"))
-  run_reset()
-  expect(run(input="3"))
-  run_reset()
+    mkdir("/space/dir")
+    bind("dir", "/space/dir")
+
+    expect(run(input="0"))
+    run_reset()
+    expect(run(input="1"))
+    run_reset()
+
+    touch("/space/file_ro")
+    bind_ro("file", "/space/file_ro")
+
+    touch("/space/file_rw")
+    bind("file", "/space/file_rw")
+
+    mkdir("/space/dir_ro")
+    bind_ro("dir", "/space/dir_ro")
+
+    mkdir("/space/dir_rw")
+    bind("dir", "/space/dir_rw")
+    commit()
+
+    expect(run(input="2"))
+    run_reset()
+    expect(run(input="3"))
+    run_reset()
 """
 
 import os

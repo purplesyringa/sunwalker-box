@@ -1,10 +1,9 @@
 /*
 description: Peak memory usage is computed correctly
 script: |
-  expect(run(), memory="10 MB +- 0.5 MB")
+    expect(run(), metrics=ApproximateMetrics(memory="10 MB +- 0.5 MB"))
 */
 
-#include <errno.h>
 #include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>

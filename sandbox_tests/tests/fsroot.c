@@ -1,48 +1,48 @@
 /*
 description: Filesystem is collectly recreated
 root:
-  rootfile: Root file
-  rootdir:
-    nestedfile: Nested file
-    nestedsymlink1: -> /absolute/path
-    nestedsymlink2: -> relative/path
-  rootsymlink1: -> /absolute/path
-  rootsymlink2: -> relative/path
+    rootfile: Root file
+    rootdir:
+        nestedfile: Nested file
+        nestedsymlink1: -> /absolute/path
+        nestedsymlink2: -> relative/path
+    rootsymlink1: -> /absolute/path
+    rootsymlink2: -> relative/path
 static: true
 script: |
-  stdout = '\n'.join([
-    "/tmp/",
-    "/proc/",
-    "/dev/",
-    "/dev/shm/",
-    "/dev/ptmx",
-    "/dev/pts/",
-    "/dev/pts/ptmx",
-    "/dev/mqueue/",
-    "/dev/fd -> /proc/self/fd",
-    "/dev/tty",
-    "/dev/stderr -> /proc/self/fd/2",
-    "/dev/stdout -> /proc/self/fd/1",
-    "/dev/stdin -> /proc/self/fd/0",
-    "/dev/random",
-    "/dev/urandom",
-    "/dev/zero",
-    "/dev/full",
-    "/dev/null",
-    "/space/",
-    "/space/stderr.txt",
-    "/space/stdout.txt",
-    "/space/fsroot",
-    "/rootsymlink1 -> /absolute/path",
-    "/rootdir/",
-    "/rootdir/nestedsymlink1 -> /absolute/path",
-    "/rootdir/nestedsymlink2 -> relative/path",
-    "/rootdir/nestedfile",
-    "/rootsymlink2 -> relative/path",
-    "/rootfile",
-    ""
-  ])
-  expect(run(), stdout=stdout, unordered_stdout=True)
+    stdout = '\n'.join([
+        "/tmp/",
+        "/proc/",
+        "/dev/",
+        "/dev/shm/",
+        "/dev/ptmx",
+        "/dev/pts/",
+        "/dev/pts/ptmx",
+        "/dev/mqueue/",
+        "/dev/fd -> /proc/self/fd",
+        "/dev/tty",
+        "/dev/stderr -> /proc/self/fd/2",
+        "/dev/stdout -> /proc/self/fd/1",
+        "/dev/stdin -> /proc/self/fd/0",
+        "/dev/random",
+        "/dev/urandom",
+        "/dev/zero",
+        "/dev/full",
+        "/dev/null",
+        "/space/",
+        "/space/stderr.txt",
+        "/space/stdout.txt",
+        "/space/fsroot",
+        "/rootsymlink1 -> /absolute/path",
+        "/rootdir/",
+        "/rootdir/nestedsymlink1 -> /absolute/path",
+        "/rootdir/nestedsymlink2 -> relative/path",
+        "/rootdir/nestedfile",
+        "/rootsymlink2 -> relative/path",
+        "/rootfile",
+        ""
+    ]).encode()
+    expect(run(), stdout=FixedOutput(stdout, unordered=True))
 */
 
 #include <dirent.h>

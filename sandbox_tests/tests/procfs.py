@@ -1,7 +1,7 @@
 """
 description: /proc is mounted correctly
 script: |
-  expect(run())
+    expect(run())
 """
 
 import os
