@@ -1,10 +1,9 @@
 /*
 description: UTS namespace is unshared
 script: |
-  expect(run())
+    expect(run())
 */
 
-#include <errno.h>
 #include <limits.h>
 #include <stdio.h>
 #include <string.h>

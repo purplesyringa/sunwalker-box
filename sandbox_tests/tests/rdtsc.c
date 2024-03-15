@@ -3,7 +3,7 @@ description: rdtsc passes just like clock()
 arch:
 - x86_64
 script: |
-  expect(run())
+    expect(run())
 */
 
 #include <stdio.h>

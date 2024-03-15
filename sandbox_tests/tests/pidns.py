@@ -1,11 +1,11 @@
 """
 description: Is running in a small pidns
 script: |
-  stdout="Hello!\n[1, 2, 3]\n"
+    stdout="Hello!\n[1, 2, 3]\n"
 
-  for _ in range(10):
-    expect(run(), stdout=stdout)
-    run_reset()
+    for _ in range(10):
+        expect(run(), stdout=stdout)
+        run_reset()
 """
 
 import os

@@ -1,7 +1,7 @@
 /*
 description: CoW memory is not counted twice
 script: |
-  expect(run(), memory="14 MiB +- 0.5 MiB")
+    expect(run(), metrics=ApproximateMetrics(memory="14 MiB +- 0.5 MiB"))
 */
 
 #include <errno.h>

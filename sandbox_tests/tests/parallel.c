@@ -1,7 +1,7 @@
 /*
 description: Threads cannot run in parallel
 script: |
-  expect(run())
+    expect(run())
 */
 
 #include <pthread.h>

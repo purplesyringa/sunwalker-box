@@ -1,23 +1,23 @@
 """
 description: Mount binds are readable and not always writable
 assets:
-  file: ""
-  dir:
     file: ""
+    dir:
+        file: ""
 script: |
-  touch("/space/readonly")
-  bind_ro("file", "/space/readonly")
+    touch("/space/readonly")
+    bind_ro("file", "/space/readonly")
 
-  touch("/space/readwrite")
-  bind("file", "/space/readwrite")
-  
-  mkdir("/space/readonly_dir")
-  bind_ro("dir", "/space/readonly_dir")
-  
-  mkdir("/space/readwrite_dir")
-  bind("dir", "/space/readwrite_dir")
+    touch("/space/readwrite")
+    bind("file", "/space/readwrite")
 
-  expect(run())
+    mkdir("/space/readonly_dir")
+    bind_ro("dir", "/space/readonly_dir")
+
+    mkdir("/space/readwrite_dir")
+    bind("dir", "/space/readwrite_dir")
+
+    expect(run())
 """
 
 import os

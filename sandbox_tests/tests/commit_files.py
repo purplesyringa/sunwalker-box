@@ -1,18 +1,18 @@
 """
 description: Files are preserved after commit
 script: |
-  def simple_run(i):
-    expect(run(input=str(i), context=str(i)))
+    def simple_run(i):
+        expect(run(input=str(i), context=str(i)))
+        run_reset()
+
+    simple_run(0)
+
+    run(input="1")
+    commit()
     run_reset()
 
-  simple_run(0)
-
-  run(input="1")
-  commit()
-  run_reset()
-  
-  simple_run(2)
-  simple_run(3)
+    simple_run(2)
+    simple_run(3)
 """
 
 import os

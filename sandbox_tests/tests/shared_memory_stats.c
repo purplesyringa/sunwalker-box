@@ -1,7 +1,7 @@
 /*
 description: Peak shared memory usage is computed correctly
 script: |
-  expect(run(), memory="10 MB +- 0.5 MB")
+    expect(run(), metrics=ApproximateMetrics(memory="10 MB +- 0.5 MB"))
 */
 
 #include <errno.h>

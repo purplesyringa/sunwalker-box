@@ -1,7 +1,10 @@
 /*
 description: Virtual memory (uncommitted) is not subject to memory limit
 script: |
-  expect(run(memory_limit=parse_size("20 MB")), memory="10 MB +- 1 MB")
+    expect(
+        run(limits=Metrics(memory="20 MB")),
+        metrics=ApproximateMetrics(memory="10 MB +- 1 MB")
+    )
 */
 
 #include <stdio.h>

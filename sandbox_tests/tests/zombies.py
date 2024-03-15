@@ -1,9 +1,9 @@
 """
 description: Zombies are reaped
 script: |
-  for i in range(15):
-    expect(run(context=i))
-    run_reset()
+    for i in range(15):
+        expect(run(context=i))
+        run_reset()
 """
 
 import os

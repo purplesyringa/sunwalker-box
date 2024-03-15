@@ -1,10 +1,10 @@
 """
 description: All processes are killed when invokee dies
 script: |
-  pv = {}
-  for _ in range(2):
-    _, _, pv = expect(run(), previous_values=pv, matching_stdout=True)
-    run_reset()
+    pv = dict(stdout=PreviousOutput())
+    for _ in range(2):
+        pv = expect(run(), **pv)
+        run_reset()
 """
 
 import os

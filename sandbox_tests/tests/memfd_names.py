@@ -1,7 +1,7 @@
 """
 description: memfds have expected names that can collide
 script: |
-  expect(run())
+    expect(run())
 """
 
 import mmap

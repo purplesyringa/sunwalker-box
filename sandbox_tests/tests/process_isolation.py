@@ -1,7 +1,7 @@
 """
 description: Cannot signal or access fds of other processes
 script: |
-  expect(run())
+    expect(run())
 """
 
 import os

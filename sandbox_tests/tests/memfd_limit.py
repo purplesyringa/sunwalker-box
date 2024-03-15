@@ -1,7 +1,7 @@
 """
 description: memfds are subject to memory limit
 script: |
-  expect(run(memory_limit=parse_size("20 MiB")), limit_verdict="MemoryLimitExceeded")
+    expect(run(limits=Metrics(memory="20 MiB")), verdict=Limited(Limit.memory))
 """
 
 import os

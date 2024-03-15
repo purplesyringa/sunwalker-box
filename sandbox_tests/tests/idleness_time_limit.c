@@ -1,15 +1,15 @@
 /*
 description: Idleness time limit works
 script: |
-  results = {
-    "limit_verdict": "IdlenessTimeLimitExceeded",
-    "real_time": "0.3 +- 0.07",
-    "cpu_time": "0.1 +- 0.01",
-    "idleness_time": "0.2 +- 0.07"
-  }
-
-  expect(run(idleness_time_limit=0.2), **results)
-  run_reset()
+    expect(
+        run(limits=Metrics(idleness_time=0.2)),
+        verdict=Limited(Limit.idleness_time),
+        metrics=ApproximateMetrics(
+            real_time="0.3 +- 0.07",
+            cpu_time="0.1 +- 0.01",
+            idleness_time="0.2 +- 0.07"
+        )
+    )
 */
 
 #include <time.h>

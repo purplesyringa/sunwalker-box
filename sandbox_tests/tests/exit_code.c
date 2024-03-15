@@ -1,7 +1,7 @@
 /*
 description: Non-zero exit code is caught as a verdict
 script: |
-  expect(run(), exit_code=123)
+  expect(run(), verdict=Exited(123))
 */
 
 #include <stddef.h>

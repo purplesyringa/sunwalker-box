@@ -1,7 +1,7 @@
 /*
 description: File descriptors do not leak
 script: |
-  expect(run())
+    expect(run())
 */
 
 #include <dirent.h>

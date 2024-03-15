@@ -1,7 +1,7 @@
 /*
 description: Cannot unshare any namespace
 script: |
-  expect(run())
+    expect(run())
 */
 
 #define _GNU_SOURCE

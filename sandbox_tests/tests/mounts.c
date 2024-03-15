@@ -3,7 +3,7 @@ description: External mounts are not visible
 root: {}
 static: true
 script: |
-  expect(run())
+    expect(run())
 */
 
 #include <errno.h>
