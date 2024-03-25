@@ -1,6 +1,7 @@
 #![feature(
     array_try_from_fn,
     io_error_more,
+    generic_const_exprs,
     macro_metavar_expr_concat,
     maybe_uninit_as_bytes,
     maybe_uninit_slice,
@@ -37,3 +38,6 @@ mod linux {
 
 #[macro_use]
 mod log;
+
+#[macro_use]
+mod zeroed_padding;
