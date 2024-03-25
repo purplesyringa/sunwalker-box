@@ -6,6 +6,22 @@
 
 namespace timers {
 
+struct ParasiteState {
+    std::array<int, 64> indices;
+    std::array<itimerspec, 64> intervals;
+    size_t count;
+};
+
+Result<void> save(ParasiteState &state) {
+    for (size_t i = 0; i < state.count; ++i) {
+        int timer_id = state.indices[i];
+        libc::timer_gettime(timer_id, &state.intervals[i])
+            .CONTEXT("Could not retreive timer arming")
+            .TRY();
+    }
+    return {};
+}
+
 struct Timer {
     int id;
     int signal;
@@ -17,6 +33,7 @@ struct Timer {
 
 struct State {
     std::array<Timer, 64> timers;
+    std::array<itimerspec, 64> intervals;
     size_t count;
 };
 
@@ -66,6 +83,9 @@ Result<void> load(const State &state) {
             next_timer_id += 1;
         }
         add_timer(state.timers[i]).CONTEXT("While timer creating").TRY();
+        libc::timer_settime(state.timers[i].id, 0, &state.intervals[i], nullptr)
+            .CONTEXT("Could not arm timer")
+            .TRY();
         next_timer_id += 1;
     }
 
