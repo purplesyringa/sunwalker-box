@@ -216,7 +216,8 @@ pub fn commit(state: &mut RootfsState) -> Result<()> {
     std::fs::create_dir("/base").context("Failed to mkdir /base")?;
     system::bind_mount("/newroot/space", "/base")
         .context("Failed to bind-mount /newroot/space to /base")?;
-    system::umount("/newroot/space").context("Failed to unmount /newroot/space")?;
+    system::umount_opt("/newroot/space", system::MntFlags::MNT_DETACH)
+        .context("Failed to unmount /newroot/space")?;
 
     // Mount overlayfs on /newroot/space
     std::fs::create_dir("/staging/upper").context("Failed to mkdir /staging/upper")?;
@@ -268,7 +269,8 @@ fn save_space_mounts(state: &mut RootfsState, mounts: Vec<String>) -> Result<()>
     }
 
     for (_, path) in state.space_mounts_restore_actions.iter().rev() {
-        system::umount(path).with_context(|| format!("Failed to unmount {path}"))?;
+        system::umount_opt(path, system::MntFlags::MNT_DETACH)
+            .with_context(|| format!("Failed to unmount {path}"))?;
     }
 
     Ok(())
@@ -340,7 +342,8 @@ pub fn reset(state: &RootfsState) -> Result<()> {
     }
     for path in paths_to_umount.into_iter().rev() {
         log!("Unmounting {path}");
-        system::umount(&path).with_context(|| format!("Failed to unmount {path}"))?;
+        system::umount_opt(&path, system::MntFlags::MNT_DETACH)
+            .with_context(|| format!("Failed to unmount {path}"))?;
     }
 
     // /staging and (if not committed) /newroot/space have just been unmounted
