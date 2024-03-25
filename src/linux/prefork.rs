@@ -70,6 +70,7 @@ pub struct Suspender<'a> {
     master: Option<tracing::TracedProcess>,
     transferred_fds: Vec<OwnedFd>,
     forbidden_transferred_fds: HashSet<RawFd>,
+    parasite_state: ZeroedPadding<ParasiteState>,
     stemcell_state: ZeroedPadding<StemcellState>,
     control_tx: Option<UnixStream>,
 }
@@ -159,6 +160,13 @@ struct RobustList {
 }
 
 #[repr(C)]
+struct TimerIntervalList {
+    indices: [i32; 64],
+    intervals: [libc::itimerspec; 64],
+    count: usize,
+}
+
+#[repr(C)]
 struct ParasiteState {
     result: u64,
     alternative_stack: libc::stack_t,
@@ -170,13 +178,15 @@ struct ParasiteState {
     signal_handlers: [kernel_sigaction; 64],
     thp_options: usize,
     tid_address: usize,
+    timer_intervals: TimerIntervalList,
     umask: libc::mode_t,
 }
 
 #[repr(C)]
 struct TimerList {
     timers: [Timer; 64],
-    timer_count: usize,
+    intervals: [libc::itimerspec; 64],
+    count: usize,
 }
 
 #[repr(C)]
@@ -623,6 +633,7 @@ impl<'a> Suspender<'a> {
             transferred_fds: Vec::new(),
             forbidden_transferred_fds: HashSet::new(),
             stemcell_state: unsafe { ZeroedPadding::zeroed() },
+            parasite_state: unsafe { ZeroedPadding::zeroed() },
             control_tx: None,
         }
     }
@@ -876,6 +887,13 @@ impl<'a> Suspender<'a> {
             .write_memory(self.inject_location, PARASITE)
             .context("Failed to write parasite segment")?;
 
+        // And supplementary data
+        self.orig
+            .write_memory(self.inject_location + PARASITE_STATE_OFFSET, unsafe {
+                self.parasite_state.bytes()
+            })
+            .context("Failed to write parasite input")?;
+
         // Reset processor stack (direction flag, x87 state, etc.). This should prevent the original
         // process from configuring the CPU in a way the parasite doesn't expect
         let regs = self.orig.registers_mut()?;
@@ -931,6 +949,7 @@ impl<'a> Suspender<'a> {
             }
         );
         self.stemcell_state.mm_options.brk = parasite_state.program_break;
+        self.stemcell_state.timers.intervals = parasite_state.timer_intervals.intervals;
 
         Ok(())
     }
@@ -1067,10 +1086,17 @@ impl<'a> Suspender<'a> {
         // XXX This is plain cringe.
         ensure!(timers.len() <= 64, "Too many timers");
 
-        self.stemcell_state.timers.timer_count = timers.len();
-        for (state_timer, timer) in self.stemcell_state.timers.timers.iter_mut().zip(timers) {
+        self.parasite_state.timer_intervals.count = timers.len();
+        self.stemcell_state.timers.count = timers.len();
+
+        for ((timer, parasite_idx), stemcell_timer) in timers
+            .iter()
+            .zip(&mut self.parasite_state.timer_intervals.indices)
+            .zip(&mut self.stemcell_state.timers.timers)
+        {
+            *parasite_idx = timer.id;
             copy_field_by_field!(
-                timer => *state_timer,
+                timer => *stemcell_timer,
                 {id, signal, sigev_value, mechanism, target, clock_id}
             );
         }
