@@ -1,6 +1,8 @@
 use crate::{
+    copy_field_by_field,
     linux::{cgroups, ids, running, string_table, system, timens, tracing, tracing::Timer, userns},
     log, syscall,
+    zeroed_padding::ZeroedPadding,
 };
 use anyhow::{anyhow, bail, ensure, Context, Result};
 use crossmist::{Object, Sender};
@@ -58,7 +60,7 @@ pub struct SuspendData {
     rlimits: [libc::rlimit; 16],
 }
 
-// MaybeUninit is used to avoid data leaks via padding
+// ZeroedPadding is used to avoid data leaks via padding
 pub struct Suspender<'a> {
     orig: &'a mut tracing::TracedProcess,
     hard_rlimits: [libc::rlim_t; 16],
@@ -68,7 +70,7 @@ pub struct Suspender<'a> {
     master: Option<tracing::TracedProcess>,
     transferred_fds: Vec<OwnedFd>,
     forbidden_transferred_fds: HashSet<RawFd>,
-    stemcell_state: MaybeUninit<StemcellState>,
+    stemcell_state: ZeroedPadding<StemcellState>,
     control_tx: Option<UnixStream>,
 }
 
@@ -620,7 +622,7 @@ impl<'a> Suspender<'a> {
             master: None,
             transferred_fds: Vec::new(),
             forbidden_transferred_fds: HashSet::new(),
-            stemcell_state: MaybeUninit::zeroed(),
+            stemcell_state: unsafe { ZeroedPadding::zeroed() },
             control_tx: None,
         }
     }
@@ -714,11 +716,15 @@ impl<'a> Suspender<'a> {
             .get_rseq_configuration()
             .context("Failed to get rseq configuration")?;
 
-        let stemcell_state_mut = unsafe { self.stemcell_state.assume_init_mut() };
-        stemcell_state_mut.rseq.rseq = rseq.rseq_abi_pointer as usize;
-        stemcell_state_mut.rseq.rseq_len = rseq.rseq_abi_size;
-        stemcell_state_mut.rseq.flags = rseq.flags as i32;
-        stemcell_state_mut.rseq.sig = rseq.signature;
+        copy_field_by_field!(
+            self.stemcell_state.rseq,
+            {
+                rseq: rseq.rseq_abi_pointer as usize,
+                rseq_len: rseq.rseq_abi_size,
+                flags: rseq.flags as i32,
+                sig: rseq.signature,
+            }
+        );
 
         if rseq.rseq_abi_pointer == 0 {
             // If the user process doesn't use rseq at all, we don't need to handle anything
@@ -771,8 +777,6 @@ impl<'a> Suspender<'a> {
         // This detects all pending signals, including their attached data (this is critical for
         // realtime signals, but also important for e.g. SIGSEGV). This is inherently racy, but we
         // have masked all signals, so asynchronous notifications cannot arrive.
-        let state = &mut unsafe { self.stemcell_state.assume_init_mut() }.pending_signals;
-
         let per_thread = self
             .orig
             .get_pending_signals(tracing::SignalQueue::PerThread)?;
@@ -788,12 +792,14 @@ impl<'a> Suspender<'a> {
             per_process.len() <= MAX_PENDING_SIGNALS,
             "Too many pending signals"
         );
-        state.count_per_thread = per_thread.len();
-        state.count_per_process = per_process.len();
+        self.stemcell_state.pending_signals.count_per_thread = per_thread.len();
+        self.stemcell_state.pending_signals.count_per_process = per_process.len();
         // The kernel ensures there is no padding in siginfo_t and zeroes out the padding at the
         // end, thus a copy_from_slice is fine here.
-        state.pending_per_thread[..per_thread.len()].copy_from_slice(&per_thread);
-        state.pending_per_process[..per_process.len()].copy_from_slice(&per_process);
+        self.stemcell_state.pending_signals.pending_per_thread[..per_thread.len()]
+            .copy_from_slice(&per_thread);
+        self.stemcell_state.pending_signals.pending_per_process[..per_process.len()]
+            .copy_from_slice(&per_process);
 
         Ok(())
     }
@@ -923,48 +929,26 @@ impl<'a> Suspender<'a> {
             );
         }
 
-        // Perform a bitwise copy as opposed to copy that might leak data in padding bytes
-        let stemcell_state_mut = unsafe { self.stemcell_state.assume_init_mut() };
-        unsafe {
-            std::ptr::copy_nonoverlapping(
-                &parasite_state.alternative_stack,
-                &mut stemcell_state_mut.alternative_stack,
-                1,
-            );
-            std::ptr::copy_nonoverlapping(
-                &parasite_state.arch_prctl_options,
-                &mut stemcell_state_mut.arch_prctl_options,
-                1,
-            );
-            std::ptr::copy_nonoverlapping(
-                &parasite_state.itimers,
-                &mut stemcell_state_mut.itimers,
-                1,
-            );
-            std::ptr::copy_nonoverlapping(
-                &parasite_state.robust_list,
-                &mut stemcell_state_mut.robust_list,
-                1,
-            );
-            std::ptr::copy_nonoverlapping(
-                &parasite_state.signal_handlers,
-                &mut stemcell_state_mut.signal_handlers,
-                1,
-            );
-            stemcell_state_mut.mm_options.brk = parasite_state.program_break;
-            stemcell_state_mut.personality = parasite_state.personality;
-            stemcell_state_mut.thp_options = parasite_state.thp_options;
-            stemcell_state_mut.tid_address = parasite_state.tid_address;
-            stemcell_state_mut.umask = parasite_state.umask;
-        }
+        copy_field_by_field!(
+            self.stemcell_state,
+            {
+                alternative_stack: parasite_state.alternative_stack,
+                arch_prctl_options: parasite_state.arch_prctl_options,
+                itimers: parasite_state.itimers,
+                robust_list: parasite_state.robust_list,
+                signal_handlers: parasite_state.signal_handlers,
+                personality: parasite_state.personality,
+                thp_options: parasite_state.thp_options,
+                tid_address: parasite_state.tid_address,
+                umask: parasite_state.umask,
+            }
+        );
+        self.stemcell_state.mm_options.brk = parasite_state.program_break;
 
         Ok(())
     }
 
     fn collect_file_descriptors(&mut self) -> Result<()> {
-        let file_descriptors =
-            &mut unsafe { self.stemcell_state.assume_init_mut() }.file_descriptors;
-
         let pid = self.orig.get_pid();
 
         for fd_entry in std::fs::read_dir(format!("/proc/{pid}/fd"))
@@ -1015,11 +999,13 @@ impl<'a> Suspender<'a> {
 
             let flags = flags.context("'flags' missing")?;
 
-            let saved_fd = file_descriptors
+            let stemcell_state: &mut StemcellState = &mut self.stemcell_state;
+            let saved_fd = stemcell_state
+                .file_descriptors
                 .fds
-                .get_mut(file_descriptors.count)
+                .get_mut(stemcell_state.file_descriptors.count)
                 .context("Too many file descriptors")?;
-            file_descriptors.count += 1;
+            stemcell_state.file_descriptors.count += 1;
 
             saved_fd.flags = flags;
             saved_fd.fd = fd;
@@ -1064,26 +1050,29 @@ impl<'a> Suspender<'a> {
             .orig
             .get_stat()
             .context("Failed to get stat of original process")?;
-        let mm_options = &mut unsafe { self.stemcell_state.assume_init_mut() }.mm_options;
-        mm_options.start_code = stat.start_code;
-        mm_options.end_code = stat.end_code;
-        mm_options.start_data = stat.start_data;
-        mm_options.end_data = stat.end_data;
-        mm_options.start_brk = stat.start_brk;
-        // brk is filled by parasite
-        mm_options.start_stack = stat.start_stack;
-        mm_options.arg_start = stat.arg_start;
-        mm_options.arg_end = stat.arg_end;
-        mm_options.env_start = stat.env_start;
-        mm_options.env_end = stat.env_end;
-        mm_options.auxv = 0;
-        mm_options.auxv_size = 0;
-        mm_options.exe_fd = -1;
+        copy_field_by_field!(
+            self.stemcell_state.mm_options,
+            {
+                start_code: stat.start_code,
+                end_code: stat.end_code,
+                start_data: stat.start_data,
+                end_data: stat.end_data,
+                start_brk: stat.start_brk,
+                // brk is filled by parasite
+                start_stack: stat.start_stack,
+                arg_start: stat.arg_start,
+                arg_end: stat.arg_end,
+                env_start: stat.env_start,
+                env_end: stat.env_end,
+                auxv: 0,
+                auxv_size: 0,
+                exe_fd: -1,
+            }
+        );
         Ok(())
     }
 
     fn collect_timers(&mut self) -> Result<()> {
-        let state_timers = &mut unsafe { self.stemcell_state.assume_init_mut() }.timers;
         let timers = self
             .orig
             .get_timers()
@@ -1091,8 +1080,8 @@ impl<'a> Suspender<'a> {
         // XXX This is plain cringe.
         ensure!(timers.len() <= 64, "Too many timers");
 
-        state_timers.timer_count = timers.len();
-        for (state_timer, timer) in state_timers.timers.iter_mut().zip(timers) {
+        self.stemcell_state.timers.timer_count = timers.len();
+        for (state_timer, timer) in self.stemcell_state.timers.timers.iter_mut().zip(timers) {
             state_timer.id = timer.id;
             state_timer.signal = timer.signal;
             state_timer.sigev_value = timer.sigev_value;
@@ -1105,9 +1094,7 @@ impl<'a> Suspender<'a> {
     }
 
     fn translate_memory_maps(&mut self, memory_maps: &[tracing::MemoryMap]) -> Result<()> {
-        let translated_maps_mut = &mut unsafe { self.stemcell_state.assume_init_mut() }.memory_maps;
-
-        translated_maps_mut.orig_mem_fd = self.transferred_fds.len() as RawFd;
+        self.stemcell_state.memory_maps.orig_mem_fd = self.transferred_fds.len() as RawFd;
         self.transferred_fds.push(
             self.orig
                 .get_mem()
@@ -1116,7 +1103,7 @@ impl<'a> Suspender<'a> {
                 .into(),
         );
 
-        translated_maps_mut.orig_pagemap_fd = self.transferred_fds.len() as RawFd;
+        self.stemcell_state.memory_maps.orig_pagemap_fd = self.transferred_fds.len() as RawFd;
         self.transferred_fds.push(
             self.orig
                 .open_pagemap()
@@ -1139,11 +1126,13 @@ impl<'a> Suspender<'a> {
                 continue;
             }
 
-            let alloced = translated_maps_mut
+            let stemcell_state: &mut StemcellState = &mut self.stemcell_state;
+            let alloced = stemcell_state
+                .memory_maps
                 .maps
-                .get_mut(translated_maps_mut.count)
+                .get_mut(stemcell_state.memory_maps.count)
                 .context("Too many memory mappings")?;
-            translated_maps_mut.count += 1;
+            stemcell_state.memory_maps.count += 1;
 
             alloced.base = map.base;
             alloced.end = map.end;
@@ -1274,9 +1263,7 @@ impl<'a> Suspender<'a> {
             )
         };
 
-        let stemcell_state = unsafe { self.stemcell_state.assume_init_mut() };
-
-        stemcell_state.controlling_fd = self.transferred_fds.len() as i32;
+        self.stemcell_state.controlling_fd = self.transferred_fds.len() as i32;
         self.transferred_fds.push(rx);
 
         self.control_tx = Some(tx);
@@ -1349,17 +1336,20 @@ impl<'a> Suspender<'a> {
     fn patch_transferred_fds(&mut self, fds: &[RawFd]) {
         log!("Patching transferred fds");
 
-        let state = unsafe { self.stemcell_state.assume_init_mut() };
+        self.stemcell_state.memory_maps.orig_mem_fd =
+            fds[self.stemcell_state.memory_maps.orig_mem_fd as usize];
+        self.stemcell_state.memory_maps.orig_pagemap_fd =
+            fds[self.stemcell_state.memory_maps.orig_pagemap_fd as usize];
 
-        state.memory_maps.orig_mem_fd = fds[state.memory_maps.orig_mem_fd as usize];
-        state.memory_maps.orig_pagemap_fd = fds[state.memory_maps.orig_pagemap_fd as usize];
-        for map in &mut state.memory_maps.maps[..state.memory_maps.count] {
+        let mm_count = self.stemcell_state.memory_maps.count;
+        for map in &mut self.stemcell_state.memory_maps.maps[..mm_count] {
             if map.fd != -1 {
                 map.fd = fds[map.fd as usize];
             }
         }
 
-        for fd in &mut state.file_descriptors.fds[..state.file_descriptors.count] {
+        let fd_count = self.stemcell_state.file_descriptors.count;
+        for fd in &mut self.stemcell_state.file_descriptors.fds[..fd_count] {
             match fd.kind {
                 SavedFdKind::EventFd { .. } => {}
                 SavedFdKind::Regular {
@@ -1383,7 +1373,7 @@ impl<'a> Suspender<'a> {
             }
         }
 
-        state.controlling_fd = fds[state.controlling_fd as usize];
+        self.stemcell_state.controlling_fd = fds[self.stemcell_state.controlling_fd as usize];
     }
 
     fn restore_via_master(&mut self) -> Result<()> {
@@ -1391,8 +1381,7 @@ impl<'a> Suspender<'a> {
 
         let master = self.master.as_mut().unwrap();
 
-        let stemcell_state_mut = unsafe { self.stemcell_state.assume_init_mut() };
-        stemcell_state_mut.end_of_memory_space = master
+        self.stemcell_state.end_of_memory_space = master
             .get_memory_maps()
             .context("Failed to read memory maps of master")?
             .iter()
@@ -1403,7 +1392,7 @@ impl<'a> Suspender<'a> {
 
         master
             .write_memory(self.inject_location + STEMCELL_STATE_OFFSET, unsafe {
-                MaybeUninit::slice_assume_init_ref(self.stemcell_state.as_bytes())
+                self.stemcell_state.bytes()
             })
             .context("Failed to write state to master")?;
 
