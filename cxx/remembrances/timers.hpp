@@ -11,10 +11,21 @@ struct ParasiteState {
 };
 
 Result<void> save(ParasiteState &state) {
+    static itimerspec never;
     for (size_t i = 0; i < state.count; ++i) {
         int timer_id = state.indices[i];
-        libc::timer_gettime(timer_id, &state.intervals[i])
-            .CONTEXT("Could not retreive timer arming")
+        // Atomically get timer info and disarm it. This is used instead of timer_gettime to avoid
+        // the following race condition:
+        // 1. We do timer_gettime and see that the timer is supposed to fire soon.
+        // 2. The timer expires and adds the signal to the queue.
+        // 3. We collect pending signals. The list includes a timer signal.
+        // 4. We both deliver the signal and configure the timer to fire soon.
+        // 5. As a result, the timer fires twice as opposed to once.
+        // Disarming the timer helps avoid the duplication. (Swapping pending signal collection and
+        // timer info collection would lead to another race condition, when the timer fires
+        // *between* signal and timer collection and is thus swallowed.)
+        libc::timer_settime(timer_id, 0, &never, &state.intervals[i])
+            .CONTEXT("Could not retrieve timer arming")
             .TRY();
     }
     return {};

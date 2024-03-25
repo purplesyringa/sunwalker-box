@@ -6,6 +6,8 @@ script: |
         arg = str(random.randint(0, 10 ** 7))
         ctx = f"run {i} arg {arg}"
         pid = prefork(run=Run(argv + [arg]), context=ctx)
+        if pid.verdict == Signaled(14):
+            continue
         expect(pid, verdict=Suspended)
         expect(resume(pid, context=ctx), verdict=Signaled(14))
 */
@@ -33,6 +35,8 @@ int main(int argc, char **argv) {
         perror("timer_settime");
         return 1;
     }
+
+    usleep(1e3);
 
     puts("Suspend here");
     fflush(stdout);
