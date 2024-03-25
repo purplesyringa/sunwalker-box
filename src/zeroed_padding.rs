@@ -61,4 +61,17 @@ macro_rules! copy_field_by_field {
             $(std::ptr::copy_nonoverlapping(&$value, &mut target.$name, 1);)*
         }
     }};
+    ($source:expr => $target:expr, { $($name:ident $(: $value:expr)?),* $(,)? }) => {{
+        let source = $source;
+        let target = &mut $target;
+        unsafe {
+            $(std::ptr::copy_nonoverlapping(&copy_field_by_field!(@field source $name $(: $value)?), &mut target.$name, 1);)*
+        }
+    }};
+    (@field $source:ident $name:ident) => {
+        $source.$name
+    };
+    (@field $source:ident $name:ident : $value:expr) => {
+        $value
+    };
 }

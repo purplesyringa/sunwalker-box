@@ -930,17 +930,17 @@ impl<'a> Suspender<'a> {
         }
 
         copy_field_by_field!(
-            self.stemcell_state,
+            parasite_state => self.stemcell_state,
             {
-                alternative_stack: parasite_state.alternative_stack,
-                arch_prctl_options: parasite_state.arch_prctl_options,
-                itimers: parasite_state.itimers,
-                robust_list: parasite_state.robust_list,
-                signal_handlers: parasite_state.signal_handlers,
-                personality: parasite_state.personality,
-                thp_options: parasite_state.thp_options,
-                tid_address: parasite_state.tid_address,
-                umask: parasite_state.umask,
+                alternative_stack,
+                arch_prctl_options,
+                itimers,
+                robust_list,
+                signal_handlers,
+                personality,
+                thp_options,
+                tid_address,
+                umask,
             }
         );
         self.stemcell_state.mm_options.brk = parasite_state.program_break;
@@ -1051,19 +1051,19 @@ impl<'a> Suspender<'a> {
             .get_stat()
             .context("Failed to get stat of original process")?;
         copy_field_by_field!(
-            self.stemcell_state.mm_options,
+            stat => self.stemcell_state.mm_options,
             {
-                start_code: stat.start_code,
-                end_code: stat.end_code,
-                start_data: stat.start_data,
-                end_data: stat.end_data,
-                start_brk: stat.start_brk,
+                start_code,
+                end_code,
+                start_data,
+                end_data,
+                start_brk,
                 // brk is filled by parasite
-                start_stack: stat.start_stack,
-                arg_start: stat.arg_start,
-                arg_end: stat.arg_end,
-                env_start: stat.env_start,
-                env_end: stat.env_end,
+                start_stack,
+                arg_start,
+                arg_end,
+                env_start,
+                env_end,
                 auxv: 0,
                 auxv_size: 0,
                 exe_fd: -1,
@@ -1082,12 +1082,10 @@ impl<'a> Suspender<'a> {
 
         self.stemcell_state.timers.timer_count = timers.len();
         for (state_timer, timer) in self.stemcell_state.timers.timers.iter_mut().zip(timers) {
-            state_timer.id = timer.id;
-            state_timer.signal = timer.signal;
-            state_timer.sigev_value = timer.sigev_value;
-            state_timer.mechanism = timer.mechanism;
-            state_timer.target = timer.target;
-            state_timer.clock_id = timer.clock_id;
+            copy_field_by_field!(
+                timer => *state_timer,
+                {id, signal, sigev_value, mechanism, target, clock_id}
+            );
         }
 
         Ok(())
