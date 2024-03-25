@@ -902,19 +902,6 @@ impl<'a> Suspender<'a> {
         wait_for_raised_sigstop(self.orig, false)
             .context("Failed to wait for raise(SIGSTOP) in parasite")?;
 
-        // Don't detach until after delivering SIGSTOP as to not corrupt memory
-        self.orig
-            .resume_signal(libc::SIGSTOP)
-            .context("Failed to send SIGSTOP to parasite")?;
-        let wait_status = self.orig.wait()?;
-        ensure!(
-            matches!(wait_status, system::WaitStatus::Stopped(_, libc::SIGSTOP)),
-            "Expected SIGSTOP, got {wait_status:?}",
-        );
-        self.orig
-            .detach()
-            .context("Failed to detach from parasite")?;
-
         let mut parasite_state = MaybeUninit::<ParasiteState>::zeroed();
         self.orig
             .read_memory(self.inject_location + PARASITE_STATE_OFFSET, unsafe {
