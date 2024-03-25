@@ -10,6 +10,7 @@
 #include "remembrances/signal_handlers.hpp"
 #include "remembrances/thp_options.hpp"
 #include "remembrances/tid_address.hpp"
+#include "remembrances/timers.hpp"
 #include "remembrances/umask.hpp"
 
 struct State {
@@ -25,6 +26,7 @@ struct State {
     signal_handlers::State signal_handlers;
     thp_options::State thp_options;
     tid_address::State tid_address;
+    timers::ParasiteState timer_intervals;
     umask::State umask;
 } state __attribute__((externally_visible));
 
@@ -46,6 +48,7 @@ Result<void> run() {
         .CONTEXT("Failed to save transparent huge pages options")
         .TRY();
     tid_address::save(state.tid_address).CONTEXT("Failed to save TID address").TRY();
+    timers::save(state.timer_intervals).CONTEXT("Failed to save timer arming").TRY();
     umask::save(state.umask).CONTEXT("Failed to save umask").TRY();
     return {};
 }

@@ -46,7 +46,7 @@ INCLUDES = [
     "linux/utsname",
 ]
 
-KERNEL_TYPES = "sa_family_t mode_t gid_t timer_t clockid_t loff_t fd_set pid_t mqd_t off_t uid_t key_t rwf_t".split()
+KERNEL_TYPES = "itimerspec sa_family_t mode_t gid_t timer_t clockid_t loff_t fd_set pid_t mqd_t off_t uid_t key_t rwf_t".split()
 
 TYPE_ALIASES = {
     "u32": "__u32",
