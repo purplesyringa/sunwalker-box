@@ -676,8 +676,6 @@ impl<'a> Suspender<'a> {
             .set_signal_mask(!0)
             .context("Failed to block all signals")?;
 
-        self.collect_pending_signals()
-            .context("Failed to collect pending signals")?;
         self.collect_file_descriptors()
             .context("Failed to collect file descriptors")?;
         self.collect_mm_options()
@@ -698,6 +696,26 @@ impl<'a> Suspender<'a> {
             .context("Failed to infect original process")?;
         self.collect_info_via_parasite()
             .context("Failed to collect information via parasite")?;
+
+        // We have to collect pending singals after the parasite has saved timer information.
+        // Otherwise, we'd stumble upon this race condition:
+        // 1. We collect pending signals. The list does not include timer signals.
+        // 2. A timer expires and adds the signal to the queue.
+        // 3. We do timer_settime and see that the timer is disarmed.
+        // 4. As a result, the timer does not fire after resume.
+        // With the correct ordering, we get either:
+        // 1. A timer expires and adds the signal to the queue.
+        // 2. We do timer_settime and see that the timer is disarmed.
+        // 3. We collect pending signals. The list includes a timer signal.
+        // 4. As a result, the timer is fired once.
+        // or:
+        // 1. We do timer_settime, see that the timer is supposed to fire soon, and atomically
+        //    disarm it.
+        // 2. The timer does not expire, as it is disarmed.
+        // 3. We collect pending signals. The list does not include timer signals.
+        // 4. As a result, the timer is set up to fire soon after resume.
+        self.collect_pending_signals()
+            .context("Failed to collect pending signals")?;
 
         self.create_controlling_socket()
             .context("Failed to create controlling socket")?;
@@ -786,8 +804,7 @@ impl<'a> Suspender<'a> {
 
     fn collect_pending_signals(&mut self) -> Result<()> {
         // This detects all pending signals, including their attached data (this is critical for
-        // realtime signals, but also important for e.g. SIGSEGV). This is inherently racy, but we
-        // have masked all signals, so asynchronous notifications cannot arrive.
+        // realtime signals, but also important for e.g. SIGSEGV).
         let per_thread = self
             .orig
             .get_pending_signals(tracing::SignalQueue::PerThread)?;
