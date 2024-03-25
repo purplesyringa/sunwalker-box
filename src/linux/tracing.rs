@@ -1120,7 +1120,7 @@ impl TracedProcess {
             };
             if n_signals == -1 {
                 return Err(std::io::Error::last_os_error())
-                    .context("Failed to ptrace-resume the child");
+                    .context("Failed to get signal info of the child");
             }
             unsafe {
                 pending_signals.set_len(pending_signals.len() + n_signals as usize);
