@@ -279,7 +279,7 @@ impl Runner {
                 real_time: Duration::ZERO,
                 cpu_time: Duration::ZERO,
                 idleness_time: Duration::ZERO,
-                memory: 0,
+                memory: memory_adjustment,
             },
             box_cgroup: None,
             main_pid: Pid::from_raw(0),
@@ -454,6 +454,17 @@ impl SingleRun<'_> {
         }
     }
 
+    fn is_memory_peak_reliable(&self) -> bool {
+        // All instances of preforked processes run in the same memcg. As memory.peak cannot be
+        // reset between runs (at least until https://t.me/c/1510542841/1949 is merged), we have to
+        // resort to polling in this case.
+        match self.options.mode {
+            Mode::Run => true,
+            Mode::PreFork => true,
+            Mode::Resume => false,
+        }
+    }
+
     fn compute_wait_timeout_ms(&self) -> i32 {
         let mut timeout = Duration::MAX;
 
@@ -499,6 +510,10 @@ impl SingleRun<'_> {
         if let Some(idleness_time_limit) = self.options.idleness_time_limit {
             timeout = timeout
                 .min(idleness_time_limit - self.results.idleness_time + Duration::from_millis(50));
+        }
+
+        if !self.is_memory_peak_reliable() {
+            timeout = timeout.min(Duration::from_millis(50));
         }
 
         if timeout == Duration::MAX {
@@ -564,9 +579,11 @@ impl SingleRun<'_> {
             // - the 2M allocation fails
             // - PF resolution resorts to a 4k page, which can be allocated without OOM
             ensure!(
-                self.options
-                    .memory_limit
-                    .is_some_and(|limit| self.results.memory >= limit),
+                !self.is_memory_peak_reliable()
+                    || self
+                        .options
+                        .memory_limit
+                        .is_some_and(|limit| self.results.memory >= limit),
                 "OOM killer was invoked even though memory use is in check; the invoker is likely \
                  overloaded"
             );
@@ -640,6 +657,12 @@ impl SingleRun<'_> {
             self.cpu_time_adjustment + self.box_cgroup.as_mut().unwrap().get_cpu_time()?;
         self.results.real_time = self.real_time_adjustment + self.start_time.unwrap().elapsed();
         self.results.idleness_time = self.results.real_time.saturating_sub(self.results.cpu_time);
+        if !self.is_memory_peak_reliable() {
+            self.results.memory = self
+                .results
+                .memory
+                .max(self.box_cgroup.as_ref().unwrap().get_memory_use()?);
+        }
         Ok(())
     }
 
@@ -1580,12 +1603,14 @@ impl SingleRun<'_> {
                 }
             }
 
-            self.results.memory = self
-                .box_cgroup
-                .as_mut()
-                .unwrap()
-                .get_memory_peak()?
-                .max(self.memory_adjustment);
+            if self.is_memory_peak_reliable() {
+                self.results.memory = self
+                    .box_cgroup
+                    .as_mut()
+                    .unwrap()
+                    .get_memory_peak()?
+                    .max(self.memory_adjustment);
+            }
 
             let verdict = self
                 .compute_verdict(wait_status)
