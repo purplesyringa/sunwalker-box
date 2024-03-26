@@ -124,4 +124,65 @@ template <typename... Args> Result<long> syscall(Args... args) {
     }
 }
 
+// ===== FORWARD DECLARATIONS =====
+struct msghdr;
+struct cmsghdr;
+struct mmsghdr;
+
+// ===== SYSCALLS =====
 #include "../target/libc.hpp"
+
+// ===== sys/socket.h =====
+struct msghdr {
+    void *msg_name;        /* Optional address */
+    size_t msg_namelen;    /* Size of address */
+    struct iovec *msg_iov; /* Scatter/gather array */
+    size_t msg_iovlen;     /* # elements in msg_iov */
+    void *msg_control;     /* Ancillary data, see below */
+    size_t msg_controllen; /* Ancillary data buffer len */
+    int msg_flags;         /* Flags on received message */
+};
+
+struct cmsghdr {
+    size_t cmsg_len;
+    int cmsg_level;
+    int cmsg_type;
+};
+
+struct ucred {
+    pid_t pid;
+    uid_t uid;
+    gid_t gid;
+};
+
+struct mmsghdr {
+    struct msghdr msg_hdr;
+    unsigned int msg_len;
+};
+
+struct sockaddr {
+    sa_family_t sa_family;
+    char sa_data[14];
+};
+
+#define __CMSG_LEN(cmsg) (((cmsg)->cmsg_len + sizeof(long) - 1) & ~(long)(sizeof(long) - 1))
+#define __CMSG_NEXT(cmsg) ((unsigned char *)(cmsg) + __CMSG_LEN(cmsg))
+#define __MHDR_END(mhdr) ((unsigned char *)(mhdr)->msg_control + (mhdr)->msg_controllen)
+
+#define CMSG_DATA(cmsg) ((unsigned char *)(((struct cmsghdr *)(cmsg)) + 1))
+#define CMSG_NXTHDR(mhdr, cmsg)                                                                    \
+    ((cmsg)->cmsg_len < sizeof(struct cmsghdr) || __CMSG_LEN(cmsg) + sizeof(struct cmsghdr) >=     \
+                                                      __MHDR_END(mhdr) - (unsigned char *)(cmsg)   \
+         ? 0                                                                                       \
+         : (struct cmsghdr *)__CMSG_NEXT(cmsg))
+#define CMSG_FIRSTHDR(mhdr)                                                                        \
+    ((size_t)(mhdr)->msg_controllen >= sizeof(struct cmsghdr)                                      \
+         ? (struct cmsghdr *)(mhdr)->msg_control                                                   \
+         : (struct cmsghdr *)0)
+
+#define CMSG_ALIGN(len) (((len) + sizeof(size_t) - 1) & (size_t) ~(sizeof(size_t) - 1))
+#define CMSG_SPACE(len) (CMSG_ALIGN(len) + CMSG_ALIGN(sizeof(struct cmsghdr)))
+#define CMSG_LEN(len) (CMSG_ALIGN(sizeof(struct cmsghdr)) + (len))
+
+#define SCM_RIGHTS 0x01
+#define SCM_CREDENTIALS 0x02
