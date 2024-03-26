@@ -45,16 +45,16 @@ For aarch64, or if you don't want to use Docker, you will need to install the fo
   - Target `<target>-unknown-linux-musl`, provided by e.g. `rustup +nightly target add x86_64-unknown-linux-musl`,
   - Component `rust-src`, provided by `rustup component add rust-src`
 - GNU make
-- GCC
+- GNU C++ compiler, provided on Ubuntu by `g++`
+- Linux userspace headers, provided on Ubuntu as `libc6-dev`, on Arch Linux as `linux-api-headers`, and on Alpine as `linux-headers`
 - binutils
 - Python 3
-- `musl-gcc`, provided on Ubuntu by `musl-tools`
-- `ruby`, provided on ubuntu by `ruby`
+- `ruby`, provided on Ubuntu by `ruby`
 - `gem`, provided on Ubuntu by `ruby-rubygems`
 - Ruby headers, provided on Ubuntu by `ruby-dev`
 - `seccomp-tools`, provided by `gem install seccomp-tools`
-- `nasm`, provided on Ubuntu by `nasm`
-- (aarch64 only) Linux headers, provided on Ubuntu by `linux-headers-$(uname -r)`,
+- (aarch64 only) Linux kernel headers, provided on Ubuntu by `linux-headers-$(uname -r)`,
+- (sandbox-tests only) `musl-gcc`, provided on Ubuntu by `musl-tools`
 
 To build sunwalker-box, use:
 
