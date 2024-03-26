@@ -19,6 +19,9 @@ jobs:
   linux:
     runs-on: ubuntu-latest
 
+    env:
+      REPO_NAME: sunwalker_box
+
     steps:
       - name: Clone.
         uses: actions/checkout@v3.1.0
