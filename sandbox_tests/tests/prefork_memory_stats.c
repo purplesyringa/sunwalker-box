@@ -15,6 +15,7 @@ script: |
 #include <stdio.h>
 #include <stdlib.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 void commit(size_t size) {
     void *p = mmap(NULL, size, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -25,6 +26,9 @@ void commit(size_t size) {
     for (size_t i = 0; i < size; i += 4096) {
         *((char *)p + i) = '\0';
     }
+    // XXX: This is necessary because we use polling to determine memory use (though not ML,
+    // luckily) after suspend.
+    usleep(50000);
     munmap(p, size);
 }
 
