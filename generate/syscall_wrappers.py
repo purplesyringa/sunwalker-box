@@ -54,8 +54,7 @@ TYPE_ALIASES = {
     # see getcpu.2 -- unused since kernel 2.6.24
     "struct getcpu_cache": "std::nullptr_t",
 
-    # XXX: This is probably incorrect.
-    "qid_t": "long",
+    "qid_t": "uint32_t",
 
     # This is copyable; touch when really needed
     "struct file_handle": "void",
