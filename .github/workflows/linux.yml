@@ -36,7 +36,7 @@ jobs:
           docker build --tag sunwalker_box .
           id="$(docker create sunwalker_box .)"
 
-          docker cp sunwalker_box:/sunwalker_box sunwalker_box
+          docker cp $id:/sunwalker_box sunwalker_box
 
       - name: Tests.
         run: |
