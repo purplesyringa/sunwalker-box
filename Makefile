@@ -47,6 +47,10 @@ check: $(DEPS)
 clippy: $(DEPS)
 	$(CARGO) clippy $(CARGO_OPTIONS) $(OPTIONS)
 
+# Keep the Linux kernel versions in sync with the minimal supported versions listed in README. These
+# two assets are not expected to be built by the user, but are merely to make updates easier for the
+# sunwalker-box devs (e.g. do `make -B generate/syscall_table_<arch>.json` after updating the
+# minimal supported kernel version)
 generate/syscall_table_x86_64.json:
 	wget --output-document $@ https://raw.githubusercontent.com/mebeim/linux-syscalls/master/db/x86/64/x64/v5.19/table.json
 generate/syscall_table_aarch64.json:

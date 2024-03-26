@@ -44,7 +44,7 @@ extern "C" __attribute__((naked, flatten, externally_visible)) void _start() {
 #endif
 
     long argc = *stack_pointer;
-    char **argv = (char **)(stack_pointer + 1);
+    char **argv = reinterpret_cast<char **>(stack_pointer + 1);
     char **envp = argv + argc + 1;
 
     (void)libc::exit(libc::execve(argv[1], argv + 1, envp).unwrap_errno());

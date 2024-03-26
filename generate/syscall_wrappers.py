@@ -3,8 +3,7 @@ import os
 import re
 
 ARCH = os.environ["ARCH"]
-RESERVED = "const volatile void bool char signed unsigned short int long size_t".split()
-SYSCALL_WRAPPER = 'Result<long> {name}({signature_args}) {{ return syscall({call_args}); }}'
+SYSCALL_WRAPPER = "Result<long> {name}({signature_args}) {{ return syscall({call_args}); }}"
 
 INCLUDES = [
     "asm-generic/poll",
@@ -18,7 +17,6 @@ INCLUDES = [
     "linux/capability",
     "linux/eventpoll",
     "linux/fs",
-    "linux/futex",
     "linux/futex",
     "linux/io_uring",
     "linux/kexec",
@@ -49,49 +47,31 @@ INCLUDES = [
 KERNEL_TYPES = "mode_t gid_t timer_t clockid_t loff_t fd_set pid_t mqd_t off_t uid_t key_t rwf_t".split()
 
 TYPE_ALIASES = {
-    'u32': '__u32',
-    'umode_t': 'mode_t',
-    'struct __aio_sigset': 'sigset_t',
+    "u32": "__u32",
+    "umode_t": "mode_t",
+    "struct __aio_sigset": "sigset_t",
 
     # see getcpu.2 -- unused since kernel 2.6.24
-    'struct getcpu_cache': 'nullptr_t',
+    "struct getcpu_cache": "std::nullptr_t",
 
-    # This is probably incorrect.
-    'qid_t': 'long',
+    # XXX: This is probably incorrect.
+    "qid_t": "long",
 
     # This is copyable; touch when really needed
-    'struct file_handle': 'void',
-    'struct sockaddr': 'void',
-    'struct mmsghdr': 'void',
+    "struct file_handle": "void",
+    "struct sockaddr": "void",
+    "struct mmsghdr": "void",
 
     # What about defines? No one cares
-    'key_serial_t': 'int32_t',
+    "key_serial_t": "int32_t",
 }
 
 
 def split_type(decl: str):
-    decl = decl.replace('union ', '').replace('enum ', '').split()
-
-    name = decl.pop()
-    i = 0
-    while i < len(name) and '*' == name[i]:
-        i += 1
-    stars, name = name[:i], name[i:]
-    decl.append(stars)
-
-    new_decl = []
-    for d in decl:
-        if False and d.isidentifier() and d not in RESERVED:
-            NONTRIVIAL_DECLS.add(NONTRIVIAL_DECL.format(name=d))
-            new_decl.append(f"::{d}")
-        else:
-            new_decl.append(d)
-
-    sig_type = ' '.join(new_decl)
-
-    for oldty, newty in TYPE_ALIASES.items():
-        sig_type = re.sub(f"\\b{oldty}\\b", newty, sig_type)
-
+    match = re.fullmatch(r"(.*?)(\w+)", decl)
+    sig_type = match[1]
+    name = match[2]
+    sig_type = re.sub(r"\w+", lambda match: TYPE_ALIASES.get(match[0], match[0]), sig_type)
     return sig_type, name
 
 
@@ -106,20 +86,12 @@ for syscall in syscall_table["syscalls"]:
     name: str = syscall["name"]
     signature: list[str] = syscall["signature"]
 
-    signature = list(map(split_type, signature))
-
-    def into_declaration(sig):
-        decltype, name = sig
-        return f"{decltype} {name}"
-
-    def into_value(sig):
-        decltype, name = sig
-        return f", (long){name}"
+    parsed_signature: list[tuple[str, str]] = list(map(split_type, signature))
 
     SYSCALL_WRAPPERS.append(SYSCALL_WRAPPER.format(
         name=name,
-        signature_args=', '.join(map(into_declaration, signature)),
-        call_args=str(number) + ''.join(map(into_value, signature)),
+        signature_args=", ".join(f"{decltype} {name}" for decltype, name in parsed_signature),
+        call_args=str(number) + "".join(f", (long){name}" for _, name in parsed_signature),
     ))
 
 for inc in INCLUDES:
@@ -127,5 +99,5 @@ for inc in INCLUDES:
 for ty in KERNEL_TYPES:
     print(f"#define {ty} __kernel_{ty}")
 print("namespace libc {")
-print('\n'.join(SYSCALL_WRAPPERS))
+print("\n".join(SYSCALL_WRAPPERS))
 print("}")
