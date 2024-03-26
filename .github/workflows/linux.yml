@@ -1,0 +1,50 @@
+name: Linux x86_64
+
+on:
+  push:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.github/**'
+      - '!.github/workflows/linux.yml'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - 'LICENSE'
+      - '.github/**'
+      - '!.github/workflows/linux.yml'
+
+jobs:
+
+  linux:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Clone.
+        uses: actions/checkout@v3.1.0
+        with:
+          submodules: recursive
+          path: ${{ env.REPO_NAME }}
+
+      - name: Build.
+        run: |
+          cd $REPO_NAME
+
+          docker build --tag sunwalker_box .
+          id="$(docker create sunwalker_box .)"
+
+          docker cp sunwalker_box:/sunwalker_box sunwalker_box
+
+      - name: Tests.
+        run: |
+          cd $REPO_NAME
+
+          sudo apt install python3 python3-yaml musl-tools libc6-dev
+
+          sudo make test
+
+      - uses: actions/upload-artifact@master
+        name: Upload artifact.
+        with:
+          name: ${{ env.ARTIFACT_NAME }}
+          path: ${{ env.REPO_NAME }}/sunwalker_box
