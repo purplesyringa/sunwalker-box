@@ -1,6 +1,4 @@
 #include "libc.hpp"
-#include <linux/resource.h>
-#include <linux/time.h>
 
 __kernel_old_itimerval itimer_prof __attribute__((externally_visible));
 
