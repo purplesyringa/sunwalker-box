@@ -410,12 +410,13 @@ class Tester:
     whitelist: Optional[set[str]] = None
 
     def __post_init__(self):
+        os.makedirs("build", exist_ok=True)
+
         self.f_makefile = open("build/Makefile", "w")
         self.make_targets: list[str] = []
         self.tests: list[SingleTest] = []
         self.skips = 0
 
-        os.makedirs("build", exist_ok=True)
         os.makedirs("build/roots", exist_ok=True)
         os.makedirs("build/assets", exist_ok=True)
 
