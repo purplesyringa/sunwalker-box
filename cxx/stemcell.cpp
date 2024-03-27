@@ -191,16 +191,23 @@ Result<void> init_child(const ControlMessageFds &fds) {
 Result<void> loop() {
     static ControlMessage control_message;
 
-    static iovec iov;
-    iov.iov_base = &control_message;
-    iov.iov_len = sizeof(control_message);
+    static iovec iov{
+        .iov_base = &control_message,
+        .iov_len = sizeof(control_message),
+    };
 
     alignas(cmsghdr) static char cmsg[CMSG_SPACE(sizeof(ControlMessageFds))];
 
-    static msghdr msg;
-    msg.msg_iov = &iov;
-    msg.msg_iovlen = 1;
-    msg.msg_control = cmsg;
+    static msghdr msg{
+        .msg_iov = &iov,
+        .msg_iovlen = 1,
+        .msg_control = cmsg,
+    };
+
+    static clone_args cl_args{
+        .flags = CLONE_CHILD_CLEARTID | CLONE_PARENT,
+    };
+    cl_args.child_tid = state.tid_address;
 
     for (;;) {
         msg.msg_controllen = sizeof(cmsg);
@@ -232,9 +239,6 @@ Result<void> loop() {
         static ControlMessageFds fds;
         __builtin_memcpy(&fds, CMSG_DATA(cmsgp), sizeof(fds));
 
-        static clone_args cl_args;
-        cl_args.flags = CLONE_CHILD_CLEARTID | CLONE_PARENT;
-        cl_args.child_tid = state.tid_address;
         pid_t child_pid =
             libc::clone3(&cl_args, sizeof(cl_args)).CONTEXT("Failed to clone self").TRY();
 
