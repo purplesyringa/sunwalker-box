@@ -1,6 +1,6 @@
 use crate::{
     copy_field_by_field,
-    linux::{cgroups, ids, running, string_table, system, timens, tracing, tracing::Timer, userns},
+    linux::{cgroups, ids, running, string_table, system, timens, tracing, userns},
     log, syscall,
     zeroed_padding::ZeroedPadding,
 };
@@ -184,7 +184,9 @@ struct ParasiteState {
 
 #[repr(C)]
 struct TimerList {
-    timers: [Timer; 64],
+    indices: [i32; 64],
+    clock_ids: [i32; 64],
+    timers: [libc::sigevent; 64],
     intervals: [libc::itimerspec; 64],
     count: usize,
 }
@@ -1106,15 +1108,19 @@ impl<'a> Suspender<'a> {
         self.parasite_state.timer_intervals.count = timers.len();
         self.stemcell_state.timers.count = timers.len();
 
-        for ((timer, parasite_idx), stemcell_timer) in timers
-            .iter()
-            .zip(&mut self.parasite_state.timer_intervals.indices)
-            .zip(&mut self.stemcell_state.timers.timers)
-        {
-            *parasite_idx = timer.id;
+        for (i, timer) in timers.iter().enumerate() {
+            self.parasite_state.timer_intervals.indices[i] = timer.id;
+            self.stemcell_state.timers.indices[i] = timer.id;
             copy_field_by_field!(
-                timer => *stemcell_timer,
-                {id, signal, sigev_value, mechanism, target, clock_id}
+                self.stemcell_state.timers.timers[i],
+                {
+                    sigev_value: libc::sigval {
+                        sival_ptr: timer.sigev_value as *mut _,
+                    },
+                    sigev_signo: timer.signal,
+                    sigev_notify: timer.mechanism,
+                    sigev_notify_thread_id: timer.target
+                }
             );
         }
 
