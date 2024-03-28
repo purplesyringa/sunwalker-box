@@ -52,6 +52,7 @@ enum State {
 pub struct SuspendData {
     master: tracing::TracedProcess,
     pub orig_pid: Pid,
+    pub vm_pid: Pid,
     inject_location: usize,
     cwd: PathBuf,
     control_tx: UnixStream,
@@ -67,6 +68,7 @@ pub struct Suspender<'a> {
     orig_cgroup: &'a cgroups::BoxCgroup,
     options: SuspendOptions,
     inject_location: usize,
+    vm_process: Option<tracing::TracedProcess>,
     master: Option<tracing::TracedProcess>,
     transferred_fds: Vec<OwnedFd>,
     forbidden_transferred_fds: HashSet<RawFd>,
@@ -629,6 +631,7 @@ impl<'a> Suspender<'a> {
             orig_cgroup,
             options,
             inject_location: 0,
+            vm_process: None,
             master: None,
             transferred_fds: Vec::new(),
             forbidden_transferred_fds: HashSet::new(),
@@ -683,8 +686,6 @@ impl<'a> Suspender<'a> {
         self.collect_timers().context("Failed to collect timers")?;
 
         let memory_maps = self.orig.get_memory_maps().context("Get memory maps")?;
-        self.translate_memory_maps(&memory_maps)
-            .context("Failed to translate memory maps")?;
 
         let rlimits = self
             .collect_rlimits()
@@ -717,6 +718,10 @@ impl<'a> Suspender<'a> {
         self.collect_pending_signals()
             .context("Failed to collect pending signals")?;
 
+        // Translate memory maps only after the VM process is spawned
+        self.translate_memory_maps(&memory_maps)
+            .context("Failed to translate memory maps")?;
+
         self.create_controlling_socket()
             .context("Failed to create controlling socket")?;
 
@@ -730,6 +735,7 @@ impl<'a> Suspender<'a> {
         Ok(SuspendData {
             master: self.master.unwrap(),
             orig_pid: self.orig.get_pid(),
+            vm_pid: self.vm_process.as_ref().unwrap().get_pid(),
             inject_location: self.inject_location,
             cwd,
             control_tx: self.control_tx.unwrap(),
@@ -928,14 +934,39 @@ impl<'a> Suspender<'a> {
     fn collect_info_via_parasite(&mut self) -> Result<()> {
         log!("Running parasite in original process");
 
+        self.orig.resume()?;
+
         // We want the parasite to execute some syscalls in the original process. Unfortunately,
         // these syscalls include ones blocked by seccomp due to the nature of prefork, so we have
         // to explicitly allow them via ptrace.
+        loop {
+            let wait_status = self.orig.wait()?;
+            match wait_status {
+                system::WaitStatus::PtraceEvent(_, _, libc::PTRACE_EVENT_SECCOMP) => {
+                    self.orig.resume()?
+                }
+                system::WaitStatus::PtraceEvent(_, _, libc::PTRACE_EVENT_CLONE) => break,
+                _ => bail!("Unexpected wait status {wait_status:?}"),
+            }
+        }
 
-        self.orig.resume()?;
+        // The parasite has spawned a process that we'll retrieve memory from
+        let pid = Pid::from_raw(self.orig.get_event_msg()? as pid_t);
+        log!("VM process spawned with pid {pid}");
+        let mut vm_process =
+            tracing::TracedProcess::new(pid).context("Failed to attach to VM process")?;
 
-        wait_for_raised_sigstop(self.orig, false)
-            .context("Failed to wait for raise(SIGSTOP) in parasite")?;
+        // Let the VM process call setsid() to free the orig PID
+        let wait_status = vm_process.wait()?;
+        ensure!(
+            matches!(wait_status, system::WaitStatus::Stopped(_, libc::SIGSTOP)),
+            "Unexpected wait status {wait_status:?} from VM process on step 1"
+        );
+        vm_process.resume().context("Failed to resume VM process")?;
+        wait_for_raised_sigstop(&mut vm_process, false)
+            .context("Failed to wait for raised SIGSTOP in VM process")?;
+
+        self.vm_process = Some(vm_process);
 
         let mut parasite_state = MaybeUninit::<ParasiteState>::zeroed();
         self.orig
@@ -1128,18 +1159,22 @@ impl<'a> Suspender<'a> {
     fn translate_memory_maps(&mut self, memory_maps: &[tracing::MemoryMap]) -> Result<()> {
         self.stemcell_state.memory_maps.orig_mem_fd = self.transferred_fds.len() as RawFd;
         self.transferred_fds.push(
-            self.orig
+            self.vm_process
+                .as_ref()
+                .unwrap()
                 .get_mem()
                 .try_clone()
-                .context("Failed to clone /proc/.../mem of original process")?
+                .context("Failed to clone /proc/.../mem of VM process")?
                 .into(),
         );
 
         self.stemcell_state.memory_maps.orig_pagemap_fd = self.transferred_fds.len() as RawFd;
         self.transferred_fds.push(
-            self.orig
+            self.vm_process
+                .as_ref()
+                .unwrap()
                 .open_pagemap()
-                .context("Failed to open /proc/.../pagemap of original process")?
+                .context("Failed to open /proc/.../pagemap of VM process")?
                 .into(),
         );
 

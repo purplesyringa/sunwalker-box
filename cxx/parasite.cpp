@@ -50,15 +50,27 @@ Result<void> run() {
     tid_address::save(state.tid_address).CONTEXT("Failed to save TID address").TRY();
     timers::save(state.timer_intervals).CONTEXT("Failed to save timer arming").TRY();
     umask::save(state.umask).CONTEXT("Failed to save umask").TRY();
+
+    // This effectively saves the mm. (vmsplice would be a better solution if pipes supported random
+    // reads.) On success, clone will return in both processes and both of them will raise SIGSTOP.
+    pid_t pid = libc::clone(CLONE_VM, 0, 0, 0, 0).CONTEXT("Failed to save VM").TRY();
+    if (pid == 0) {
+        // The child process SID is inherited from the parent. According to fork(2), a new process
+        // can't have a PID that matches an existing SID or PGID, so we wouldn't be able to reuse
+        // the original process's PID without this.
+        (void)libc::setsid();
+    }
+
     return {};
 }
 
 FINALIZE_CONTEXTS
 
 extern "C" __attribute__((section(".entry"), naked, flatten, externally_visible)) void _start() {
-    pid_t pid = libc::getpid().unwrap();
     state.result = run();
-    (void)libc::kill(pid, SIGSTOP);
+    // Note that this code is supposed to be run in both the original process and the VM process,
+    // i.e. we can't cache the PID
+    (void)libc::kill(libc::getpid().unwrap(), SIGSTOP);
     // We could use __builtin_unreachable or __builtin_trap here. Ideally we'd use the one that's
     // likely to catch more bugs, but it's uncertain what the distribution actually is.
     // __builtin_unreachable is a pass-through; we're likely to modify memory (including the state)
