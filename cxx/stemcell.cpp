@@ -18,10 +18,11 @@
 #include "remembrances/umask.hpp"
 #include <linux/prctl.h>
 #include <linux/ptrace.h>
+#include <numeric>
 
 struct State {
     Result<void> result;
-    uintptr_t end_of_memory_space;
+    uintptr_t end_of_original_master_mapping;
     alternative_stack::State alternative_stack;
 #ifdef __x86_64__
     arch_prctl_options::State arch_prctl_options;
@@ -52,7 +53,41 @@ struct ControlMessageFds {
 extern char start_of_text;
 extern char end_of_bss;
 
+uintptr_t task_size;
+int memfd;
+
+Result<uintptr_t> guess_task_size() {
+    // We need to know TASK_SIZE so that we know how to munmap everything after the last mapping we
+    // want to retain. The kernel does not let us learn TASK_SIZE directly, even via auxv. This is
+    // certainly a ridiculous situation to be in, but we can learn TASK_SIZE anyway with a
+    // workaround. munmap fails with EINVAL if we attempt to unmap a page past TASK_SIZE. We know
+    // that nothing is mapped past end_of_original_master_mapping at the moment in user portion of
+    // virtual memory ([vsyscall] is in kernel memory past TASK_SIZE), so we can just binary-search
+    // the address.
+
+    // FIXME: This assumes PAGE_SIZE is 4096
+    uintptr_t left = state.end_of_original_master_mapping >> 12;
+    // The highest byte of a pointer will be unset, see https://lwn.net/Articles/834289/
+    uintptr_t right = uintptr_t{1} << (56 - 12);
+    while (right - left > 1) {
+        uintptr_t mid = std::midpoint(left, right);
+        bool is_einval = libc::munmap(mid << 12, 4096)
+                             .swallow(EINVAL, 1)
+                             .CONTEXT("Unexpected failure in munmap")
+                             .TRY();
+        if (is_einval) {
+            right = mid;
+        } else {
+            left = mid;
+        }
+    }
+
+    return right << 12;
+}
+
 Result<void> run() {
+    task_size = guess_task_size().CONTEXT("Failed to guess TASK_SIZE").TRY();
+
     // Parent sets us to 1001/1000/1001, but that results in just 1001/1000/1000 in child because
     // that's how execve works. Fix this so that our rUID/sUID aren't 1000 and we can't be killed.
     // This is inherently racy, but everyone else is supposed to be stopped at this moment.
@@ -68,7 +103,7 @@ Result<void> run() {
     // We can't hard-code any particular upper bound because it is not only arch-dependent, but
     // kernel-configuration-dependent too, e.g. on x86-64 if 5-level page tables are available
     libc::munmap(reinterpret_cast<unsigned long>(&end_of_bss),
-                 state.end_of_memory_space - reinterpret_cast<uintptr_t>(&end_of_bss))
+                 task_size - reinterpret_cast<uintptr_t>(&end_of_bss))
         .CONTEXT("Failed to munmap memory suffix")
         .TRY();
 

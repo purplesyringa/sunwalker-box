@@ -192,7 +192,7 @@ struct TimerList {
 #[repr(C)]
 struct StemcellState {
     result: u64,
-    end_of_memory_space: usize,
+    end_of_original_master_mapping: usize,
     alternative_stack: libc::stack_t,
     arch_prctl_options: ArchPrctlOptions,
     file_descriptors: FileDescriptors,
@@ -1413,7 +1413,7 @@ impl<'a> Suspender<'a> {
 
         let master = self.master.as_mut().unwrap();
 
-        self.stemcell_state.end_of_memory_space = master
+        self.stemcell_state.end_of_original_master_mapping = master
             .get_memory_maps()
             .context("Failed to read memory maps of master")?
             .iter()
