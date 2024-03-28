@@ -41,6 +41,7 @@ struct State {
     timers::State timers;
     umask::State umask;
     int controlling_fd;
+    uint32_t allowed_to_munmap_self;
 } state __attribute__((externally_visible));
 
 struct ControlMessage {};
@@ -52,6 +53,7 @@ struct ControlMessageFds {
 
 extern char start_of_text;
 extern char end_of_bss;
+size_t stemcell_size;
 
 uintptr_t task_size;
 int memfd;
@@ -86,6 +88,7 @@ Result<uintptr_t> guess_task_size() {
 }
 
 Result<void> run() {
+    stemcell_size = &end_of_bss - &start_of_text;
     task_size = guess_task_size().CONTEXT("Failed to guess TASK_SIZE").TRY();
 
     // Parent sets us to 1001/1000/1001, but that results in just 1001/1000/1000 in child because
@@ -107,11 +110,6 @@ Result<void> run() {
         .CONTEXT("Failed to munmap memory suffix")
         .TRY();
 
-    // We aren't going to trigger any signals in the stemcell, so this is safe to perform
-    alternative_stack::load(state.alternative_stack)
-        .CONTEXT("Failed to load alternative stack")
-        .TRY();
-
 #ifdef __x86_64__
     // We don't rely on limited CPU features or use TLS, so this is safe to perform
     arch_prctl_options::load(state.arch_prctl_options)
@@ -123,19 +121,11 @@ Result<void> run() {
     thp_options::load(state.thp_options)
         .CONTEXT("Failed to load transparent huge pages options")
         .TRY();
-    // Memory maps can be restored almost completely, except for shared memory and removing the
-    // stemcell pages
-    memory_maps::load_before_fork(state.memory_maps).CONTEXT("Failed to load memory maps").TRY();
-    // Memory options can be restored after memory has been mapped
-    mm_options::load(state.mm_options).CONTEXT("Failed to load memory map options").TRY();
     // Some personality options are unlikely to cause issues, others are iffy (e.g.
     // ADDR_COMPAT_LAYOUT, ADDR_COMPAT_LAYOUT, ADDR_COMPAT_LAYOUT). We support all of them,
     // best-effort, and hope the most dangerous ones aren't really used. Luckily, stemcell is
     // untrusted, so this can cause odd behavior at worst
     personality::load(state.personality).CONTEXT("Failed to load personality").TRY();
-    // rseq is inherited after fork. We also ensure rseq_cs is reset to 0 while suspending, so
-    // stemcell code won't be interpreted as a critical section and aborted.
-    rsequence::load(state.rseq).CONTEXT("Failed to load rseq").TRY();
     // We aren't going to intentionally cause any signals to be delivered, except SIGSTOP.
     // Unintentional ones, like SIGSEGV, are unlikely and shall be considered bugs by themselves.
     // The only potential issue is SIGCONT, which we'll trigger inadvertently when starting user
@@ -152,17 +142,23 @@ Result<void> run() {
         .CONTEXT("Failed to disable interval timers signals")
         .TRY();
 
+    // Relocate ourselves from anonymous memory to file-backed memory. This is supposed to reduce
+    // restoration of stemcell after it is unmapped to a single mmap syscall.
+    memfd = libc::memfd_create("stemcell", 0).CONTEXT("Failed to create memfd").TRY();
+    size_t n_written =
+        libc::write(memfd, &start_of_text, stemcell_size).CONTEXT("Failed to write to memfd").TRY();
+    ENSURE(n_written == stemcell_size, "Unexpected length written to memfd");
+    libc::mmap(reinterpret_cast<unsigned long>(&start_of_text), stemcell_size,
+               PROT_READ | PROT_WRITE | PROT_EXEC, MAP_FIXED | MAP_SHARED, memfd, 0)
+        .CONTEXT("Failed to remap self from memfd")
+        .TRY();
+
     return {};
 }
 
 Result<void> init_child(const ControlMessageFds &fds) {
-    // Stop us from being able to touch the parent process in any way
+    // Stop us from being able to touch the parent process in any way save for mm modification
     libc::setresuid(1000, 1000, 1000).CONTEXT("Failed to drop privileges").TRY();
-
-    // Shared pages have to be unshared between instances of clones, so do this after fork
-    memory_maps::load_after_fork(state.memory_maps)
-        .CONTEXT("Failed to load shared memory maps")
-        .TRY();
 
     // Remap stdio
     for (int i = 0; i < 3; i++) {
@@ -177,6 +173,8 @@ Result<void> init_child(const ControlMessageFds &fds) {
     libc::fchdir(fds.cwd).CONTEXT("Failed to set cwd").TRY();
     libc::close(fds.cwd).CONTEXT("Failed to close cwd").TRY();
 
+    libc::close(memfd).CONTEXT("Failed to close memfd").TRY();
+
     // At this point, all fds save for 0-2 are controlled by remembrances and have been made
     // available in the stemcell via sunwalker_box transferred_fds facility. This guarantees that
     // they don't intersect the fds used by the original process (again, save for 0-2) that we shall
@@ -184,19 +182,47 @@ Result<void> init_child(const ControlMessageFds &fds) {
 
     libc::close(state.controlling_fd).CONTEXT("Failed to close controlling fd").TRY();
 
-    // Robust lists are per-thread therefore restore them after fork
-    robust_futexes::load(state.robust_list).CONTEXT("Failed to load robust list").TRY();
+    // clone(CLONE_VM) resets alternative stack, so it has to be restored after fork
+    alternative_stack::load(state.alternative_stack)
+        .CONTEXT("Failed to load alternative stack")
+        .TRY();
 
     // File descriptors have to be restored after fork, as dup2 doesn't clone the underlying file
     // descriptor but uses the same one, and thus updates to file offset and other information would
     // be shared between runs
     file_descriptors::load(state.file_descriptors).CONTEXT("Failed to load file descriptors").TRY();
 
+    // We do not, strictly speaking, need to handle memory maps in the fork child. However, it has
+    // to happen on each run, and the VM are shared between the master copy and the forked process
+    // so this place is as good as any
+    memory_maps::load(state.memory_maps, task_size, reinterpret_cast<uintptr_t>(&start_of_text))
+        .CONTEXT("Failed to load memory maps")
+        .TRY();
+
+    // Memory options are stored in the mm structure and thus shared with the master process, so
+    // they have to be restored every time
+    mm_options::load(state.mm_options).CONTEXT("Failed to load memory map options").TRY();
+
     // Pending signals have to be injected after fork
     pending_signals::load(state.pending_signals).CONTEXT("Failed to load pending signals").TRY();
 
+    // Robust lists are per-thread, therefore restore them after fork
+    robust_futexes::load(state.robust_list).CONTEXT("Failed to load robust list").TRY();
+
+    // rseq has to be restored after memory so that the kernel can read the structures. We also
+    // ensure rseq_cs is reset to 0 while suspending, so stemcell code won't be interpreted as a
+    // critical section and aborted.
+    rsequence::load(state.rseq).CONTEXT("Failed to load rseq").TRY();
+
+    while (!state.allowed_to_munmap_self) {
+        libc::futex(&state.allowed_to_munmap_self, FUTEX_WAIT, 0, nullptr, nullptr, 0)
+            .CONTEXT("Failed to wait on futex")
+            .TRY();
+    }
+
     // Loading timers has to happen at each run to preserve expiration times so that time doesn't
-    // flow between suspend and resume. Also, timers aren't even inherited.
+    // flow between suspend and resume. The less time passes between timer restoration and execution
+    // of user code, the better. Therefore, restore them only after waiting on the futex.
     itimers::load(state.itimers).CONTEXT("Failed to load interval timers").TRY();
     timers::load(state.timers).CONTEXT("Failed to load POSIX timers").TRY();
 
@@ -213,7 +239,7 @@ Result<void> init_child(const ControlMessageFds &fds) {
 #error Trying to compile stemcell against unsupported architecture!
 #endif
 
-    libc::munmap(reinterpret_cast<unsigned long>(&start_of_text), &end_of_bss - &start_of_text)
+    libc::munmap(reinterpret_cast<unsigned long>(&start_of_text), stemcell_size)
         .CONTEXT("Failed to munmap stemcell")
         .TRY();
     __builtin_trap();
@@ -242,7 +268,7 @@ Result<void> loop() {
     };
 
     static clone_args cl_args{
-        .flags = CLONE_CHILD_CLEARTID | CLONE_PARENT,
+        .flags = CLONE_CHILD_CLEARTID | CLONE_PARENT | CLONE_VM,
     };
     cl_args.child_tid = state.tid_address;
 
@@ -284,6 +310,12 @@ Result<void> loop() {
             (void)libc::kill(libc::getpid().unwrap(), SIGSTOP);
             __builtin_trap();
         }
+
+        // In the parent process, the syscall that immediately follows clone3 must be mmap. The
+        // manager will put us into syscall-enter-stop, which enables it to mmap stuff later into
+        // the stemcell mm even after any user code has run in this mm.
+        (void)libc::mmap(reinterpret_cast<unsigned long>(&start_of_text), stemcell_size,
+                         PROT_READ | PROT_WRITE | PROT_EXEC, MAP_FIXED | MAP_SHARED, memfd, 0);
 
         // Make sure not to cause any errors between clone3 and recvmsg -- these would be caught by
         // running, which has no idea what to do about them
