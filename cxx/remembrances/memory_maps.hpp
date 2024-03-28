@@ -57,80 +57,17 @@ Result<void> MemoryMap::do_map(const State &state) const {
         .CONTEXT("Failed to mmap-THP")
         .TRY();
 
-// XXX: FUCK YOU ALISA
-#define page_size 4096
+    // We could use vmsplice here. Unfortunately, that isn't going to be zero-copy, so any
+    // performance improvements are unlikely. https://lwn.net/Articles/571748/ would have fixed
+    // this, but it hasn't ever been merged.
 
-    static uintptr_t cur_base, region_start, region_end;
-    cur_base = base;
-    region_start = base;
-    region_end = base;
-
-    auto try_read = [&]() -> Result<void> {
-        if (region_start == region_end) {
-            return {};
-        }
-        // We could use vmsplice here. Unfortunately, that isn't going to be zero-copy, so any
-        // performance improvements are unlikely. https://lwn.net/Articles/571748/ would have fixed
-        // this, but it hasn't ever been merged.
-        size_t n_read = libc::pread64(state.orig_mem_fd, reinterpret_cast<char *>(region_start),
-                                      region_end - region_start, region_start)
-                            .CONTEXT("Failed to copy memory")
-                            .TRY();
-        ENSURE(n_read == region_end - region_start, "Unexpected read size");
-        return {};
-    };
-
-    while (cur_base < end) {
-        size_t n_entries =
-            libc::pread64(state.orig_pagemap_fd, reinterpret_cast<char *>(pagemap_entries.data()),
-                          std::min(pagemap_entries.size(), (end - cur_base) / page_size) * 8,
-                          cur_base / page_size * 8)
-                .CONTEXT("Failed to read pagemap")
-                .TRY();
-        n_entries /= 8;
-        ENSURE(n_entries > 0, "Nothing could be read from pagemap");
-
-        static size_t i;
-        for (i = 0; i < n_entries; i++) {
-            uint64_t entry = pagemap_entries[i];
-
-            // Detect if 'entry' points at a page we should copy (and not skip).
-            bool should_copy_page;
-            if ((flags & MAP_TYPE) == MAP_SHARED) {
-                // This function is never called for shared file-backed mappings. Therefore,
-                // each untouched page is necessarily zero and we can skip it. Touched pages,
-                // i.e. those present or swapped, are *always* allocated because that's how
-                // shared memory works; it's basically copy-on-read as opposed to copy-on-write.
-                should_copy_page = entry & (PM_SWAP | PM_PRESENT);
-            } else {
-                // In private mappings, a present page does not indicate it was *allocated*, it
-                // could just point at page cache or a zero page. We don't want to lose this
-                // deduplication, so we have to invent another way to detect if the page was
-                // modified.
-                if (prot & 0x80000000) {
-                    // Modified pages will be exclusive, while the zero pages won't
-                    should_copy_page = entry & (PM_SWAP | PM_MMAP_EXCLUSIVE);
-                } else {
-                    // Modified pages will be anonymous, while the file-backed pages won't
-                    should_copy_page = !(entry & PM_FILE);
-                }
-            }
-
-            if (!should_copy_page || region_end != cur_base) {
-                try_read().TRY();
-                region_start = cur_base;
-                region_end = cur_base;
-            }
-
-            cur_base += page_size;
-
-            if (should_copy_page) {
-                region_end = cur_base;
-            }
-        }
-    }
-
-    try_read().TRY();
+    // Don't bother checking the return value of pread64. We might get EIO or read less than
+    // (end - base) bytes if a read fails because we're reading past the end of a shared mapping,
+    // but the right thing to do in this case is to stop there and then.
+    libc::pread64(state.orig_mem_fd, reinterpret_cast<char *>(base), end - base, base)
+        .swallow(EIO, 0)
+        .CONTEXT("Failed to copy memory")
+        .TRY();
 
     if (!(prot & PROT_WRITE)) {
         libc::mprotect(base, end - base, prot & 0x7fffffff)
@@ -141,28 +78,29 @@ Result<void> MemoryMap::do_map(const State &state) const {
     return {};
 }
 
-Result<void> load_before_fork(const State &state) {
+Result<void> load(const State &state, uintptr_t task_size, uintptr_t start_of_text) {
+    uintptr_t hole_start = 0;
+
     for (size_t i = 0; i < state.count; i++) {
         const MemoryMap &map = state.maps[i];
-        if ((map.flags & MAP_TYPE) == MAP_PRIVATE) {
-            map.do_map(state).TRY();
-        } else if (!(map.prot & 0x80000000)) {
+        if (hole_start != map.base) {
+            libc::munmap(hole_start, map.base - hole_start).CONTEXT("Failed to munmap hole").TRY();
+        }
+        if (map.base == start_of_text) {
+            // Don't remap ourselves yet
+        } else if ((map.flags & MAP_TYPE) == MAP_SHARED && !(map.prot & 0x80000000)) {
             // Shared maps to everything but /dev/zero can be mapped just like this
             mmap_thp(map.base, map.end - map.base, map.prot, map.flags, map.fd, map.offset)
                 .CONTEXT("Failed to mmap-THP")
                 .TRY();
-        }
-    }
-
-    return {};
-}
-
-Result<void> load_after_fork(const State &state) {
-    for (size_t i = 0; i < state.count; i++) {
-        const MemoryMap &map = state.maps[i];
-        if ((map.flags & MAP_TYPE) == MAP_SHARED && (map.prot & 0x80000000)) {
+        } else {
             map.do_map(state).TRY();
         }
+        hole_start = map.end;
+    }
+
+    if (hole_start != task_size) {
+        libc::munmap(hole_start, task_size - hole_start).CONTEXT("Failed to munmap hole").TRY();
     }
 
     // Close fds

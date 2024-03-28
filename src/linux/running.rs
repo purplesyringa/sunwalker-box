@@ -360,6 +360,13 @@ impl SingleRun<'_> {
         Ok(())
     }
 
+    fn get_cgroup(&self) -> &cgroups::BoxCgroup {
+        match self.options.mode {
+            Mode::Run | Mode::PreFork => self.box_cgroup.as_ref().unwrap(),
+            Mode::Resume => &self.suspend_data.as_ref().unwrap().target_cgroup,
+        }
+    }
+
     fn start_worker(&mut self) -> Result<tracing::TracedProcess> {
         let [stdin, stdout, stderr] = self.open_standard_streams()?;
 
@@ -559,7 +566,7 @@ impl SingleRun<'_> {
             return Ok(Some(Verdict::RealTimeLimitExceeded));
         } else if Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time) {
             return Ok(Some(Verdict::IdlenessTimeLimitExceeded));
-        } else if self.box_cgroup.as_ref().unwrap().was_oom_killed()? {
+        } else if self.get_cgroup().was_oom_killed()? {
             // Do not blame the user for invoker's failure. Verify OOM authenticity by checking if
             // the limit was about to be exceeded.
             //
@@ -663,15 +670,11 @@ impl SingleRun<'_> {
     }
 
     fn update_metrics(&mut self) -> Result<()> {
-        self.results.cpu_time =
-            self.cpu_time_adjustment + self.box_cgroup.as_mut().unwrap().get_cpu_time()?;
+        self.results.cpu_time = self.cpu_time_adjustment + self.get_cgroup().get_cpu_time()?;
         self.results.real_time = self.real_time_adjustment + self.start_time.unwrap().elapsed();
         self.results.idleness_time = self.results.real_time.saturating_sub(self.results.cpu_time);
         if !self.is_memory_peak_reliable() {
-            self.results.memory = self
-                .results
-                .memory
-                .max(self.box_cgroup.as_ref().unwrap().get_memory_use()?);
+            self.results.memory = self.results.memory.max(self.get_cgroup().get_memory_use()?);
         }
         Ok(())
     }
@@ -748,6 +751,7 @@ impl SingleRun<'_> {
                 process,
                 syscall_info,
                 self.box_cgroup.as_ref().unwrap(),
+                &self.runner.proc_cgroup,
             ),
         }
     }
@@ -1122,9 +1126,7 @@ impl SingleRun<'_> {
         let user_sysinfo_mut = unsafe { user_sysinfo.assume_init_mut() };
 
         let mem = self
-            .box_cgroup
-            .as_ref()
-            .unwrap()
+            .get_cgroup()
             .get_memory_stats()
             .context("Failed to get memory stats")?;
 
@@ -1144,9 +1146,7 @@ impl SingleRun<'_> {
         user_sysinfo_mut.totalswap = 0;
         user_sysinfo_mut.freeswap = 0;
         user_sysinfo_mut.procs =
-            self.box_cgroup
-                .as_ref()
-                .unwrap()
+            self.get_cgroup()
                 .get_current_processes()
                 .context("Failed to get count of runnning processes")? as u16;
         user_sysinfo_mut.totalhigh = 0;
@@ -1436,7 +1436,11 @@ impl SingleRun<'_> {
                             .prefork
                             .as_mut()
                             .unwrap()
-                            .handle_syscall(process, self.box_cgroup.as_ref().unwrap())
+                            .handle_syscall(
+                                process,
+                                self.box_cgroup.as_ref().unwrap(),
+                                &self.runner.proc_cgroup,
+                            )
                             .context("Failed to handle syscall in prefork mode");
                     }
                 }
@@ -1488,11 +1492,17 @@ impl SingleRun<'_> {
     fn cleanup(&mut self) -> Result<()> {
         log!("Cleaning up");
 
-        self.box_cgroup
-            .as_mut()
-            .unwrap()
-            .kill()
-            .context("Failed to kill user cgroup")?;
+        match self.options.mode {
+            Mode::Run | Mode::PreFork => self.box_cgroup.as_mut().unwrap().kill(None),
+            Mode::Resume => {
+                // Don't kill the master process,that would be stupid
+                let suspend_data = self.suspend_data.as_mut().unwrap();
+                suspend_data
+                    .target_cgroup
+                    .kill(Some(suspend_data.master.get_pid().as_raw()))
+            }
+        }
+        .context("Failed to kill user cgroup")?;
 
         // We don't really care what happens after, but we have to waitpid() anyway to collect PIDs.
         // We used to waitpid() till ECHILD, but this breaks in presence of preforked processes.
@@ -1510,11 +1520,11 @@ impl SingleRun<'_> {
             }
         }
 
-        self.box_cgroup
-            .take()
-            .unwrap()
-            .destroy()
-            .context("Failed to destroy user cgroup")?;
+        if let Some(box_cgroup) = self.box_cgroup.take() {
+            box_cgroup
+                .destroy()
+                .context("Failed to destroy user cgroup")?;
+        }
 
         Ok(())
     }
@@ -1567,16 +1577,10 @@ impl SingleRun<'_> {
 
                 let stdio = self.open_standard_streams()?;
 
-                self.create_box_cgroup()?;
-
                 let traced_process = self
                     .runner
                     .prefork_manager
-                    .resume(
-                        self.suspend_data.as_mut().unwrap(),
-                        stdio,
-                        self.box_cgroup.as_mut().unwrap(),
-                    )
+                    .resume(self.suspend_data.as_mut().unwrap(), stdio)
                     .context("Failed to resume preforked process")?;
 
                 // user code is about to start running
