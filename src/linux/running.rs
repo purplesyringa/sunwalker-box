@@ -115,7 +115,7 @@ struct SingleRun<'a> {
     msg_next_id: Cell<isize>,
     shm_next_id: Cell<isize>,
     prefork: Option<prefork::PreForkRun<'a>>,
-    suspend_data: Option<Rc<RefCell<prefork::SuspendData>>>,
+    suspend_data: Option<&'a mut prefork::SuspendData>,
     real_time_adjustment: Duration,
     cpu_time_adjustment: Duration,
     memory_adjustment: usize,
@@ -236,7 +236,8 @@ impl Runner {
 
     pub fn run(&self, mut options: Options) -> Result<RunResults> {
         let prefork;
-        let suspend_data;
+        let suspend_data_rc;
+        let mut suspend_data;
         let mut real_time_adjustment = Duration::ZERO;
         let mut cpu_time_adjustment = Duration::ZERO;
         let mut memory_adjustment = 0;
@@ -263,7 +264,8 @@ impl Runner {
                 options.idleness_time_limit = suspended_run.idleness_time_limit;
                 options.memory_limit = suspended_run.memory_limit;
                 options.processes_limit = suspended_run.processes_limit;
-                suspend_data = Some(suspended_run.data.clone());
+                suspend_data_rc = suspended_run.data.clone();
+                suspend_data = Some(suspend_data_rc.borrow_mut());
                 real_time_adjustment = suspended_run.real_time;
                 cpu_time_adjustment = suspended_run.cpu_time;
                 memory_adjustment = suspended_run.memory;
@@ -289,7 +291,7 @@ impl Runner {
             msg_next_id: Cell::new(0),
             shm_next_id: Cell::new(0),
             prefork,
-            suspend_data,
+            suspend_data: suspend_data.as_deref_mut(),
             real_time_adjustment,
             cpu_time_adjustment,
             memory_adjustment,
@@ -1538,7 +1540,7 @@ impl SingleRun<'_> {
                     .runner
                     .prefork_manager
                     .resume(
-                        &mut self.suspend_data.take().unwrap().borrow_mut(),
+                        self.suspend_data.as_mut().unwrap(),
                         stdio,
                         self.box_cgroup.as_mut().unwrap(),
                     )
