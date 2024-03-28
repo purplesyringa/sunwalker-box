@@ -130,8 +130,6 @@ struct rseq_cs {
 #[cfg(target_arch = "x86_64")]
 #[repr(C)]
 struct ArchPrctlOptions {
-    fs_base: usize,
-    gs_base: usize,
     cpuid_status: usize,
 }
 
