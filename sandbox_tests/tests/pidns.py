@@ -9,7 +9,7 @@ script: |
     pid = prefork()
     expect(pid, verdict=Suspended)
     for i in range(10):
-        expect(resume(pid), stdout="3\n3\n[1, 2, 3, 4]\n")
+        expect(resume(pid), stdout="3\n3\n[1, 2, 3, 4, 5]\n")
 """
 
 import os

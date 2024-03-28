@@ -136,14 +136,12 @@ impl Cgroup {
             .write(b"+cpu +memory +pids\n")
             .context("Failed to enable cgroup controllers")?;
 
-        nix::unistd::fchownat::<str>(
-            Some(self.core_cgroup_fd.as_raw_fd()),
-            &proc_id,
-            Some(nix::unistd::Uid::from_raw(ids::EXTERNAL_ROOT_UID)),
-            Some(nix::unistd::Gid::from_raw(ids::EXTERNAL_ROOT_GID)),
-            nix::unistd::FchownatFlags::NoFollowSymlink,
+        chown_cgroup(
+            &proc_cgroup_fd,
+            Some(ids::EXTERNAL_ROOT_UID),
+            Some(ids::EXTERNAL_ROOT_GID),
         )
-        .context("Failed to chown <cgroup>")?;
+        .with_context(|| format!("Failed to chown {proc_id}"))?;
 
         Ok(ProcCgroup {
             core_cgroup_fd: self.core_cgroup_fd.try_clone()?,

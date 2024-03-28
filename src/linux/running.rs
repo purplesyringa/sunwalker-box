@@ -29,6 +29,7 @@ pub struct Runner {
     epoll: epoll::Epoll,
     exec_wrapper: File,
     proc_cgroup: cgroups::ProcCgroup,
+    unlimited_cgroup: cgroups::BoxCgroup,
     suspended_runs: RefCell<Vec<SuspendedRun>>,
     original_hard_rlimits: [libc::rlim_t; 16],
 }
@@ -215,6 +216,14 @@ impl Runner {
         )
         .context("Failed to set RLIMIT_SIGPENDING")?;
 
+        // We sometimes need to de-isolate a process. We can't move such a process to the same
+        // cgroup that the manager uses, because that's just the system's root cgroup, and granting
+        // the internal root access to the system's root cgroup is a pretty dumb idea. Therefore,
+        // introduce another non-internal cgroup for this.
+        let unlimited_cgroup = proc_cgroup
+            .create_box_cgroup()
+            .context("Failed to create unlimited cgroup")?;
+
         Ok(Runner {
             prefork_manager: prefork::PreForkManager::new(stdio_subst)?,
             timens_controller: RefCell::new(timens_controller),
@@ -226,6 +235,7 @@ impl Runner {
             )
             .context("Failed to create memfd for exec_wrapper")?,
             proc_cgroup,
+            unlimited_cgroup,
             suspended_runs: RefCell::new(Vec::new()),
             original_hard_rlimits: std::array::try_from_fn(|i| {
                 nix::Result::Ok(resource::getrlimit(unsafe { std::mem::transmute(i as u32) })?.1)
@@ -1634,7 +1644,15 @@ impl SingleRun<'_> {
                         }
                         None => {
                             let data = prefork.get_suspend_data()?;
+
+                            // Make the VM process immune to cleanup
+                            self.runner
+                                .unlimited_cgroup
+                                .add_process(data.vm_pid.as_raw())
+                                .context("Failed to move VM process to the unlimited cgroup")?;
+
                             let orig_pid = data.orig_pid;
+
                             let mut suspended_runs = self.runner.suspended_runs.borrow_mut();
                             suspended_runs.push(SuspendedRun {
                                 data: Rc::new(RefCell::new(data)),
