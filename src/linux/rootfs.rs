@@ -216,7 +216,8 @@ pub fn commit(state: &mut RootfsState) -> Result<()> {
     std::fs::create_dir("/base").context("Failed to mkdir /base")?;
     system::bind_mount("/newroot/space", "/base")
         .context("Failed to bind-mount /newroot/space to /base")?;
-    system::umount("/newroot/space").context("Failed to unmount /newroot/space")?;
+    system::umount_opt("/newroot/space", system::MntFlags::MNT_DETACH)
+        .context("Failed to unmount /newroot/space")?;
 
     // Mount overlayfs on /newroot/space
     std::fs::create_dir("/staging/upper").context("Failed to mkdir /staging/upper")?;
