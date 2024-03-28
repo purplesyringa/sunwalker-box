@@ -224,6 +224,8 @@ Result<void> init_child(const ControlMessageFds &fds) {
     // - CPU state
 }
 
+pid_t master_pid;
+
 Result<void> loop() {
     static ControlMessage control_message;
 
@@ -260,7 +262,7 @@ Result<void> loop() {
             n_received = std::move(result).unwrap();
         }
         if (n_received == 0) {
-            (void)libc::kill(libc::getpid().unwrap(), SIGKILL);
+            (void)libc::kill(master_pid, SIGKILL);
             __builtin_unreachable();
         }
         ENSURE(n_received == sizeof(control_message), "Unexpected size of control message");
@@ -294,16 +296,16 @@ Result<void> loop() {
 }
 
 extern "C" __attribute__((naked, flatten, externally_visible)) void _start() {
-    pid_t pid = libc::getpid().unwrap();
+    master_pid = libc::getpid().unwrap();
     if (!libc::ptrace(PTRACE_TRACEME).is_ok()) {
-        (void)libc::kill(pid, SIGKILL);
+        (void)libc::kill(master_pid, SIGKILL);
         __builtin_unreachable();
     }
-    (void)libc::kill(pid, SIGSTOP);
+    (void)libc::kill(master_pid, SIGSTOP);
     state.result = run();
-    (void)libc::kill(pid, SIGSTOP);
+    (void)libc::kill(master_pid, SIGSTOP);
     state.result = loop();
-    (void)libc::kill(pid, SIGSTOP);
+    (void)libc::kill(master_pid, SIGSTOP);
     __builtin_trap();
 }
 
