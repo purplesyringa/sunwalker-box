@@ -51,6 +51,18 @@ Result<void> run() {
     timers::save(state.timer_intervals).CONTEXT("Failed to save timer arming").TRY();
     umask::save(state.umask).CONTEXT("Failed to save umask").TRY();
 
+    // The manager is going to kill this process to release its PID. Killing a process can trigger
+    // two kinds of modification to its mm:
+    // - Deactivation of robust mutexes
+    // - Death futex activation, as configured by set_tid_address
+    // Make sure none of these can happen and corrupt the mm. If this is omitted, programs will
+    // *appear* to work, right until someone uses libcrypto and it SIGSEGVs upon exit when trying to
+    // lock a freed mutex. TODO: add a test for that.
+    libc::set_robust_list(nullptr, sizeof(robust_list_head))
+        .CONTEXT("Failed to reset robust list")
+        .TRY();
+    libc::set_tid_address(nullptr).CONTEXT("Failed to reset TID address").TRY();
+
     // This effectively saves the mm. (vmsplice would be a better solution if pipes supported random
     // reads.) On success, clone will return in both processes and both of them will raise SIGSTOP.
     pid_t pid = libc::clone(CLONE_VM, 0, 0, 0, 0).CONTEXT("Failed to save VM").TRY();
