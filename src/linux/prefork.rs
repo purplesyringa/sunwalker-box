@@ -50,7 +50,7 @@ enum State {
 }
 
 pub struct SuspendData {
-    master: tracing::TracedProcess,
+    pub master: tracing::TracedProcess,
     pub orig_pid: Pid,
     pub vm_pid: Pid,
     inject_location: usize,
@@ -59,6 +59,8 @@ pub struct SuspendData {
     registers: tracing::Registers,
     signal_mask: u64,
     rlimits: [libc::rlimit; 16],
+    is_first_run: bool,
+    pub target_cgroup: cgroups::BoxCgroup,
 }
 
 // ZeroedPadding is used to avoid data leaks via padding
@@ -66,6 +68,7 @@ pub struct Suspender<'a> {
     orig: &'a mut tracing::TracedProcess,
     hard_rlimits: [libc::rlim_t; 16],
     orig_cgroup: &'a cgroups::BoxCgroup,
+    proc_cgroup: &'a cgroups::ProcCgroup,
     options: SuspendOptions,
     inject_location: usize,
     vm_process: Option<tracing::TracedProcess>,
@@ -201,6 +204,7 @@ struct StemcellState {
     timers: TimerList,
     umask: mode_t,
     controlling_fd: RawFd,
+    allowed_to_munmap_self: u32,
 }
 
 // The default value of sysctl fs.nr_open = 1048576 is too large to allocate a static array for, so
@@ -333,9 +337,15 @@ impl PreForkManager {
         &self,
         data: &mut SuspendData,
         stdio: [File; 3],
-        cgroup: &mut cgroups::BoxCgroup,
     ) -> Result<tracing::TracedProcess> {
         log!("Resuming process");
+
+        if !data.is_first_run {
+            // mmap the stemcell back into the mm
+            data.master.resume().context("Failed to resume master")?;
+        }
+
+        data.is_first_run = false;
 
         // 128 bytes ought to be enough for anyone
         // https://github.com/rust-lang/rust/issues/76915#issuecomment-1875845773
@@ -386,7 +396,31 @@ impl PreForkManager {
 
         let child_pid = Pid::from_raw(data.master.get_event_msg()? as pid_t);
         log!("Child spawned with pid {child_pid}");
-        data.master.resume()?;
+
+        // We're now in syscall-exit-stop in clone(). We want to complete the syscall and then enter
+        // syscall-enter-stop for mmap(). That's two resume_syscall()'s.
+        for _ in 0..2 {
+            data.master
+                .resume_syscall()
+                .context("Failed to resume master")?;
+            let wait_status = data
+                .master
+                .wait()
+                .context("Failed to wait for master to enter syscall-enter-stop")?;
+            let system::WaitStatus::PtraceSyscall(..) = wait_status else {
+                bail!("Unexpected status {wait_status:?} on master");
+            };
+        }
+
+        // Let the child ummap the stemcell after reaching syscall-enter-stop
+        data.master
+            .write_memory(
+                data.inject_location
+                    + STEMCELL_STATE_OFFSET
+                    + std::mem::offset_of!(StemcellState, allowed_to_munmap_self),
+                &1i32.to_ne_bytes(),
+            )
+            .context("Failed to allow munmap")?;
 
         let mut child = tracing::TracedProcess::new(child_pid)?;
         let wait_status = child.wait()?;
@@ -444,11 +478,6 @@ impl PreForkManager {
         // Finally, restore CPU state
         child.set_registers(data.registers.clone());
 
-        // And restrict the process
-        cgroup
-            .add_process(child_pid.as_raw())
-            .context("Failed to move process to cgroup")?;
-
         // I dare you
         child.resume().context("Failed to resume child")?;
 
@@ -463,6 +492,7 @@ impl PreForkRun<'_> {
         &self,
         orig: &mut running::ProcessInfo,
         orig_cgroup: &cgroups::BoxCgroup,
+        proc_cgroup: &cgroups::ProcCgroup,
         options: SuspendOptions,
     ) -> Result<()> {
         self.state.set(State::Suspended(
@@ -470,6 +500,7 @@ impl PreForkRun<'_> {
                 &mut orig.traced_process,
                 orig.prefork_hard_rlimits.unwrap(),
                 orig_cgroup,
+                proc_cgroup,
                 options,
             )
             .suspend()?,
@@ -498,7 +529,8 @@ impl PreForkRun<'_> {
         &self,
         orig: &mut running::ProcessInfo,
         syscall_info: tracing::ptrace_syscall_info_seccomp,
-        box_cgroup: &cgroups::BoxCgroup,
+        orig_cgroup: &cgroups::BoxCgroup,
+        proc_cgroup: &cgroups::ProcCgroup,
     ) -> Result<bool> {
         // Allow all operations we can checkpoint-restore that don't touch the filesystem in an
         // impure way, e.g. open an fd to a file that can later be written to or to the standard
@@ -522,8 +554,13 @@ impl PreForkRun<'_> {
             _ => {
                 // If the seccomp filter returns TRACE for any other syscall, it has decided that
                 // a suspend is necessary.
-                self.suspend(orig, box_cgroup, SuspendOptions::new_seccomp())
-                    .context("Failed to suspend on seccomp")?;
+                self.suspend(
+                    orig,
+                    orig_cgroup,
+                    proc_cgroup,
+                    SuspendOptions::new_seccomp(),
+                )
+                .context("Failed to suspend on seccomp")?;
                 Ok(true)
             }
         }
@@ -532,14 +569,15 @@ impl PreForkRun<'_> {
     pub fn handle_syscall(
         &mut self,
         orig: &mut running::ProcessInfo,
-        box_cgroup: &cgroups::BoxCgroup,
+        orig_cgroup: &cgroups::BoxCgroup,
+        proc_cgroup: &cgroups::ProcCgroup,
     ) -> Result<bool> {
         match self
             .should_suspend_after_syscall(&mut orig.traced_process)
             .context("Failed to check if should suspend after syscsall")?
         {
             Some(options) => {
-                self.suspend(orig, box_cgroup, options)
+                self.suspend(orig, orig_cgroup, proc_cgroup, options)
                     .context("Failed to suspend after syscall")?;
                 Ok(true)
             }
@@ -613,12 +651,14 @@ impl<'a> Suspender<'a> {
         orig: &'a mut tracing::TracedProcess,
         hard_rlimits: [libc::rlim_t; 16],
         orig_cgroup: &'a cgroups::BoxCgroup,
+        proc_cgroup: &'a cgroups::ProcCgroup,
         options: SuspendOptions,
     ) -> Self {
         Self {
             orig,
             hard_rlimits,
             orig_cgroup,
+            proc_cgroup,
             options,
             inject_location: 0,
             vm_process: None,
@@ -675,8 +715,6 @@ impl<'a> Suspender<'a> {
             .context("Failed to collect memory map options")?;
         self.collect_timers().context("Failed to collect timers")?;
 
-        let memory_maps = self.orig.get_memory_maps().context("Get memory maps")?;
-
         let rlimits = self
             .collect_rlimits()
             .context("Failed to collect orig rlimits")?;
@@ -708,7 +746,9 @@ impl<'a> Suspender<'a> {
         self.collect_pending_signals()
             .context("Failed to collect pending signals")?;
 
-        // Translate memory maps only after the VM process is spawned
+        // The memory map list is deliberately parsed only after mapping the parasite, so that the
+        // stemcell sees itself as a map and can explicitly avoid unmapping itself too early
+        let memory_maps = self.orig.get_memory_maps().context("Get memory maps")?;
         self.translate_memory_maps(&memory_maps)
             .context("Failed to translate memory maps")?;
 
@@ -719,6 +759,18 @@ impl<'a> Suspender<'a> {
 
         self.restore_via_master()
             .context("Failed to restore via master")?;
+
+        // Make sure to only add the master to the same cgroup that'll later be used for memory
+        // accounting only after all allocations that aren't technically user's have happened. For
+        // instance, stemcell's memory has already been allocated, and the user memory hasn't been
+        // yet (it'll be mapped during first resume), so this location is fine.
+        let target_cgroup = self
+            .proc_cgroup
+            .create_box_cgroup()
+            .context("Failed to create a box cgroup")?;
+        target_cgroup
+            .add_process(self.master.as_ref().unwrap().get_pid().as_raw())
+            .context("Failed to add master process to cgroup")?;
 
         log!("Suspend finished in {:?}", started.elapsed());
 
@@ -732,6 +784,8 @@ impl<'a> Suspender<'a> {
             registers,
             signal_mask,
             rlimits,
+            is_first_run: true,
+            target_cgroup,
         })
     }
 
@@ -1190,7 +1244,7 @@ impl<'a> Suspender<'a> {
             alloced.base = map.base;
             alloced.end = map.end;
             alloced.prot = map.prot;
-            alloced.flags = libc::MAP_FIXED_NOREPLACE;
+            alloced.flags = libc::MAP_FIXED;
             alloced.offset = map.offset;
 
             if map.shared {

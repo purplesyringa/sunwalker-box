@@ -378,10 +378,11 @@ impl BoxCgroup {
         self._destroy()
     }
 
-    pub fn kill(&mut self) -> Result<()> {
+    pub fn kill(&mut self, except: Option<pid_t>) -> Result<()> {
         kill_cgroup(
             &self.proc_cgroup_fd,
             format!("box-{}", self.box_id).as_ref(),
+            except,
         )
         .context("Failed to kill user cgroup")
     }
@@ -456,7 +457,8 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
         }
     };
 
-    kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
+    kill_cgroup(parent, dir_name, None)
+        .with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
 
     for entry in dir.list_dir(".").context("Failed to list directory")? {
         // list_self() is broken
@@ -494,22 +496,27 @@ fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
     Ok(())
 }
 
-fn kill_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
-    // cgroup.kill is unavailable on older kernels
-    match parent.write_file(format!("{dir_name}/cgroup.kill"), 0o700) {
-        Ok(mut file) => {
-            file.write(b"1\n").context("Failed to kill cgroup")?;
-            return Ok(());
-        }
-        Err(e) => {
-            if e.kind() != std::io::ErrorKind::NotFound
-                && e.kind() != std::io::ErrorKind::PermissionDenied
-            {
-                return Err(e)
-                    .with_context(|| format!("Failed to open {dir_name}/cgroup.kill for writing"));
+fn kill_cgroup(parent: &OpenAtDir, dir_name: &str, except: Option<pid_t>) -> Result<()> {
+    if except.is_none() {
+        // cgroup.kill is unavailable on older kernels
+        match parent.write_file(format!("{dir_name}/cgroup.kill"), 0o700) {
+            Ok(mut file) => {
+                file.write(b"1\n").context("Failed to kill cgroup")?;
+                return Ok(());
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::NotFound
+                    && e.kind() != std::io::ErrorKind::PermissionDenied
+                {
+                    return Err(e).with_context(|| {
+                        format!("Failed to open {dir_name}/cgroup.kill for writing")
+                    });
+                }
             }
         }
     }
+
+    // XXX: is this racy?
 
     parent
         .write_file(format!("{dir_name}/cgroup.freeze"), 0o700)
@@ -530,12 +537,21 @@ fn kill_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
             pid > 0,
             "Found process from another pid namespace in cgroup.procs"
         );
+        if Some(pid) == except {
+            continue;
+        }
         nix::sys::signal::kill(
             nix::unistd::Pid::from_raw(pid),
             nix::sys::signal::Signal::SIGKILL,
         )
         .context("Failed to kill process")?;
     }
+
+    parent
+        .write_file(format!("{dir_name}/cgroup.freeze"), 0o700)
+        .context("Failed to open cgroup.freeze for writing")?
+        .write(b"0\n")
+        .context("Failed to unfreeze cgroup")?;
 
     Ok(())
 }
