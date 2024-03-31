@@ -56,7 +56,7 @@ class Run:
     argv: list[str]
     env: dict[str, str] = dataclasses.field(default_factory=lambda: DEFAULT_ENV)
 
-    def __post_init_(self):
+    def __post_init__(self):
         if self.env is None:
             self.env = DEFAULT_ENV
 
