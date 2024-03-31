@@ -188,19 +188,14 @@ class Box:
     def command_run(self, run: Run, stdio: Optional[Stdio] = None, limits: Optional[Metrics] = None) -> dict[str, ...]:
         return self.cmd("run", run.as_dict() | limits.as_limits_dict() | stdio.as_dict())
 
+    def open(self, path: str, *args, **kwargs):
+        return open(self.extpath(path), *args, **kwargs)
+
     def mkdir(self, path: str, owner: str = "root", mode: int = 0o755):
         path = self.extpath(path)
         os.makedirs(path, mode, exist_ok=True)
         uid = 1 if "root" == owner else 2
         os.chown(path, uid, uid)
-
-    def touch(self, path: str):
-        path = self.extpath(path)
-        # see https://stackoverflow.com/a/6222692
-        try:
-            os.utime(path, None)
-        except OSError:
-            open(path, 'a').close()
 
     def mkfile(self, path: str, content: bytes = b'', owner: str = "root", mode: int = 0o755):
         path = self.extpath(path)
@@ -210,8 +205,12 @@ class Box:
         uid = 1 if "root" == owner else 2
         os.chown(path, uid, uid)
 
-    def open(self, path: str, *args, **kwargs):
-        return open(self.extpath(path), *args, **kwargs)
+    def touch(self, path: str):
+        # see https://stackoverflow.com/a/6222692
+        try:
+            os.utime(self.extpath(path), None)
+        except OSError:
+            self.mkfile(path)
 
     def _parse_run_result(self, result: dict[str, ...]) -> (BaseVerdict, Metrics):
         verdict = {
