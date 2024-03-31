@@ -4,17 +4,17 @@ import dataclasses
 import io
 import json
 import os
-import pprint
 import re
 import shutil
 import subprocess
 import sys
 import time
 import traceback
-from typing import Callable, Optional, Tuple
+from typing import Optional
 import yaml
 
 import sunwalker_box
+from tester_box import Box
 
 
 @dataclasses.dataclass
@@ -47,7 +47,7 @@ class Test:
 
             create_dirs(self.assets, self.assets_dir)
 
-    def bind(self, box: sunwalker_box.Box):
+    def bind(self, box: Box):
         ...
 
 
@@ -102,172 +102,6 @@ class YamlTest(Test):
     pass
 
 
-def parse_size(s: str) -> float:
-    if " " not in s.strip():
-        return float(s)
-    value, unit = s.split()
-    return float(value) * {
-        "B": 1,
-        "KB": 1000,
-        "MB": 1000 ** 2,
-        "GB": 1000 ** 3,
-        "TB": 1000 ** 4,
-        "PB": 1000 ** 5,
-        "EB": 1000 ** 6,
-        "KiB": 1024,
-        "MiB": 1024 ** 2,
-        "GiB": 1024 ** 3,
-        "TiB": 1024 ** 4,
-        "PiB": 1024 ** 5,
-        "EiB": 1024 ** 6,
-        "ms": 0.001,
-        "s": 1,
-    }[unit]
-
-
-def parse_approximate_value(s: str, value_parser: Callable[[str], float]) -> tuple[float, float]:
-    value, error = s.split("+-")
-    value = value_parser(value)
-    if error.endswith("%"):
-        percentage = float(error[:-1])
-        error = percentage * value
-    else:
-        error = value_parser(error)
-    return (value - error, value + error)
-
-
-@dataclasses.dataclass
-class ApproximateMetrics:
-    cpu_time: str | Tuple[float, float] | None = None
-    idleness_time: str | Tuple[float, float] | None = None
-    real_time: str | Tuple[float, float] | None = None
-    memory: str | Tuple[float, float] | None = None
-
-    def __post_init__(self):
-        if type(self.cpu_time) is str:
-            self.cpu_time = parse_approximate_value(self.cpu_time, parse_size)
-        if type(self.idleness_time) is str:
-            self.idleness_time = parse_approximate_value(self.idleness_time, parse_size)
-        if type(self.real_time) is str:
-            self.real_time = parse_approximate_value(self.real_time, parse_size)
-        if type(self.memory) is str:
-            self.memory = parse_approximate_value(self.memory, parse_size)
-
-    def expect_match(self, metrics: sunwalker_box.Metrics):
-        if self.cpu_time:
-            assert self.cpu_time[0] <= metrics.cpu_time <= self.cpu_time[1], "Unexpected CPU time"
-
-        if self.idleness_time:
-            assert self.idleness_time[0] <= metrics.idleness_time <= self.idleness_time[1], "Unexpected idleness time"
-
-        if self.real_time:
-            assert self.real_time[0] <= metrics.real_time <= self.real_time[1], "Unexpected real time"
-
-        if self.memory:
-            assert self.memory[0] <= metrics.memory <= self.memory[1], "Unexpected memory"
-
-
-class OutputMatcher:
-    def expect_match(self, value: bytes, desc: str = ""):
-        ...
-
-
-@dataclasses.dataclass
-class FixedOutput(OutputMatcher):
-    value: bytes = b""
-    unordered: bool = False
-
-    def expect_match(self, value: bytes, desc: str = ""):
-        patched = value
-        if self.unordered:
-            patched = b"\n".join(sorted(patched.split(b"\n")))
-
-        patched_expected = self.value
-        if self.unordered:
-            patched_expected = b"\n".join(sorted(patched_expected.split(b"\n")))
-
-        assert patched == patched_expected, f"Expected {desc}: {self.value}, actual: {value}"
-
-
-@dataclasses.dataclass
-class PreviousOutput(OutputMatcher):
-    unordered: bool = False
-    value: Optional[bytes] = None
-    patched: Optional[bytes] = None
-    bias: Optional[str] = None  # +- ...
-
-    def expect_match(self, value: bytes, desc: str = ""):
-        patched = value
-        if self.unordered:
-            patched = b"\n".join(sorted(patched.split(b"\n")))
-
-        if self.value is None:
-            self.value = value
-            self.patched = patched
-            return
-
-        err_text = f"Expected {desc} to match the value from the first run: {self.value}, actual: {value}"
-        if self.bias is None:
-            assert patched == self.patched, err_text
-            return
-
-        prev = self.patched.decode().split()
-        curr = patched.decode().split()
-        assert len(prev) == len(curr), f"Different lengths of {desc} values: current: {curr}, previous: {prev}"
-
-        for prev, new in zip(prev, curr):
-            l, r = parse_approximate_value(prev + self.bias, float)
-            assert l <= float(new) <= r, err_text
-
-
-def _expect(
-    box: sunwalker_box.Box,
-    result: sunwalker_box.CompletedRun,
-    verdict: sunwalker_box.BaseVerdict = sunwalker_box.Exited(0),
-    metrics: Optional[ApproximateMetrics] = None,
-    stdout: OutputMatcher | bytes | str = OutputMatcher(),
-    stderr: OutputMatcher | bytes | str = OutputMatcher()
-) -> dict[str, OutputMatcher]:
-
-    try:
-        if result.stdio.stdout is not None:
-            with box.open(result.stdio.stdout, 'rb') as f:
-                stdout_bytes = f.read()
-            with box.open(result.stdio.stderr, 'rb') as f:
-                stderr_bytes = f.read()
-
-        assert verdict == result.verdict or type(result.verdict) is verdict, "Unexpected verdict"
-        if metrics:
-            metrics.expect_match(result.metrics)
-
-        if result.stdio.stdout is not None:
-            if type(stdout) is str:
-                stdout = stdout.encode()
-            if type(stdout) is bytes:
-                stdout = FixedOutput(stdout)
-            stdout.expect_match(stdout_bytes, "stdout")
-
-            if type(stderr) is str:
-                stderr = stderr.encode()
-            if type(stderr) is bytes:
-                stderr = FixedOutput(stderr)
-            stderr.expect_match(stderr_bytes, "stderr")
-
-    except BaseException as e:
-        pretty_result = pprint.pformat(result, width=100, compact=True).replace('\t', '    ')
-        e.add_note(f"Run stats: {pretty_result}")
-
-        e.add_note(f"stdout: {locals().get('stdout_bytes')}")
-        e.add_note(f"stderr: {locals().get('stderr_bytes')}")
-
-        if result.context is not None:
-            e.add_note(f"Context: {result.context}")
-
-        raise e
-
-    return dict(stdout=stdout, stderr=stderr)
-
-
 @dataclasses.dataclass
 class SingleTest:
     slug: str
@@ -291,7 +125,7 @@ class SingleTest:
         for key, value in self.outer_env.items():
             os.environ[key] = value
 
-        with sunwalker_box.Box(
+        with Box(
             tester.box_config,
             sunwalker_box.Config(
                 core=core,
@@ -303,40 +137,17 @@ class SingleTest:
             )
         ) as box:
 
-            def run(
-                run: Optional[sunwalker_box.Run] = None,
-                input: Optional[str] = None,
-                stdio: Optional[sunwalker_box.Stdio] = None,
-                limits: Optional[sunwalker_box.Metrics] = None,
-                context: Optional[str] = None
-            ) -> sunwalker_box.CompletedRun:
-                if stdio is None:
-                    stdio = sunwalker_box.Stdio()
+            def run(run=None, input=None, stdio=None, limits=None, context=None):
+                return box.run(run or sunwalker_box.Run(argv=self.test.argv), input, stdio, limits, context)
 
-                if limits is not None:
-                    if type(limits.cpu_time) is str:
-                        limits.cpu_time = parse_size(limits.cpu_time)
-                    if type(limits.idleness_time) is str:
-                        limits.idleness_time = parse_size(limits.idleness_time)
-                    if type(limits.real_time) is str:
-                        limits.real_time = parse_size(limits.real_time)
-                    if type(limits.memory) is str:
-                        limits.memory = int(parse_size(limits.memory))
-                else:
-                    limits = sunwalker_box.Metrics()
-
-                if run is None:
-                    run = sunwalker_box.Run(argv=self.test.argv)
-
-                return box.run(run, input, stdio, limits, context)
-
-            def bind(source, destination, readonly=False, asset=True):
-                if asset:
+            def bind(source, mountpoint, readonly=False):
+                # This is a hack to use assets unless absolute path is explicitly used, because one should not rely on current workdir here
+                if not os.path.isabs(source):
                     source = os.path.abspath(os.path.join(self.test.assets_dir, source))
-                return box.bind(source, destination, readonly)
+                return box.bind(source, mountpoint, readonly)
 
-            def bind_ro(source, destination, asset=True):
-                return bind(source, destination, True, asset)
+            def bind_ro(source, mountpoint):
+                return bind(source, mountpoint, readonly=True)
 
             def commit():
                 self.test.files_committed = True
@@ -346,18 +157,10 @@ class SingleTest:
                 box.reset()
                 self.test.bind(box)
 
-            def expect(
-                result: sunwalker_box.CompletedRun,
-                verdict: sunwalker_box.BaseVerdict = sunwalker_box.Exited(0),
-                metrics: Optional[ApproximateMetrics] = None,
-                stdout: OutputMatcher | bytes | str = OutputMatcher(),
-                stderr: OutputMatcher | bytes | str = OutputMatcher()
-            ) -> (OutputMatcher, OutputMatcher):
-                return _expect(box, result, verdict, metrics, stdout, stderr)
-
             touch = box.touch
             mkdir = box.mkdir
             mkfile = box.mkfile
+            expect = box.expect
             extpath = box.extpath
             reset = box.reset
 
@@ -365,7 +168,7 @@ class SingleTest:
                 self.test.bind(box)
                 argv = self.test.argv
 
-                header = "from sunwalker_box import *\n"
+                header = "from sunwalker_box import *; from tester_box import *\n"
                 exec(header + self.script, globals() | locals() | {"parse_size": None})
 
             except Exception as e:

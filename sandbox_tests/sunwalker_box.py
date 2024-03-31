@@ -3,8 +3,9 @@ import enum
 import itertools
 import json
 import os
+import pprint
 import subprocess
-from typing import Optional
+from typing import Callable, Optional, Tuple
 
 
 DEFAULT_ENV = {
@@ -39,6 +40,23 @@ class Metrics:
 
     def as_limits_dict(self):
         return dict(map(lambda kv: (kv[0] + "_limit", kv[1]), _ignore_unset_values(self)))
+
+
+@dataclasses.dataclass(kw_only=True)
+class ApproximateMetrics:
+    cpu_time: Optional[Tuple[float, float]] = None
+    idleness_time: Optional[Tuple[float, float]] = None
+    real_time: Optional[Tuple[float, float]] = None
+    memory: Optional[Tuple[float, float]] = None
+
+    def _expect(self, key: str, value: Optional[float], lr: Optional[Tuple[float, float]]):
+        assert lr is None or (lr[0] <= value <= lr[1]), f"Unexpected {key}: value {value} is not between {lr[0]} and {lr[1]}"
+
+    def expect_match(self, metrics: Metrics):
+        self._expect('cpu_time', metrics.cpu_time, self.cpu_time)
+        self._expect('idleness_time', metrics.idleness_time, self.idleness_time)
+        self._expect('real_time', metrics.real_time, self.real_time)
+        self._expect('memory', metrics.memory, self.memory)
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -139,7 +157,6 @@ class CompletedRun:
     verdict: BaseVerdict
     metrics: Metrics
     stdio: Stdio
-    context: str
 
 
 class Box:
@@ -219,7 +236,7 @@ class Box:
             "CPUTimeLimitExceeded": Limited(Limit.cpu_time),
             "RealTimeLimitExceeded": Limited(Limit.real_time),
             "IdlenessTimeLimitExceeded": Limited(Limit.idleness_time),
-            "MemoryLimitExceeded": Limited(Limit.memory)
+            "MemoryLimitExceeded": Limited(Limit.memory),
         }.get(result.get("limit_verdict"))
 
         metrics = Metrics(**{
@@ -230,34 +247,17 @@ class Box:
 
         return (verdict, metrics)
 
-    def run(
-        self,
-        run: Run,
-        input: Optional[str] = None,
-        stdio: Stdio = Stdio(),
-        limits: Metrics = Metrics(),
-        context: Optional[str] = None
-    ) -> CompletedRun:
-        try:
-            if input is None:
-                stdio.stdin = None
-            else:
-                stdio.stdin = stdio.stdin or "/space/stdin.txt"
-                self.mkfile(stdio.stdin, input.encode())
+    def run(self, run: Run, stdio: Stdio, limits: Metrics) -> CompletedRun:
+        result = self.command_run(run, stdio, limits)
+        verdict, metrics = self._parse_run_result(result)
+        return CompletedRun(verdict, metrics, stdio)
 
-            stdio.stdout = stdio.stdout or "/space/stdout.txt"
-            stdio.stderr = stdio.stderr or "/space/stderr.txt"
-
-            result = self.command_run(run, stdio, limits)
-            verdict, metrics = self._parse_run_result(result)
-            return CompletedRun(verdict, metrics, stdio, context)
-        except Exception as e:
-            if context is not None:
-                e.add_note(f"Context: {context}")
-            raise
+    def expect(self, result: CompletedRun, verdict: BaseVerdict | type, metrics: ApproximateMetrics):
+        assert verdict == result.verdict or type(result.verdict) is verdict, f"Unexpected verdict: {result.verdict} is not {verdict}"
+        metrics.expect_match(result.metrics)
 
 
-@ dataclasses.dataclass
+@dataclasses.dataclass
 class CoreIsolator:
     box: BoxConfig
     cores: set[int] = dataclasses.field(default_factory=lambda: {1})

@@ -1,7 +1,7 @@
 /*
 description: A simple program works as intended
 script: |
-    expect(result=run(input="world"), stdout="Hello, world!", stderr="Bye, world!")
+    expect(run(input="world"), stdout="Hello, world!", stderr="Bye, world!")
     run_reset()
 */
 
