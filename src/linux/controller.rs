@@ -3,7 +3,7 @@ use crate::{
     linux::{cgroups, manager, reaper, rootfs, sandbox, system},
     log,
 };
-use anyhow::{anyhow, ensure, Context, Result};
+use anyhow::{anyhow, Context, Result};
 use nix::{sched, sys::resource};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
@@ -11,10 +11,8 @@ use std::sync::mpsc;
 pub struct Controller {
     quotas: rootfs::DiskQuotas,
     cgroup: Option<cgroups::Cgroup>,
-    reaper_channel:
-        Option<crossmist::Duplex<reaper::Command, std::result::Result<Option<String>, String>>>,
-    manager_channel:
-        Option<crossmist::Duplex<manager::Command, std::result::Result<Option<String>, String>>>,
+    reaper_channel: Option<crossmist::Duplex<reaper::Command, Result<Option<String>, String>>>,
+    manager_channel: Option<crossmist::Duplex<manager::Command, Result<Option<String>, String>>>,
     rootfs_state: Option<rootfs::RootfsState>,
 }
 
@@ -159,15 +157,6 @@ impl Controller {
         self.reset()?;
 
         log!("Controller is ready");
-        Ok(())
-    }
-
-    pub fn ensure_allowed_to_modify(&self, path: &Path) -> Result<()> {
-        // /newroot/*
-        ensure!(
-            path.components().count() > 3,
-            "File {path:?} cannot be modified"
-        );
         Ok(())
     }
 

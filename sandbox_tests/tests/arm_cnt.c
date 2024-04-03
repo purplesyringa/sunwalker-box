@@ -4,7 +4,7 @@ arch:
 - aarch64
 script: |
     for i in range(4):
-        expect(run(input=str(i), context=i), verdict=Signaled(-4))
+        expect(run(input=str(i), context=i), verdict=Signaled(4))
         run_reset()
 */
 
