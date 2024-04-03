@@ -164,7 +164,7 @@ class Box:
         self.proc = box.run(opts.as_opts())
 
     def __enter__(self):
-        self.update_extpath()
+        self.root_path = self.cmd("extpath")
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
@@ -188,9 +188,6 @@ class Box:
         else:
             raise ValueError("Unexpected response from the box")
 
-    def update_extpath(self):
-        self.root_path = self.cmd("extpath", "/")
-
     def extpath(self, where: str):
         return self.root_path + where
 
@@ -199,7 +196,6 @@ class Box:
 
     def reset(self):
         res = self.cmd("reset")
-        self.update_extpath()
         return res
 
     def commit(self):

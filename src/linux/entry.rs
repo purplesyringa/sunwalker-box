@@ -379,7 +379,11 @@ fn handle_command(
         ),
         "extpath" => CliCommand::execute(
             Extpath {
-                path: json::from_str(arg).context("Invalid JSON")?,
+                path: if arg.is_empty() {
+                    "/".into()
+                } else {
+                    json::from_str(arg).context("Invalid JSON")?
+                },
             },
             controller,
         ),
