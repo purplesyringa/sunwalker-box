@@ -173,7 +173,10 @@ class Box:
             pass
 
     def cmd(self, name: str, arg=None):
-        self.proc.stdin.write(f"{name} {json.dumps(arg)}\n".encode())
+        if arg is None:
+            self.proc.stdin.write(f"{name}\n".encode())
+        else:
+            self.proc.stdin.write(f"{name} {json.dumps(arg)}\n".encode())
         self.proc.stdin.flush()
         line = self.proc.stdout.readline().strip().decode()
         if line == "ok":
