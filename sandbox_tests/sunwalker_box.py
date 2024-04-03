@@ -38,8 +38,8 @@ class Metrics:
     memory: Optional[int] = None  # in bytes
     processes: Optional[int] = None
 
-    def as_limits_dict(self):
-        return dict(map(lambda kv: (kv[0] + "_limit", kv[1]), _ignore_unset_values(self)))
+    def as_dict(self):
+        return dict(_ignore_unset_values(self))
 
 
 @dataclasses.dataclass(kw_only=True)
@@ -164,7 +164,7 @@ class Box:
         self.proc = box.run(opts.as_opts())
 
     def __enter__(self):
-        self.root_path = self.cmd("extpath")
+        self.root_path = self.request("extpath")
         return self
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
@@ -172,37 +172,34 @@ class Box:
         with self.proc:
             pass
 
-    def cmd(self, name: str, arg=None):
-        if arg is None:
-            self.proc.stdin.write(f"{name}\n".encode())
-        else:
-            self.proc.stdin.write(f"{name} {json.dumps(arg)}\n".encode())
+    def request(self, command: str, payload=None):
+        request = dict(command=command)
+        if payload is not None:
+            request = request | dict(payload=payload)
+        self.proc.stdin.write(json.dumps(request).encode())
+        self.proc.stdin.write(b'\n')
         self.proc.stdin.flush()
         line = self.proc.stdout.readline().strip().decode()
-        if line == "ok":
-            return None
-        elif line.startswith("ok "):
-            return json.loads(line[3:])
-        elif line.startswith("error "):
-            raise RuntimeError(json.loads(line[6:]))
-        else:
-            raise ValueError("Unexpected response from the box")
+        response = json.loads(line)
+        if response['status'] != 'Success':
+            raise RuntimeError(response['error'])
+        return response['data']
 
     def extpath(self, where: str):
         return self.root_path + where
 
     def bind(self, source: str, mountpoint: str, readonly: bool = False):
-        return self.cmd("bind", {"external": source, "internal": mountpoint, "ro": readonly})
+        return self.request("bind", dict(source=source, mountpoint=mountpoint, readonly=readonly))
 
     def reset(self):
-        res = self.cmd("reset")
+        res = self.request("reset")
         return res
 
     def commit(self):
-        return self.cmd("commit")
+        return self.request("commit")
 
-    def command_run(self, run: Run, stdio: Optional[Stdio] = None, limits: Optional[Metrics] = None) -> dict[str, ...]:
-        return self.cmd("run", run.as_dict() | limits.as_limits_dict() | stdio.as_dict())
+    def command_run(self, run: Run, stdio: Stdio, limits: Metrics) -> dict[str, ...]:
+        return self.request("run", run.as_dict() | dict(stdio=stdio.as_dict(), limits=limits.as_dict()))
 
     def open(self, path: str, *args, **kwargs):
         return open(self.extpath(path), *args, **kwargs)
@@ -228,21 +225,19 @@ class Box:
         except OSError:
             self.mkfile(path)
 
-    def _parse_run_result(self, result: dict[str, ...]) -> (BaseVerdict, Metrics):
-        verdict = {
-            "OK": Exited(result.get("exit_code")),
-            "Signaled": Signaled(result.get("exit_code")),
-            "CPUTimeLimitExceeded": Limited(Limit.cpu_time),
-            "RealTimeLimitExceeded": Limited(Limit.real_time),
-            "IdlenessTimeLimitExceeded": Limited(Limit.idleness_time),
-            "MemoryLimitExceeded": Limited(Limit.memory),
-        }.get(result.get("limit_verdict"))
+    def _parse_verdict(self, verdict: dict[str, ...]) -> BaseVerdict:
+        kind = verdict.get('kind')
+        if kind == "Exited":
+            return Exited(verdict.get("exit_code"))
+        if kind == "Signaled":
+            return Signaled(verdict.get("signal_number"))
+        if kind == "LimitExceeded":
+            return Limited(Limit[verdict.get("limit")])
+        raise RuntimeError("Unexpected verdict from the box")
 
-        metrics = Metrics(**{
-            key: result.get(key)
-            for key
-            in "cpu_time real_time idleness_time memory".split()
-        })
+    def _parse_run_result(self, result: dict[str, ...]) -> (BaseVerdict, Metrics):
+        verdict = self._parse_verdict(result.get('verdict'))
+        metrics = Metrics(**result.get('metrics'))
 
         return (verdict, metrics)
 

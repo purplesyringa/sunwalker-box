@@ -187,6 +187,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "miniserde-enum"
+version = "0.1.3"
+source = "git+https://github.com/yuki0iq/miniserde-enum#477254f27cacd8b1bda8e2545fec9540bd9eb94f"
+dependencies = [
+ "miniserde",
+ "proc-macro2",
+ "quote",
+ "syn 1.0.109",
+]
+
+[[package]]
 name = "nix"
 version = "0.27.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -307,6 +318,7 @@ dependencies = [
  "argh",
  "crossmist",
  "miniserde",
+ "miniserde-enum",
  "nix",
  "openat",
  "rand",

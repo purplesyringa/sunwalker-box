@@ -125,7 +125,7 @@ If, after running the `start` command, sunwalker quietly awaits input, you're do
 
 ### Commands
 
-The commands typically look like `{COMMAND_NAME} {JSON_ENCODED_ARGUMENT}` and are terminated with a newline. The box responses with a single line containing `ok`, `ok {ADDITIONAL_JSON_DATA}`, or `error {ERROR_DESCRIPTION_AS_A_JSON_STRING}`.
+The requests and responses are JSONs. Requests typically look like `{"command":"<command-name>", "payload":...}` and are terminated with a newline. The box responses either with `{"status":"Failure", "error":...}` in case of error, and `{"status":"Success", "data":...}`.
 
 
 ### Controlling processes
@@ -133,26 +133,52 @@ The commands typically look like `{COMMAND_NAME} {JSON_ENCODED_ARGUMENT}` and ar
 The command `run` starts a process inside the sandbox. It takes a JSON object with the following options as an argument:
 
 - `argv` (required) -- a list of arguments, including the path/name of the program as the first argument, e.g. `"argv": ["program_name", "arg1", ...]`.
-- `stdin`, `stdout`, `stderr` (optional) -- to which files standard streams are to be redirected. If missing, uses `/dev/null` (must be present inside the chroot environment). Example: `"stdin": "/space/input.txt"`.
-- `real_time_limit` (optional) -- how much wall time the program may use, in seconds, e.g. `"real_time_limit": 1.5`.
-- `cpu_time_limit` (optional) -- how much CPU time the program may use, in seconds, e.g. `"cpu_time_limit": 1.0`.
-- `idleness_time_limit` (optional) -- how much time the program may spend in iowait in total, in seconds, e.g. `"idleness_time_limit": 1.0`.
-- `memory_limit` (optional) -- how much RAM the program may use, in bytes, e.g. `"memory_limit": 128000000`.
-- `processes_limit` (optional) -- how many processes the program may start at once (including itself), e.g. `"processes_limit": 64`. Must be positive.
+- `stdio` (optional) -- a dict of `stdin`, `stdout`, `stderr` (each key is optional) -- to which files standard streams are to be redirected. If missing, uses `/dev/null` (must be present inside the chroot environment). Example: `"stdin": "/space/input.txt"`.
+- `limits` (optional) -- a dictionary, how much of resource the program may use
+  - `real_time` (optional) -- wall time, in seconds, e.g. `"real_time": 1.5`.
+  - `cpu_time` (optional) -- CPU time, in seconds, e.g. `"cpu_time": 1.0`.
+  - `idleness_time` (optional) -- total time spent in iowait, in seconds, e.g. `"idleness_time": 1.0`.
+  - `memory` (optional) -- RAM usage, in bytes, e.g. `"memory": 128000000`.
+  - `processes` (optional) -- spawned processes, including itself, e.g. `"processes": 64`. Must be positive.
 - `env` (optional) -- the new environment of the process as a string-to-string dictionary. If missing, environment variables are inherited. If passed, all old environment variables are deleted.
 
-To prevent DOS, `cpu_time_limit` and `processes_limit` must necessarily be set. Setting `real_time_limit` and/or `idleness_time_limit` is also recommended, but not strictly necessary, e.g. if you kill the box on timeout manually.
+The fullest `run` command example is, pretty-printed
+```json
+{
+  "command": "run",
+  "payload": {
+    "argv": ["/bin/echo", "nyaa"],
+    "env": {
+      "LC_ALL": "C",
+      "LANG": "en_US",
+    },
+    "limits": {
+      "cpu_time": 1.0,  // 1 second
+      "idleness_time": 0.5,  // 500 ms
+      "real_time": 1.5,  // 1.5 seconds
+      "memory": 1024000,  // slightly greater than 1 MB
+      "processes": 1,  // disallow forking
+    },
+    "stdio": {
+      "stdin": "/dev/null",
+      "stdout": "/space/out",
+      "stderr": "/dev/null",
+    }
+  }
+}
+```
+
+To prevent DoS attacks, CPU time and processes limits must necessarily be set. Limiting real and/or idleness time is also recommended, but not strictly necessary, e.g. if you kill the box on timeout manually.
 
 The program is always executed with working directory `/space`.
 
-This command is blocking. When the program exits or a limit expires, an `ok` status is returned (even if a limit expired) with a JSON-object value with the following properties:
+This command is blocking. When the program exits or a limit expires, a `Success` status is returned (even if a limit expired) with a JSON-object value with the following properties:
 
-- `limit_verdict` -- either of the following:
-  - `"OK"` -- the program exitted without exceeding limits.
-  - `"Signaled"` -- the program was terminated by a signal.
-  - `"RealTimeLimitExceeded" / "CPUTimeLimitExceeded" / "IdlenessTimeLimitExceeded" / "MemoryLimitExceeded"` -- the program used more wall-clock time/CPU time/iowait time/memory than allowed.
-- `exit_code` -- either the exit code of the program from `0` to `255` (`0` typically indicates success), or, if `limit_verdict` is `"Signaled"`, the negated number of the signal, e.g. `-9` for `SIGKILL`.
-- `real_time / cpu_time / idleness_time / memory` -- approximately how much wall-clock time/CPU time/iowait time/memory the program used, in the same units as the corresponding limits (i.e. seconds or bytes). Note the word "approximately" -- even when the limit is exceeded, i.e. `limit_verdict` is not `"OK"`, the corresponding metric might be slightly less than the limit. How to handle this discrepancy is your choice, but **do not use metrics to check if a limit has been exceeded**.
+- `verdict` -- either of the following:
+  - `{"kind":"Exited", "exit_code": <exit-code>}` -- the program exitted without exceeding limits, `exit_code` is the exit code of the program from `0` to `255` (`0` typically indicates success).
+  - `{"kind":"Signaled", "signal_number": <signal-number>}` -- the program was terminated by a signal, `signal_number` is plain signal number, e.g. `9` for `SIGKILL`.
+  - `{"kind":"LimitExceeded", "limit": <limit>}` -- the program used more `<limit>` (may be one of `real_time`, `cpu_time`, `idleness_time` and `memory`) than allowed
+- `metrics` -- a dictionary with keys `real_time`, `cpu_time`, `idleness_time`, `memory` -- approximately how much wall-clock time/CPU time/iowait time/memory the program used, in the same units as the corresponding limits (i.e. seconds or bytes). Note the word "approximately" -- even when the limit is exceeded, i.e. verdict is not `Exited`, the corresponding metric might be slightly less than the limit. How to handle this discrepancy is your choice, but **do not use metrics to check if a limit has been exceeded**.
 
 After the process finishes, you can run another program in the same box in the same way. And if you want to run another program (or the same program with different input, you get the gist), but without the leftovers of the previous processes (PIDs, temporary files, network data, etc.), don't restart the sandbox! Instead, use `reset`, which efficiently restores the box to the original state as if sunwalker-box was just invoked, and proceed without restarting sunwalker-box. This is much more efficient. And if you need to revert to a more mature state, `commit` is available.
 
@@ -165,10 +191,7 @@ Sunwalker creates a user-writable `/space` directory to put user files to.
 
 Unless specified otherwise, the paths are relative to the box chroot environment.
 
-- `mkdir "/path/on/filesystem"` -- create a directory at the given path. Returns nothing.
-- `ls "/path/to/a/directory"` -- list the contents of the directory. Returns a JSON object with filenames as keys and objects satisfying `{file_type: "dir" | "file" | "symlink" | "block" | "char" | "fifo" | "socket" | "unknown", len: integer, mode: integer}` as values.
-- `cat "/path/to/a/file"` or `cat {"path": "/path/to/a/file", "at": seek_to_offset, "len": count_of_bytes_to_read}` -- returns the contents of the whole file or its part as an array of byte values. Seeking further than EOF is considered an error, reaching EOF before `len` is exhausted is not. A length limit of `0` means unlimited. Only regular files can be read this way.
-- `extpath "/path/to/a/file"` -- returns a path by which a file inside the sandbox can be accessed from outside.
-- `mkfile {"path": "/path/to/a/file", "content": [...byte_values]}` -- creates a regular file with the given bytes content.
-- `mksymlink {"link": "/where/to/put/the/link", "target": "/where/the/link/points/to"}` -- creates a symlink with the given target. The target does not have to exist or be a path.
-- `bind {"internal": "/path/inside/the/box", "external": "/path/outside/the/box", "ro": false/true}` -- creates a read-write or a read-only mirror of an external directory or file. The file/directory must already exist inside the sandbox; if they don't, use `mkfile`/`mkdir` before.
+- `{"command":"extpath"}` -- returns a path by which the root of sandboxed filesystem can be accessed from outside.
+- `{"command":"bind", "payload":{"source": "/path/outside/the/box", "mountpoint": "/path/inside/the/box", "readonly": false/true}}` -- creates a read-write or a read-only mirror of an external directory or file. The file/directory must already exist inside the sandbox; if they don't, use `mkfile`/`mkdir` before.
+
+Any other filesystem-related operations can be done from user side with `extpath` command and in the same way as if they were done in a regular filesystem. The only difference is in UIDs and GIDs: please don't use ids other than 1 (root) and 2 (user) as they may or _may not_ be mapped into `nobody:nogroup`.
