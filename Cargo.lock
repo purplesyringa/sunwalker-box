@@ -151,9 +151,9 @@ source = "git+https://github.com/yuki0iq/libc?branch=libc-0.2#39a5b15b64c340e73c
 
 [[package]]
 name = "mini-internal"
-version = "0.1.36"
+version = "0.1.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "51c55587ac25c2d63a75e4171221b2803a9b9e83aeb7bdfde5833c4cd578b50d"
+checksum = "f28c501b91dabb672c4b303fb6ea259022ab21ed8d06a457ac21b70e479fb367"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -162,9 +162,9 @@ dependencies = [
 
 [[package]]
 name = "miniserde"
-version = "0.1.36"
+version = "0.1.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8621df4a46e5de4c1541242407da38281ea0e320b94e238477688a36a1a059f7"
+checksum = "bd044c3b41ba1d92e3dbeef687ecfe5d1dcbd8b4fa1d33610f5ce5546ad6aac1"
 dependencies = [
  "itoa",
  "mini-internal",
