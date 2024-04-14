@@ -3,21 +3,26 @@
 
 with pkgs;
 
+let
+  src = ./.;
+  cargoLockToPackageSet = lockfile: builtins.foldl' (s: q: s // { "${q.name}-${q.version}" = q; }) {} (builtins.fromTOML (builtins.readFile lockfile)).package;
+  packageSetToCargoLock = packages: "version = 3\n" + (builtins.concatStringsSep "" (map (package: "\n[[package]]\n" + (builtins.concatStringsSep "\n" (map (k: "${k} = ${builtins.toJSON package."${k}"}") (builtins.attrNames package))) + "\n") (builtins.attrValues packages)));
+  packageSet = (cargoLockToPackageSet "${src}/Cargo.lock") // (cargoLockToPackageSet "${rustPlatform.rustcSrc}/Cargo.lock");
+in 
+
 stdenv.mkDerivation rec {
   name = "sunwalker-box";
-  src = ./.;
-  cargoLock = let
-    cargoLockToPackageSet = lockfile: builtins.foldl' (s: q: s // { "${builtins.toJSON [q.name q.version]}" = q; }) {} (builtins.fromTOML (builtins.readFile lockfile)).package;
-    packageSetToCargoLock = packages: "version = 3\n" + (builtins.concatStringsSep "" (map (package: "\n[[package]]\n" + (builtins.concatStringsSep "\n" (map (k: "${k} = ${builtins.toJSON package."${k}"}") (builtins.attrNames package))) + "\n") (builtins.attrValues packages)));
-  in writeTextFile {
+  inherit src;
+  cargoLock = writeTextFile {
     name = "Cargo.lock";
-    text = packageSetToCargoLock ((cargoLockToPackageSet "${src}/Cargo.lock") // (cargoLockToPackageSet "${rustPlatform.rustcSrc}/Cargo.lock"));
+    text = packageSetToCargoLock packageSet;
   };
   cargoDeps = rustPlatform.importCargoLock {
     lockFile = cargoLock;
-    # TODO: how and when to update these hashes???
-    outputHashes."anyhow-1.0.79" = "1z9r9k44jr194hgmh1qxcjyw2ymx2ymrl43bikmlzm2cmib3lmgp";
-    outputHashes."libc-0.2.153" = "0x9gq1q5gssgvjjzyrlzd85id2ax7hfs84d354c3mg5jcqmca2rp";
+    outputHashes = builtins.mapAttrs (k: v: if v.url == packageSet."${k}".source
+      then v.narHash
+      else throw "outdated output-hashes.json: url ${v.url}, while in Cargo.lock is ${packageSet."${k}".source}"
+    ) (builtins.fromJSON (builtins.readFile ./output-hashes.json));
   };
   patchPhase = ''
     sed -i 's: +nightly: --offline:' Makefile
