@@ -33,6 +33,23 @@ class Test:
         self.files_committed = False
         self.argv = []
 
+    def _create_dirs(self, structure: dict[str, ...], dir: str):
+        for name, value in structure.items():
+            path = os.path.join(dir, name)
+            if isinstance(value, dict):
+                os.mkdir(path)
+                self._create_dirs(value, path)
+            elif isinstance(value, str):
+                if value.startswith("-> "):
+                    os.symlink(value[3:], path)
+                else:
+                    with open(path, "wb") as f:
+                        f.write(value.encode())
+            else:
+                assert False, value
+
+            os.lchown(path, 2, 2)  # internal user
+
     def prepare(self, tester):
         if self.root is not None:
             self.root_dir = f"build/roots/{self.slug}"
@@ -40,7 +57,7 @@ class Test:
                 shutil.rmtree(self.root_dir)
             os.mkdir(self.root_dir)
 
-            create_dirs(self.root, self.root_dir)
+            self._create_dirs(self.root, self.root_dir)
 
         if self.assets is not None:
             self.assets_dir = f"build/assets/{self.slug}"
@@ -48,7 +65,7 @@ class Test:
                 shutil.rmtree(self.assets_dir)
             os.mkdir(self.assets_dir)
 
-            create_dirs(self.assets, self.assets_dir)
+            self._create_dirs(self.assets, self.assets_dir)
 
     def bind(self, box: Box):
         ...
@@ -190,24 +207,6 @@ class SingleTest:
                 )
                 error.put(f"Executed script:\n{script}")
                 raise
-
-
-def create_dirs(structure: dict[str, ...], dir: str):
-    for name, value in structure.items():
-        path = os.path.join(dir, name)
-        if isinstance(value, dict):
-            os.mkdir(path)
-            create_dirs(value, path)
-        elif isinstance(value, str):
-            if value.startswith("-> "):
-                os.symlink(value[3:], path)
-            else:
-                with open(path, "wb") as f:
-                    f.write(value.encode())
-        else:
-            assert False, value
-
-        os.lchown(path, 2, 2)  # internal user
 
 
 @dataclasses.dataclass
