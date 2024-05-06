@@ -1,5 +1,6 @@
 /*
 description: CPU time limit works
+slow: true
 script: |
     expect(
         run(limits=Metrics(cpu_time=0.5)),

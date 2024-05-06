@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-import contextlib
+import argparse
+from concurrent.futures import ThreadPoolExecutor
 import dataclasses
 import io
 import json
@@ -9,7 +10,9 @@ import shutil
 import subprocess
 import sys
 import time
+import threading
 import traceback
+import queue
 from typing import Optional
 import yaml
 
@@ -111,6 +114,7 @@ class SingleTest:
     arch: Optional[list[str]] = None
     outer_env: dict[str, str] = dataclasses.field(default_factory=lambda: {})
     quotas: dict[str, ...] = dataclasses.field(default_factory=lambda: {})
+    slow: bool = False
 
     def __post_init__(self):
         if self.outer_env is None:
@@ -121,12 +125,12 @@ class SingleTest:
     def prepare(self, tester):
         self.test.prepare(tester)
 
-    def run(self, tester, core: int):
+    def run(self, box_config, core: int, error: queue.Queue):
         for key, value in self.outer_env.items():
             os.environ[key] = value
 
         with Box(
-            tester.box_config,
+            box_config,
             sunwalker_box.Config(
                 core=core,
                 root=self.test.root_dir,
@@ -184,7 +188,7 @@ class SingleTest:
                     for i, line
                     in enumerate(self.script.split('\n')[:-1], 1)
                 )
-                print(f"Executed script:\n{script}")
+                error.put(f"Executed script:\n{script}")
                 raise
 
 
@@ -207,10 +211,77 @@ def create_dirs(structure: dict[str, ...], dir: str):
 
 
 @dataclasses.dataclass
+class TestStarted:
+    slug: str
+
+
+@dataclasses.dataclass
+class TestFinished:
+    slug: str
+    description: str
+    duration: float
+    ex: Exception
+    trace: str
+    error: queue.Queue
+
+    def __post_init__(self):
+        if not self.ex:
+            self.kind = "pass"
+        elif isinstance(self.ex, AssertionError):
+            self.kind = "failure"
+        else:
+            self.kind = "crash"
+
+    def as_strings(self):
+        time_text = f"{self.duration:.1f}s" if self.duration > 0.1 else "    "
+        yield f"\x1b[36m{time_text}\x1b[0m "
+
+        status = "\x1b[32m OK \x1b[0m" if self.kind == "pass" else "\x1b[91mFAIL\x1b[0m"
+        yield f'{status} {self.slug}'
+
+        if self.kind != "pass":
+            yield '\n'
+            yield f"\x1b[36m  {self.description}\x1b[0m\n"
+
+            while not self.error.empty():
+                message = self.error.get_nowait()
+                yield from ('  --- executor message ---\n  ', message.replace('\n', '\n  '), '\n')
+
+            if self.kind == "failure":
+                yield from ("\x1b[33m  ", str(self.ex).replace("\n", "\n  "), "\x1b[0m\n    ", '\n    '.join(self.ex.__notes__))
+            elif self.kind == "crash":
+                yield from ("\x1b[95m", self.ex, "\x1b[0m\n", self.trace)
+
+
+class Testset:
+    def __init__(self, len):
+        self.current = set()
+        self.count = 0
+        self.len = len
+
+    def started(self, slug):
+        self.current.add(slug)
+
+    def finished(self, slug):
+        self.current.remove(slug)
+        self.count += 1
+
+    def is_running(self):
+        return self.count != self.len
+
+    def __str__(self):
+        return f"[{self.count}/{self.len}] Testing {', '.join(self.current)}..."
+
+
+@dataclasses.dataclass
 class Tester:
     box_config: sunwalker_box.BoxConfig
     arch: str
-    whitelist: Optional[set[str]] = None
+    allow: Optional[set[str]] = None
+    block: Optional[set[str]] = None
+    hide_passed: bool = False
+    bail_on_fail: bool = False
+    current_status: bool = False
 
     def __post_init__(self):
         os.makedirs("build", exist_ok=True)
@@ -232,21 +303,18 @@ class Tester:
     def register(self):
         for test_file in os.listdir("tests"):
             slug, ext = test_file.rsplit(".", 1)
-            if slug not in (self.whitelist or slug):
+            if slug in (self.block or set()) or slug not in (self.allow or slug):
                 self.skips += 1
                 continue
 
             test_class: Test
             with open(os.path.join("tests", test_file)) as f:
                 if ext == "c":
-                    yaml_header = re.match(r"/\*([\s\S]+?)\*/", f.read()).group(1)
-                    test_class = CTest
+                    test_class, yaml_header = CTest, re.match(r"/\*([\s\S]+?)\*/", f.read()).group(1)
                 elif ext == "py":
-                    yaml_header = re.match(r"\"\"\"([\s\S]+?)\"\"\"", f.read()).group(1)
-                    test_class = PyTest
+                    test_class, yaml_header = PyTest, re.match(r"\"\"\"([\s\S]+?)\"\"\"", f.read()).group(1)
                 elif ext == "yaml":
-                    yaml_header = f.read()
-                    test_class = YamlTest
+                    test_class, yaml_header = YamlTest, f.read()
 
             header = yaml.unsafe_load(yaml_header)
             if self.arch not in (header.get("arch") or self.arch):
@@ -257,7 +325,7 @@ class Tester:
             self.tests.append(SingleTest(
                 slug,
                 test=test_class(slug, **{key: header.get(key) for key in "static root assets".split()}),
-                **{key: header.get(key) for key in "description script arch outer_env quotas".split()}
+                **{key: header.get(key) for key in "description script arch outer_env quotas slow".split()}
             ))
 
     def prepare(self):
@@ -269,51 +337,82 @@ class Tester:
 
         subprocess.run(["make", "-C", "build", "all"], check=True)
 
-    def run(self):
-        passes = 0
-        failures = 0
-        crashes = 0
+    def _run_single_test(self, box_config, test, cpus, feedback):
+        try:
+            feedback.put(TestStarted(test.slug))
 
-        for test in sorted(self.tests, key=lambda test: test.slug):
-            print(f"          [{test.slug}]", end="", flush=True)
+            thread_name = threading.current_thread().name
+            cpu_index = int(thread_name.rsplit('_', 1)[1])
+            cpu = cpus[cpu_index]
 
-            buf_stdout = io.StringIO()
+            error = queue.Queue()
 
             start_time = time.time()
             try:
-                with contextlib.redirect_stdout(buf_stdout):
-                    # TODO multicore support
-                    test.run(self, 1)
+                test.run(box_config, cpu, error)
             except Exception as e:
-                ex = e, traceback.format_exc()
+                ex, trace = e, traceback.format_exc()
             else:
-                ex = None
+                ex, trace = None, None
             end_time = time.time()
 
             duration = end_time - start_time
 
-            if duration > 0.1:
-                time_text = f"{duration:.1f}s"
-            else:
-                time_text = " " * 4
-            print(f"\r\x1b[36m{time_text}\x1b[0m ", end="")
+        except BaseException as e:
+            ex, trace, error, duraiton = e, traceback.format_exc(), queue.Queue(), locals().get('duration', 0)
 
-            if ex:
-                print("\x1b[91mFAIL\x1b[0m")
-                print("\x1b[36m  " + test.description + "\x1b[0m")
-                buf_stdout.seek(0)
-                print("  " + buf_stdout.read().rstrip("\n").replace("\n", "\n  "))
-                if isinstance(ex[0], AssertionError):
-                    print("\x1b[33m  " + str(ex[0]).replace("\n", "\n  ") + "\x1b[0m")
-                    print('   ', '\n    '.join(ex[0].__notes__))
+        feedback.put(TestFinished(test.slug, test.description, duration, ex, trace, error))
+
+    def run(self, cpus):
+        passes = 0
+        failures = 0
+        crashes = 0
+
+        feedback = queue.Queue()
+
+        executor = ThreadPoolExecutor(max_workers=len(cpus), thread_name_prefix='invoker')
+        for test in sorted(self.tests, key=lambda test: not test.slow):
+            executor.submit(self._run_single_test, self.box_config, test, cpus, feedback)
+
+        current = Testset(len(self.tests))
+        while current.is_running():
+            if self.current_status == 'show':
+                print(f'\r\x1b[K{current}', flush=True, end='')
+
+            try:
+                event = feedback.get()
+            except KeyboardInterrupt:
+                print()
+                break
+
+            if type(event) is TestStarted:
+                current.started(event.slug)
+
+            elif type(event) is TestFinished:
+                current.finished(event.slug)
+
+                if event.kind == "pass":
+                    passes += 1
+                elif event.kind == "failure":
                     failures += 1
-                else:
-                    print("\x1b[95m" + ex[1] + "\x1b[0m")
+                elif event.kind == "crash":
                     crashes += 1
-            else:
-                print("\x1b[32m OK\x1b[0m")
-                passes += 1
 
+                if not self.hide_passed or event.kind != 'pass':
+                    print(f'\r\x1b[K', *event.as_strings(), sep='', flush=True)
+                    if self.bail_on_fail:
+                        break
+
+            else:
+                crashes += 1
+                print(f'\r\x1b[K{event}', flush=True)
+                if self.bail_on_fail:
+                    break
+
+        executor.shutdown(wait=False, cancel_futures=True)
+        unknown = len(self.tests) - passes - failures - crashes
+
+        print('\r\x1b[K', end='')
         print("  ".join(
             pattern
             .replace("{}", str(cnt))
@@ -323,25 +422,52 @@ class Tester:
                 ("\x1b[32m{} test{s} passed\x1b[0m", passes),
                 ("\x1b[93m{} test{s} skipped\x1b[0m", self.skips),
                 ("\x1b[91m{} test{s} failed\x1b[0m", failures),
-                ("\x1b[95m{} test{s} crashed\x1b[0m", crashes)
+                ("\x1b[95m{} test{s} crashed\x1b[0m", crashes),
+                ("\x1b[36m{} not tested\x1b[0m", unknown),
             ]
             if cnt > 0
         ))
+
         if failures > 0 or crashes > 0:
             raise SystemExit(1)
 
 
 def main():
-    # TODO make me pretty
-    config = sunwalker_box.BoxConfig()
-    arch = sys.argv[1]
-    test_whitelist = sys.argv[2].split(",") if len(sys.argv) >= 3 else None
+    parser = argparse.ArgumentParser(description='sunwalker-box integrity checker')
+    parser.add_argument('--box', required=True, help='Path to sunwalker_box executable')
+    parser.add_argument('--arch', required=True, help='Target architecture')
+    parser.add_argument('--cores', default=[0], type=int, nargs='*', help='List of cores for parallel testing')
+    parser.add_argument('--block', default=[], nargs='*', help='List of tests to explicitly disable (defaults to nothing)')
+    parser.add_argument('--allow', default=[], nargs='*', help='List of tests to explicitly enable (defaults to all tests)')
+    parser.add_argument('--logs', default='none', choices=['none', 'impossible', 'warn', 'notice'], help='sunwalker-box logging verbosity')
+    parser.add_argument('--hide-passed', action='store_true', help='Hide status for passed tests')
+    parser.add_argument('--bail-on-fail', action='store_true', help='Bail on first error')
+    parser.add_argument(
+        '--current-status',
+        default='show' if os.isatty(1) else 'hide',
+        choices=['show', 'hide'],
+        help='Controls whether the status line will be shown. Defaults to `show` for tty, and `hide` otherwise'
+    )
+    args = parser.parse_args()
 
-    with sunwalker_box.CoreIsolator(config, {1}):
-        with Tester(config, arch, test_whitelist) as tester:
+    config = sunwalker_box.BoxConfig(
+        executable=args.box,
+        logs=args.logs
+    )
+
+    with sunwalker_box.CoreIsolator(config, set(args.cores)):
+        with Tester(
+            box_config=config,
+            arch=args.arch,
+            allow=set(args.allow),
+            block=set(args.block),
+            hide_passed=args.hide_passed,
+            bail_on_fail=args.bail_on_fail,
+            current_status=args.current_status,
+        ) as tester:
             tester.register()
             tester.prepare()
-            tester.run()
+            tester.run(args.cores)
 
 
 if __name__ == "__main__":

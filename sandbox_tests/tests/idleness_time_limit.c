@@ -1,5 +1,6 @@
 /*
 description: Idleness time limit works
+slow: true
 script: |
     expect(
         run(limits=Metrics(idleness_time=0.2)),

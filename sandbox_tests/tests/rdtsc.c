@@ -1,5 +1,6 @@
 /*
 description: rdtsc passes just like clock()
+slow: true
 arch:
 - x86_64
 script: |

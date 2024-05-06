@@ -1,5 +1,6 @@
 /*
 description: sysinfo should not reveal information
+slow: true
 script: |
     pv = dict(stdout=PreviousOutput(bias="+- 1"))
     for _ in range(2):

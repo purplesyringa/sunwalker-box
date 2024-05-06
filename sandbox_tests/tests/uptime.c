@@ -1,5 +1,6 @@
 /*
 description: Uptime should be zero
+slow: true
 script: |
     pv = dict(stdout=PreviousOutput(bias="+- 0.1"))
     for _ in range(2):

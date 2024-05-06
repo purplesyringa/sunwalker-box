@@ -1,5 +1,6 @@
 """
 description: Zombies are reaped
+slow: true
 script: |
     for i in range(15):
         expect(run(context=i))
