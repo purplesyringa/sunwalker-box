@@ -70,6 +70,10 @@ class Test:
     def bind(self, box: Box):
         ...
 
+    @staticmethod
+    def extract_header(path):
+        ...
+
 
 class CTest(Test):
     def prepare(self, tester):
@@ -106,6 +110,11 @@ class CTest(Test):
         box.touch(path)
         box.bind(os.path.abspath(f"build/{self.slug}"), path, readonly=True)
 
+    @staticmethod
+    def extract_header(path):
+        with open(path) as f:
+            return re.match(r"/\*([\s\S]+?)\*/", f.read()).group(1)
+
 
 class PyTest(Test):
     def bind(self, box: sunwalker_box.Box):
@@ -117,9 +126,17 @@ class PyTest(Test):
         box.touch(path)
         box.bind(os.path.abspath(f"tests/{self.slug}.py"), path, readonly=True)
 
+    @staticmethod
+    def extract_header(path):
+        with open(path) as f:
+            return re.match(r'"""([\s\S]+?)"""', f.read()).group(1)
+
 
 class YamlTest(Test):
-    pass
+    @staticmethod
+    def extract_header(path):
+        with open(path) as f:
+            return f.read()
 
 
 @dataclasses.dataclass
@@ -306,16 +323,11 @@ class Tester:
                 self.skips += 1
                 continue
 
-            test_class: Test
-            with open(os.path.join("tests", test_file)) as f:
-                if ext == "c":
-                    test_class, yaml_header = CTest, re.match(r"/\*([\s\S]+?)\*/", f.read()).group(1)
-                elif ext == "py":
-                    test_class, yaml_header = PyTest, re.match(r"\"\"\"([\s\S]+?)\"\"\"", f.read()).group(1)
-                elif ext == "yaml":
-                    test_class, yaml_header = YamlTest, f.read()
+            test_class = dict(c=CTest, py=PyTest, yaml=YamlTest)[ext]
 
+            yaml_header = test_class.extract_header(os.path.join("tests", test_file))
             header = yaml.unsafe_load(yaml_header)
+
             if self.arch not in (header.get("arch") or self.arch):
                 self.skips += 1
                 continue
