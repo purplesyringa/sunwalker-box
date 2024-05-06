@@ -83,7 +83,7 @@ target/syscall_table.offsets: generate/string_tables.py
 CORES := $(shell grep ^processor /proc/cpuinfo | cut -d':' -f2 | tail +2 | tr '\n' ' ')
 
 test:
-	cd sandbox_tests && ./test.py --box ../sunwalker_box --arch $(ARCH) --allow $(TESTS) --cores $(CORES)
+	cd sandbox_tests && ./test.py --box ../sunwalker_box --arch $(ARCH) --allow $(TESTS) --cores $(CORES) $(TESTFLAGS)
 
 clean:
 	rm -r target sunwalker_box *-sunwalker_box kmodule/*/Module.symvers kmodule/*/modules.order kmodule/*/sunwalker.ko kmodule/*/sunwalker.mod* kmodule/*/sunwalker.o || true
