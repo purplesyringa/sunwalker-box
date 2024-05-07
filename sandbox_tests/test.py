@@ -273,9 +273,9 @@ class Tester:
     box_config: sunwalker_box.BoxConfig
     arch: str
     cpus: list[int]
-    allow: Optional[set[str]] = None
-    block: Optional[set[str]] = None
-    conductor_args: Optional[dict[str, ...]] = None
+    allow: set[str]
+    block: set[str]
+    conductor_args: dict[str, ...]
 
     def __post_init__(self):
         self.builders: list[Builder] = []
@@ -285,7 +285,7 @@ class Tester:
     def register(self):
         for test_file in os.listdir("tests"):
             slug, ext = test_file.rsplit(".", 1)
-            if slug in (self.block or set()) or slug not in (self.allow or slug):
+            if slug in self.block or slug not in (self.allow or slug):
                 continue
 
             test_class = dict(c=CTest, py=PyTest, yaml=YamlTest)[ext]
