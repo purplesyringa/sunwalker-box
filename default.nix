@@ -4,7 +4,12 @@
 with pkgs;
 
 let
+  fs = lib.fileset;
   src = ./.;
+  drvSrc = fs.toSource {
+    root = src;
+    fileset = fs.difference src (fs.unions [ (fs.maybeMissing ./result) ./sandbox_tests ]);
+  };
   cargoLockToPackageSet = lockfile: builtins.foldl' (s: q: s // { "${q.name}-${q.version}" = q; }) {} (builtins.fromTOML (builtins.readFile lockfile)).package;
   packageSetToCargoLock = packages: "version = 3\n" + (builtins.concatStringsSep "" (map (package: "\n[[package]]\n" + (builtins.concatStringsSep "\n" (map (k: "${k} = ${builtins.toJSON package."${k}"}") (builtins.attrNames package))) + "\n") (builtins.attrValues packages)));
   packageSet = (cargoLockToPackageSet "${src}/Cargo.lock") // (cargoLockToPackageSet "${rustPlatform.rustcSrc}/Cargo.lock");
@@ -12,7 +17,7 @@ in
 
 stdenv.mkDerivation rec {
   name = "sunwalker-box";
-  inherit src;
+  src = drvSrc;
   cargoLock = writeTextFile {
     name = "Cargo.lock";
     text = packageSetToCargoLock packageSet;
