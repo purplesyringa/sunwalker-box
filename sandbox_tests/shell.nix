@@ -1,13 +1,14 @@
-{ pkgs ? import <nixpkgs> {}, sunwalker-box }:
-
+{
+  pkgs ? import <nixpkgs> {},
+  sunwalker-box,
+}:
 with pkgs;
-
-pkgs.mkShellNoCC {
+  pkgs.mkShellNoCC {
     src = ./.;
     nativeBuildInputs = [
-        pkgsMusl.gcc
-        sunwalker-box
-        python3
-        python3Packages.pyyaml
+      pkgsMusl.gcc
+      sunwalker-box
+      python3
+      python3Packages.pyyaml
     ];
-}
+  }
