@@ -3,10 +3,8 @@
 with pkgs;
 
 {
-  rust-nightly-src = wrapRustcWith rec {
-    rustc-unwrapped = rustc.unwrapped.overrideAttrs (f: {
-      configureFlags = map (x: if x == "--release-channel=stable" then "--release-channel=nightly" else x) f.configureFlags;
-    });
+  rust-src = wrapRustcWith rec {
+    rustc-unwrapped = rustc.unwrapped;
     sysroot = buildEnv {
       name = "rustc-sysroot";
       paths = [ rustc-unwrapped (stdenv.mkDerivation {

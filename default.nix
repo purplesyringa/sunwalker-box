@@ -1,5 +1,5 @@
 { pkgs ? import<nixpkgs>{},
-  rust-nightly-src ? (import ./dependencies.nix { inherit pkgs; }).rust-nightly-src }:
+  rust-src ? (import ./dependencies.nix { inherit pkgs; }).rust-src }:
 
 with pkgs;
 
@@ -26,15 +26,15 @@ stdenv.mkDerivation rec {
   };
   patchPhase = ''
     sed -i 's: +nightly: --offline:' Makefile
-    sed -i 's:^    unwrap_infallible$:    unwrap_infallible,\n    file_create_new:' src/lib.rs
   '';
   nativeBuildInputs = [
     python3
-    rust-nightly-src
+    rust-src
     cargo
     rustPlatform.cargoSetupHook
     rubyPackages.seccomp-tools
   ];
+  RUSTC_BOOTSTRAP = 1;
   RUSTFLAGSADD = [
     "-L" "${musl}/lib"
     "-L" "${pkgsMusl.libunwind.overrideAttrs (f: { configureFlags = f.configureFlags ++ [ "--disable-shared" "--enable-static" ]; })}/lib"
