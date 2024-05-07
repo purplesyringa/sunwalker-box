@@ -277,10 +277,12 @@ class Tester:
     block: Optional[set[str]] = None
     conductor_args: Optional[dict[str, ...]] = None
 
-    def register(self):
+    def __post_init__(self):
         self.builders: list[Builder] = []
         self.preparers: list[Preparer] = []
         self.tests: list[Invoker] = []
+
+    def register(self):
         for test_file in os.listdir("tests"):
             slug, ext = test_file.rsplit(".", 1)
             if slug in (self.block or set()) or slug not in (self.allow or slug):
