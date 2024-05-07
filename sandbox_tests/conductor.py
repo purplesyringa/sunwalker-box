@@ -42,9 +42,10 @@ class EventFinished:
             yield '\n'
             yield f"\x1b[36m  {self.description}\x1b[0m\n"
 
-            while not self.error.empty():
-                message = self.error.get_nowait()
-                yield from ('  --- executor message ---\n    ', message.replace('\n', '\n    '), '\n')
+            if self.error:
+                while not self.error.empty():
+                    message = self.error.get_nowait()
+                    yield from ('  --- executor message ---\n    ', message.replace('\n', '\n    '), '\n')
 
             if self.kind == "failure":
                 yield from ("\x1b[33m  ", str(self.ex).replace("\n", "\n  "), "\x1b[0m\n")
