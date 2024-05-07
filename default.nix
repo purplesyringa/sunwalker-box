@@ -22,7 +22,7 @@ stdenv.mkDerivation rec {
     outputHashes = builtins.mapAttrs (k: v: if v.url == packageSet."${k}".source
       then v.narHash
       else throw "outdated output-hashes.json: url ${v.url}, while in Cargo.lock is ${packageSet."${k}".source}"
-    ) (builtins.fromJSON (builtins.readFile ./output-hashes.json));
+    ) (builtins.fromJSON (builtins.readFile ./generate/output-hashes.json));
   };
   patchPhase = ''
     sed -i 's: +nightly: --offline:' Makefile
