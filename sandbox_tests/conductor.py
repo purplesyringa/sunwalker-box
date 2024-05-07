@@ -145,6 +145,7 @@ class Conductor:
         return self._unknown(event)
 
     def _run_single(self, cpus, action, args, kwargs):
+        ex, trace, error, duration = None, None, None, 0
         try:
             self.feedback.put(EventStarted(action.slugslug, action.slug))
 
@@ -159,8 +160,6 @@ class Conductor:
                 res = action.run(cpu, error, *args, **kwargs)
             except Exception as e:
                 ex, trace = e, traceback.format_exc()
-            else:
-                ex, trace = None, None
             end_time = time.time()
 
             duration = end_time - start_time
@@ -173,7 +172,10 @@ class Conductor:
                 action.slugslug,
                 action.slug,
                 action.description,
-                **{key: locals().get(key) for key in "ex trace duration error".split()}
+                ex=ex,
+                trace=trace,
+                duration=duration,
+                error=error,
             ))
         except Exception as e:
             print(e)
