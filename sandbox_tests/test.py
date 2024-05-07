@@ -277,12 +277,6 @@ class Tester:
     block: Optional[set[str]] = None
     conductor_args: Optional[dict[str, ...]] = None
 
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_value, exc_traceback):
-        pass
-
     def register(self):
         self.builders: list[Builder] = []
         self.preparers: list[Preparer] = []
@@ -364,7 +358,7 @@ def main():
     )
 
     with sunwalker_box.CoreIsolator(config, set(args.cores)):
-        with Tester(
+        tester = Tester(
             box_config=config,
             arch=args.arch,
             cpus=args.cores,
@@ -377,11 +371,11 @@ def main():
                 intermediate_status=args.intermediate_status == 'show',
                 current_status=args.current_status == 'show',
             ),
-        ) as tester:
-            tester.register()
-            tester.build()
-            tester.prepare()
-            tester.run()
+        )
+        tester.register()
+        tester.build()
+        tester.prepare()
+        tester.run()
 
 
 if __name__ == "__main__":
