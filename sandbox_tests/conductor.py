@@ -9,14 +9,14 @@ from typing import Optional
 
 @dataclasses.dataclass
 class EventStarted:
-    slugslug: str
     slug: str
+    short_description: str
 
 
 @dataclasses.dataclass
 class EventFinished:
-    slugslug: str
     slug: str
+    short_description: str
     description: str
     duration: float
     error: queue.Queue
@@ -36,7 +36,7 @@ class EventFinished:
         yield f"\x1b[36m{time_text}\x1b[0m "
 
         status = "\x1b[32m OK \x1b[0m" if self.kind == "pass" else "\x1b[91mFAIL\x1b[0m"
-        yield f'{status} {self.slug}'
+        yield f'{status} {self.short_description}'
 
         if self.kind != "pass":
             yield '\n'
@@ -106,11 +106,11 @@ class Conductor:
         print(*self.as_strings(), flush=True, sep='', end='')
 
     def _started(self, event):
-        self.current.add(event.slugslug)
+        self.current.add(event.slug)
         return True
 
     def _finished(self, event):
-        self.current.remove(event.slugslug)
+        self.current.remove(event.slug)
         self.count += 1
 
         if event.kind == "pass":
@@ -144,7 +144,7 @@ class Conductor:
         return self._unknown(event)
 
     def _run_single(self, cpus, action, args, kwargs):
-        self.feedback.put(EventStarted(action.slugslug, action.slug))
+        self.feedback.put(EventStarted(action.slug, action.short_description))
 
         thread_name = threading.current_thread().name
         cpu_index = int(thread_name.rsplit('_', 1)[1])
@@ -162,8 +162,8 @@ class Conductor:
             duration = time.time() - start_time
 
         self.feedback.put(EventFinished(
-            action.slugslug,
             action.slug,
+            action.short_description,
             action.description,
             ex=ex,
             trace=trace,

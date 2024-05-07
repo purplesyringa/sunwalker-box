@@ -161,8 +161,8 @@ class YamlTest(Test):
 
 @dataclasses.dataclass
 class Builder:
-    slugslug: str
     slug: str
+    short_description: str
     description: str
     test: Test
 
@@ -172,8 +172,8 @@ class Builder:
 
 @dataclasses.dataclass
 class Preparer:
-    slugslug: str
     slug: str
+    short_description: str
     description: str
     test: Test
 
@@ -183,8 +183,8 @@ class Preparer:
 
 @dataclasses.dataclass
 class Invoker:
-    slugslug: str
     slug: str
+    short_description: str
     description: str
     test: Test
     script: str
