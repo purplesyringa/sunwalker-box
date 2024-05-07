@@ -18,10 +18,10 @@ class EventFinished:
     slugslug: str
     slug: str
     description: str
+    duration: float
+    error: queue.Queue
     ex: Optional[Exception] = None
     trace: Optional[str] = None
-    duration: Optional[float] = None
-    error: Optional[queue.Queue] = None
 
     def __post_init__(self):
         if not self.ex:
@@ -42,10 +42,9 @@ class EventFinished:
             yield '\n'
             yield f"\x1b[36m  {self.description}\x1b[0m\n"
 
-            if self.error:
-                while not self.error.empty():
-                    message = self.error.get_nowait()
-                    yield from ('  --- executor message ---\n    ', message.replace('\n', '\n    '), '\n')
+            while not self.error.empty():
+                message = self.error.get_nowait()
+                yield from ('  --- executor message ---\n    ', message.replace('\n', '\n    '), '\n')
 
             if self.kind == "failure":
                 yield from ("\x1b[33m  ", str(self.ex).replace("\n", "\n  "), "\x1b[0m\n")
@@ -145,45 +144,44 @@ class Conductor:
         return self._unknown(event)
 
     def _run_single(self, cpus, action, args, kwargs):
-        ex, trace, error, duration = None, None, None, 0
+        self.feedback.put(EventStarted(action.slugslug, action.slug))
+
+        thread_name = threading.current_thread().name
+        cpu_index = int(thread_name.rsplit('_', 1)[1])
+        cpu = cpus[cpu_index]
+
+        error = queue.Queue()
+        start_time = time.time()
         try:
-            self.feedback.put(EventStarted(action.slugslug, action.slug))
-
-            thread_name = threading.current_thread().name
-            cpu_index = int(thread_name.rsplit('_', 1)[1])
-            cpu = cpus[cpu_index]
-
-            error = queue.Queue()
-
-            start_time = time.time()
-            try:
-                res = action.run(cpu, error, *args, **kwargs)
-            except Exception as e:
-                ex, trace = e, traceback.format_exc()
-            end_time = time.time()
-
-            duration = end_time - start_time
-
+            res = action.run(cpu, error, *args, **kwargs)
         except Exception as e:
             ex, trace = e, traceback.format_exc()
+        else:
+            ex, trace = None, None
+        finally:
+            duration = time.time() - start_time
 
+        self.feedback.put(EventFinished(
+            action.slugslug,
+            action.slug,
+            action.description,
+            ex=ex,
+            trace=trace,
+            duration=duration,
+            error=error,
+        ))
+
+    def _run_single_wrapper(self, *args, **kwargs):
+        # We don't wait on futures, thus we can't deliver unexpected exceptions. A simple workaround is enough for debugging purposes
         try:
-            self.feedback.put(EventFinished(
-                action.slugslug,
-                action.slug,
-                action.description,
-                ex=ex,
-                trace=trace,
-                duration=duration,
-                error=error,
-            ))
-        except Exception as e:
-            print(e)
+            self._run_single(*args, **kwargs)
+        except BaseException:
+            print(traceback.format_exc(), flush=True)
 
     def run(self, cpus, /, *args, **kwargs):
         executor = ThreadPoolExecutor(max_workers=len(cpus), thread_name_prefix=self.name)
         for action in self.actions:
-            executor.submit(self._run_single, cpus, action, args, kwargs)
+            executor.submit(self._run_single_wrapper, cpus, action, args, kwargs)
 
         try:
             while self.is_running() and self._dispatch_event():
