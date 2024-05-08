@@ -12,7 +12,6 @@
       sunwalker-box = import ./default.nix {inherit pkgs;};
       testenv = import ./sandbox_tests/shell.nix {
         inherit pkgs;
-        inherit sunwalker-box;
       };
       default = sunwalker-box;
     };
