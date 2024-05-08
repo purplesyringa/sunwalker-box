@@ -1,6 +1,6 @@
 {
   pkgs ? import <nixpkgs> {},
-  rust-src ? (import ./dependencies.nix {inherit pkgs;}).rust-src,
+  deps ? import ./dependencies.nix {inherit pkgs;},
 }:
 with pkgs; let
   fs = lib.fileset;
@@ -59,26 +59,17 @@ in
     '';
     nativeBuildInputs = [
       python3
-      rust-src
+      deps.rust-src
       cargo
       rustPlatform.cargoSetupHook
-      rubyPackages.seccomp-tools
+      deps.rubyPackages.seccomp-tools
     ];
     RUSTC_BOOTSTRAP = 1;
     RUSTFLAGSADD = [
       "-L"
       "${musl}/lib"
       "-L"
-      "${
-        pkgsMusl.libunwind.overrideAttrs (f: {
-          configureFlags =
-            f.configureFlags
-            ++ [
-              "--disable-shared"
-              "--enable-static"
-            ];
-        })
-      }/lib"
+      "${deps.libunwind}/lib"
       "-L"
       "${pkgsMusl.gcc.cc}/lib/gcc/${pkgsMusl.stdenv.targetPlatform.config}/${pkgsMusl.gcc.cc.version}"
     ];

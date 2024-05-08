@@ -1,5 +1,13 @@
 {pkgs ? import <nixpkgs> {}}:
 with pkgs; {
+  libunwind = pkgsMusl.libunwind.overrideAttrs (f: {
+    configureFlags =
+      f.configureFlags
+      ++ [
+        "--disable-shared"
+        "--enable-static"
+      ];
+  });
   rust-src = wrapRustcWith rec {
     rustc-unwrapped = rustc.unwrapped;
     sysroot = buildEnv {
