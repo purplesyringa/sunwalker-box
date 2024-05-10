@@ -20,23 +20,32 @@ CXX_OPTIONS := -nostartfiles -nostdlib -O2 -std=c++20 -fno-asynchronous-unwind-t
 
 CARGO_TARGET := $(shell echo "$(TARGET)" | tr a-z- A-Z_)
 CARGO := CARGO_TARGET_$(CARGO_TARGET)_LINKER="$(CC)" RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly
-CARGO_OPTIONS := --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release
+CARGO_OPTIONS_RELEASE := --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release
+CARGO_OPTIONS_DEBUG := --target $(TARGET)
 
 SECCOMP_FILTERS := filter
 
-.PHONY: target/$(TARGET)/release/sunwalker_box test clean bloat check clippy
+ifeq ($(DEBUG),1)
+MODE := debug
+else
+MODE := release
+endif
+
+.PHONY: target/$(TARGET)/$(MODE)/sunwalker_box test clean bloat check clippy
 
 all: sunwalker_box
 
 sunwalker_box: $(ARCH)-sunwalker_box
 	cp $^ $@
-$(ARCH)-sunwalker_box: target/$(TARGET)/release/sunwalker_box
+$(ARCH)-sunwalker_box: target/$(TARGET)/$(MODE)/sunwalker_box
 	strip $^ -o $@
 
 DEPS := $(patsubst %,target/%.seccomp.out,$(SECCOMP_FILTERS)) target/exec_wrapper.stripped target/exec_wrapper.itimer_prof target/sunwalker.ko target/syscall_table.offsets
 
 target/$(TARGET)/release/sunwalker_box: $(DEPS)
-	$(CARGO) build $(CARGO_OPTIONS)
+	$(CARGO) build $(CARGO_OPTIONS_RELEASE)
+target/$(TARGET)/debug/sunwalker_box: $(DEPS)
+	$(CARGO) build $(CARGO_OPTIONS_DEBUG)
 
 bloat: $(DEPS)
 	$(CARGO) bloat $(CARGO_OPTIONS) $(OPTIONS)
