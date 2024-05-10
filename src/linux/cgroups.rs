@@ -19,11 +19,13 @@ pub struct Cgroup {
 #[derive(Object)]
 pub struct ProcCgroup {
     core_cgroup_fd: OpenAtDir,
-    id: String,
+    proc_cgroup_fd: OpenAtDir,
+    proc_id: String,
 }
 
 pub struct BoxCgroup {
     proc_cgroup_fd: OpenAtDir,
+    box_cgroup_fd: OpenAtDir,
     box_id: String,
     dropped: bool,
 }
@@ -110,27 +112,33 @@ impl Cgroup {
 
     pub fn create_proc_cgroup(&self) -> Result<ProcCgroup> {
         let mut rng = rand::thread_rng();
-        let id: String = (0..10)
+        let proc_id: String = (0..10)
             .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
             .collect();
+        let proc_id = format!("proc-{proc_id}");
 
-        log!("Creating per-sandbox cgroup #{id}");
-
-        self.core_cgroup_fd
-            .create_dir(format!("proc-{id}"), 0o700)
-            .with_context(|| format!("Failed to mkdir proc-{id}"))?;
+        log!("Creating per-sandbox cgroup #{proc_id}");
 
         self.core_cgroup_fd
-            .write_file(format!("proc-{id}/cgroup.subtree_control"), 0o700)
+            .create_dir(&proc_id, 0o700)
+            .with_context(|| format!("Failed to mkdir {proc_id}"))?;
+
+        let proc_cgroup_fd = self
+            .core_cgroup_fd
+            .sub_dir(&proc_id)
+            .with_context(|| format!("Failed to open {proc_id}"))?;
+
+        proc_cgroup_fd
+            .write_file("cgroup.subtree_control", 0o700)
             .with_context(|| {
-                format!("Failed to open proc-{id}/cgroup.subtree_control for writing")
+                format!("Failed to open {proc_id}/cgroup.subtree_control for writing")
             })?
             .write(b"+cpu +memory +pids\n")
             .context("Failed to enable cgroup controllers")?;
 
         nix::unistd::fchownat::<str>(
             Some(self.core_cgroup_fd.as_raw_fd()),
-            &format!("proc-{id}"),
+            &proc_id,
             Some(nix::unistd::Uid::from_raw(ids::EXTERNAL_ROOT_UID)),
             Some(nix::unistd::Gid::from_raw(ids::EXTERNAL_ROOT_GID)),
             nix::unistd::FchownatFlags::NoFollowSymlink,
@@ -139,7 +147,8 @@ impl Cgroup {
 
         Ok(ProcCgroup {
             core_cgroup_fd: self.core_cgroup_fd.try_clone()?,
-            id,
+            proc_cgroup_fd,
+            proc_id,
         })
     }
 }
@@ -151,38 +160,42 @@ impl ProcCgroup {
         let box_id: String = (0..10)
             .map(|_| rng.sample(rand::distributions::Alphanumeric) as char)
             .collect();
+        let box_id = format!("box-{box_id}");
 
-        let box_dir = format!("proc-{}/box-{box_id}", self.id);
-        self.core_cgroup_fd
-            .create_dir(&box_dir, 0o700)
-            .with_context(|| format!("Failed to mkdir {box_dir}"))?;
+        self.proc_cgroup_fd
+            .create_dir(&box_id, 0o700)
+            .with_context(|| format!("Failed to mkdir {box_id} in {}", self.proc_id))?;
+
+        let box_cgroup_fd = self
+            .proc_cgroup_fd
+            .sub_dir(&box_id)
+            .with_context(|| format!("Failed to open {box_id} in {}", self.proc_id))?;
 
         Ok(BoxCgroup {
-            proc_cgroup_fd: self
-                .core_cgroup_fd
-                .sub_dir(format!("proc-{}", self.id))
-                .with_context(|| format!("Failed to open proc-{}", self.id))?,
+            proc_cgroup_fd: self.proc_cgroup_fd.try_clone()?,
+            box_cgroup_fd,
             box_id,
             dropped: false,
         })
     }
 
     pub fn destroy(self) -> Result<()> {
-        remove_cgroup(&self.core_cgroup_fd, format!("proc-{}", self.id).as_ref())
+        remove_cgroup(&self.core_cgroup_fd, &self.proc_id)
     }
 
     pub fn try_clone(&self) -> Result<Self> {
         Ok(ProcCgroup {
             core_cgroup_fd: self.core_cgroup_fd.try_clone()?,
-            id: self.id.clone(),
+            proc_cgroup_fd: self.proc_cgroup_fd.try_clone()?,
+            proc_id: self.proc_id.clone(),
         })
     }
 }
 
 impl BoxCgroup {
     pub fn add_process(&self, pid: pid_t) -> Result<()> {
-        self.proc_cgroup_fd
-            .write_file(format!("box-{}/cgroup.procs", self.box_id), 0o700)
+        self.box_cgroup_fd
+            .write_file("cgroup.procs", 0o700)
             .context("Failed to open cgroup.procs for writing")?
             .write(format!("{pid}\n").as_ref())
             .context("Failed to move process")?;
@@ -190,18 +203,18 @@ impl BoxCgroup {
     }
 
     pub fn set_memory_limit(&self, limit: usize) -> Result<()> {
-        self.proc_cgroup_fd
-            .write_file(format!("box-{}/memory.max", self.box_id), 0o700)
+        self.box_cgroup_fd
+            .write_file("memory.max", 0o700)
             .context("Failed to open memory.max for writing")?
             .write(format!("{limit}\n").as_ref())
             .context("Failed to set memory limit")?;
-        self.proc_cgroup_fd
-            .write_file(format!("box-{}/memory.swap.max", self.box_id), 0o700)
+        self.box_cgroup_fd
+            .write_file("memory.swap.max", 0o700)
             .context("Failed to open memory.swap.max for writing")?
             .write(b"0\n")
             .context("Failed to disable swap")?;
-        self.proc_cgroup_fd
-            .write_file(format!("box-{}/memory.oom.group", self.box_id), 0o700)
+        self.box_cgroup_fd
+            .write_file("memory.oom.group", 0o700)
             .context("Failed to open memory.oom.group for writing")?
             .write(b"1\n")
             .context("Failed to enable OOM grouping")?;
@@ -209,8 +222,8 @@ impl BoxCgroup {
     }
 
     pub fn set_processes_limit(&self, limit: usize) -> Result<()> {
-        self.proc_cgroup_fd
-            .write_file(format!("box-{}/pids.max", self.box_id), 0o700)
+        self.box_cgroup_fd
+            .write_file("pids.max", 0o700)
             .context("Failed to open pids.max for writing")?
             .write(format!("{limit}\n").as_ref())
             .context("Failed to set processes limit")?;
@@ -219,8 +232,8 @@ impl BoxCgroup {
 
     pub fn get_cpu_time(&self) -> Result<Duration> {
         let mut buf = String::new();
-        self.proc_cgroup_fd
-            .open_file(format!("box-{}/cpu.stat", self.box_id))
+        self.box_cgroup_fd
+            .open_file("cpu.stat")
             .context("Failed to open cpu.stat for reading")?
             .read_to_string(&mut buf)
             .context("Failed to read cpu.stat")?;
@@ -257,8 +270,8 @@ impl BoxCgroup {
 
     pub fn get_memory_peak(&self) -> Result<usize> {
         let mut buf = String::new();
-        self.proc_cgroup_fd
-            .open_file(format!("box-{}/memory.peak", self.box_id))
+        self.box_cgroup_fd
+            .open_file("memory.peak")
             .context("Failed to open memory.peak for reading")?
             .read_to_string(&mut buf)
             .context("Failed to read memory.peak")?;
@@ -267,8 +280,8 @@ impl BoxCgroup {
 
     pub fn get_memory_stats(&self) -> Result<MemoryStats> {
         let mut buf = String::new();
-        self.proc_cgroup_fd
-            .open_file(format!("box-{}/memory.stat", self.box_id))
+        self.box_cgroup_fd
+            .open_file("memory.stat")
             .context("Failed to open memory.stat for reading")?
             .read_to_string(&mut buf)
             .context("Failed to read memory.stat")?;
@@ -308,8 +321,8 @@ impl BoxCgroup {
 
     pub fn was_oom_killed(&self) -> Result<bool> {
         let mut buf = String::new();
-        self.proc_cgroup_fd
-            .open_file(format!("box-{}/memory.events", self.box_id))
+        self.box_cgroup_fd
+            .open_file("memory.events")
             .context("Failed to open memory.events for reading")?
             .read_to_string(&mut buf)
             .context("Failed to read memory.events")?;
@@ -335,8 +348,8 @@ impl BoxCgroup {
 
     pub fn get_current_processes(&self) -> Result<usize> {
         let mut buf = String::new();
-        self.proc_cgroup_fd
-            .open_file(format!("box-{}/cgroup.procs", self.box_id))
+        self.box_cgroup_fd
+            .open_file("cgroup.procs")
             .context("Failed to open cgroup.procs for reading")?
             .read_to_string(&mut buf)
             .context("Failed to read cgroup.procs")?;
@@ -345,11 +358,8 @@ impl BoxCgroup {
 
     fn _destroy(&mut self) -> Result<()> {
         self.dropped = true;
-        remove_cgroup(
-            &self.proc_cgroup_fd,
-            format!("box-{}", self.box_id).as_ref(),
-        )
-        .context("Failed to remove user cgroup")?;
+        remove_cgroup(&self.proc_cgroup_fd, &self.box_id)
+            .context("Failed to remove user cgroup")?;
         Ok(())
     }
 
@@ -358,11 +368,7 @@ impl BoxCgroup {
     }
 
     pub fn kill(&mut self) -> Result<()> {
-        kill_cgroup(
-            &self.proc_cgroup_fd,
-            format!("box-{}", self.box_id).as_ref(),
-        )
-        .context("Failed to kill user cgroup")
+        kill_cgroup(&self.proc_cgroup_fd, &self.box_id).context("Failed to kill user cgroup")
     }
 }
 
