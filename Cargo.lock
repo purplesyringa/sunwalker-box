@@ -39,6 +39,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "autocfg"
+version = "1.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1fdabc7756949593fe60f30ec81974b613357de856987752631dea1e3394c80"
+
+[[package]]
 name = "bitflags"
 version = "2.4.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -52,9 +58,9 @@ checksum = "baf1de4339761588bc0619e3cbc0120ee582ebb74b53b4efbf79117bd2da40fd"
 
 [[package]]
 name = "crossmist"
-version = "0.2.4"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfffd02005f3c8d1b6db8cf02b63eef9325683bcc571aa679073a33943b8c5a9"
+checksum = "f871fc19ad8c99dc6d0cf0b84015ee3f226dca7834fc1bdc4edaa4fd16e0b00b"
 dependencies = [
  "crossmist-derive",
  "lazy_static",
@@ -65,9 +71,9 @@ dependencies = [
 
 [[package]]
 name = "crossmist-derive"
-version = "0.2.4"
+version = "1.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "153648fbf84beb9d610d5840f06cf30d1e5059d34f44f191c042b11429acf592"
+checksum = "4b9f4ece97914c30564a7ae10f9adf1cb74ac77d3ae83a6b677a4a1d2c3ffa8c"
 dependencies = [
  "darling",
  "quote",
@@ -150,6 +156,15 @@ version = "0.2.153"
 source = "git+https://github.com/yuki0iq/libc?branch=libc-0.2#39a5b15b64c340e73c73c733557957032021ccf7"
 
 [[package]]
+name = "memoffset"
+version = "0.9.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "488016bfae457b036d996092f6cb448677611ce4449e970ceaf42695203f218a"
+dependencies = [
+ "autocfg",
+]
+
+[[package]]
 name = "mini-internal"
 version = "0.1.39"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -180,6 +195,7 @@ dependencies = [
  "bitflags",
  "cfg-if",
  "libc",
+ "memoffset",
 ]
 
 [[package]]
