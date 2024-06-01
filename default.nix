@@ -62,7 +62,7 @@ in
       deps.rust-src
       cargo
       rustPlatform.cargoSetupHook
-      deps.rubyPackages.seccomp-tools
+      rubyPackages.seccomp-tools
     ];
     RUSTC_BOOTSTRAP = 1;
     RUSTFLAGSADD = [
