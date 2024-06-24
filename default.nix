@@ -15,25 +15,25 @@ with pkgs; let
     );
   };
   cargoLockToPackageSet = lockfile:
-    builtins.foldl' (s: q: s // {"${q.name}-${q.version}" = q;}) {}
-    (builtins.fromTOML (builtins.readFile lockfile)).package;
+    builtins.listToAttrs (map (q: {
+        name = "${q.name}-${q.version}";
+        value = q;
+      })
+      (lib.trivial.importTOML lockfile).package);
   packageSetToCargoLock = packages:
     ''
       version = 3
     ''
-    + (builtins.concatStringsSep "" (
-      map (
-        package:
-          ''
+    + (lib.strings.concatMapStrings (
+      package:
+        ''
 
-            [[package]]
-          ''
-          + (builtins.concatStringsSep "\n" (
-            map (k: "${k} = ${builtins.toJSON package."${k}"}") (builtins.attrNames package)
-          ))
-          + "\n"
-      ) (builtins.attrValues packages)
-    ));
+          [[package]]
+        ''
+        + (lib.strings.concatLines (
+          lib.attrsets.mapAttrsToList (k: v: "${k} = ${builtins.toJSON v}") package
+        ))
+    ) (builtins.attrValues packages));
   packageSet =
     (cargoLockToPackageSet "${src}/Cargo.lock")
     // (cargoLockToPackageSet "${rustPlatform.rustcSrc}/Cargo.lock");
