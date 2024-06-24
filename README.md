@@ -36,6 +36,23 @@ $ id="$(docker create "$(docker build -q .)" a)" && docker cp "$id:/sunwalker_bo
 This generates `sunwalker_box` binary.
 
 
+### With Nix
+
+For x86-64, you can use the `flake.nix` provided in this repository:
+
+```shell
+$ nix build
+```
+
+You can also build sunwalker-box without flakes, and it's just as simple:
+
+```shell
+$ nix-build
+```
+
+Both commands will produce `./result/bin/sunwalker-box` binary.
+
+
 ### Without Docker
 
 For aarch64, or if you don't want to use Docker, you will need to install the following dependencies:
