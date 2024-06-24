@@ -41,18 +41,9 @@ in
   stdenv.mkDerivation rec {
     name = "sunwalker-box";
     src = drvSrc;
-    cargoLock = writeTextFile {
-      name = "Cargo.lock";
-      text = packageSetToCargoLock packageSet;
-    };
     cargoDeps = rustPlatform.importCargoLock {
-      lockFile = cargoLock;
-      outputHashes = builtins.mapAttrs (
-        k: v:
-          if v.url == packageSet."${k}".source
-          then v.narHash
-          else throw "outdated output-hashes.json: url ${v.url}, while in Cargo.lock is ${packageSet."${k}".source}"
-      ) (builtins.fromJSON (builtins.readFile ./generate/output-hashes.json));
+      lockFileContents = packageSetToCargoLock packageSet;
+      allowBuiltinFetchGit = true;
     };
     patchPhase = ''
       sed -i 's: +nightly: --offline:' Makefile
