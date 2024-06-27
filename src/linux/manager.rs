@@ -5,6 +5,7 @@ use crate::{
 use anyhow::{Context, Result};
 use crossmist::Object;
 use miniserde::{json, Serialize};
+use nix::sys::signal;
 use std::path::PathBuf;
 
 #[derive(Debug, Object)]
@@ -33,6 +34,11 @@ fn manager_impl(
     log::enable_diagnostics("manager", log_level);
 
     log!("Manager started");
+
+    // Cancel signal blocking by reaper
+    signal::SigSet::empty()
+        .thread_set_mask()
+        .context("Failed to configure signal mask")?;
 
     let mut runner = running::Runner::new(proc_cgroup).context("Failed to create runner")?;
 
@@ -101,19 +107,17 @@ fn execute_command(command: Command, runner: &mut running::Runner) -> Result<Opt
                 real_time: f64,
                 cpu_time: f64,
                 idleness_time: f64,
-                memory: usize
+                memory: usize,
             }
 
-            Ok(Some(
-                json::to_string(&Results {
-                    limit_verdict,
-                    exit_code,
-                    real_time: results.real_time.as_secs_f64(),
-                    cpu_time: results.cpu_time.as_secs_f64(),
-                    idleness_time: results.idleness_time.as_secs_f64(),
-                    memory: results.memory,
-                } ),
-            ))
+            Ok(Some(json::to_string(&Results {
+                limit_verdict,
+                exit_code,
+                real_time: results.real_time.as_secs_f64(),
+                cpu_time: results.cpu_time.as_secs_f64(),
+                idleness_time: results.idleness_time.as_secs_f64(),
+                memory: results.memory,
+            })))
         }
     }
 }
