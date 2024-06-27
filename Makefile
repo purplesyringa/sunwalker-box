@@ -48,13 +48,13 @@ target/$(TARGET)/debug/sunwalker_box: $(DEPS)
 	$(CARGO) build $(CARGO_OPTIONS_DEBUG)
 
 bloat: $(DEPS)
-	$(CARGO) bloat $(CARGO_OPTIONS) $(OPTIONS)
+	$(CARGO) bloat $(CARGO_OPTIONS_RELEASE) $(OPTIONS)
 
 check: $(DEPS)
-	$(CARGO) check $(CARGO_OPTIONS) $(OPTIONS)
+	$(CARGO) check $(CARGO_OPTIONS_DEBUG) $(OPTIONS)
 
 clippy: $(DEPS)
-	$(CARGO) clippy $(CARGO_OPTIONS) $(OPTIONS)
+	$(CARGO) clippy $(CARGO_OPTIONS_DEBUG) $(OPTIONS)
 
 # Keep the Linux kernel versions in sync with the minimal supported versions listed in README. These
 # two assets are not expected to be built by the user, but are merely to make updates easier for the
