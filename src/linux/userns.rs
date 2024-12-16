@@ -1,21 +1,22 @@
 use crate::linux::ids::*;
 use anyhow::{Context, Result};
-use nix::{sched, unistd};
+use rustix::thread::{Pid, UnshareFlags};
 
 pub fn enter_user_namespace() -> Result<()> {
     // Start a subprocess which will give us the right uid_map and gid_map
     let (mut tx, rx) = crossmist::channel::<()>().context("Failed to create channel")?;
     let child = configure_ns.spawn(rx).context("Failed to start child")?;
 
-    sched::unshare(sched::CloneFlags::CLONE_NEWUSER).context("Failed to unshare user namespace")?;
+    unsafe { rustix::thread::unshare_unsafe(UnshareFlags::NEWUSER) }
+        .context("Failed to unshare user namespace")?;
 
     tx.send(&()).context("Failed to trigger child")?;
 
     child.join().context("Child didn't terminate gracefully")?;
 
     // Become in-sandbox root
-    unistd::setuid(unistd::Uid::from_raw(INTERNAL_ROOT_UID)).context("Failed to setuid to root")?;
-    unistd::setgid(unistd::Gid::from_raw(INTERNAL_ROOT_GID)).context("Failed to setgid to root")?;
+    rustix::thread::set_thread_uid(INTERNAL_ROOT_UID).context("Failed to setuid to root")?;
+    rustix::thread::set_thread_gid(INTERNAL_ROOT_GID).context("Failed to setgid to root")?;
 
     Ok(())
 }
@@ -33,14 +34,19 @@ fn configure_ns_impl(mut rx: crossmist::Receiver<()>) -> Result<()> {
         .context("Failed to recv")?
         .context("Parent terminated")?;
 
-    let ppid = unistd::getppid();
+    let ppid = Pid::as_raw(rustix::process::getppid());
 
     // Fill uid/gid maps
     std::fs::write(
         format!("/newroot/proc/{ppid}/uid_map"),
         format!(
-            "{INTERNAL_ROOT_UID} {EXTERNAL_ROOT_UID} 1\n{INTERNAL_USER_UID} {EXTERNAL_USER_UID} \
-             1\n{NOBODY_UID} {NOBODY_UID} 1\n"
+            "{} {} 1\n{} {} 1\n{} {} 1\n",
+            INTERNAL_ROOT_UID.as_raw(),
+            EXTERNAL_ROOT_UID.as_raw(),
+            INTERNAL_USER_UID.as_raw(),
+            EXTERNAL_USER_UID.as_raw(),
+            NOBODY_UID.as_raw(),
+            NOBODY_UID.as_raw()
         ),
     )
     .context("Failed to fill uid_map")?;
@@ -51,8 +57,13 @@ fn configure_ns_impl(mut rx: crossmist::Receiver<()>) -> Result<()> {
     std::fs::write(
         format!("/newroot/proc/{ppid}/gid_map"),
         format!(
-            "{INTERNAL_ROOT_GID} {EXTERNAL_ROOT_GID} 1\n{INTERNAL_USER_GID} {EXTERNAL_USER_GID} \
-             1\n{NOGRP_GID} {NOGRP_GID} 1\n"
+            "{} {} 1\n{} {} 1\n{} {} 1\n",
+            INTERNAL_ROOT_GID.as_raw(),
+            EXTERNAL_ROOT_GID.as_raw(),
+            INTERNAL_USER_GID.as_raw(),
+            EXTERNAL_USER_GID.as_raw(),
+            NOGRP_GID.as_raw(),
+            NOGRP_GID.as_raw()
         ),
     )
     .context("Failed to fill gid_map")?;
@@ -68,9 +79,8 @@ pub fn drop_privileges() -> Result<()> {
     // in some other cases though, e.g. if we called drop_privileges() in a manager process, because
     // that would allow the child to send SIGSTOP to circumvent time limit, or to send SIGKILL,
     // which would confuse the system.
-    unistd::setgroups(&[unistd::Gid::from_raw(INTERNAL_USER_GID)])
-        .context("Failed to setgroups")?;
-    unistd::setgid(unistd::Gid::from_raw(INTERNAL_USER_GID)).context("Failed to setgid to user")?;
-    unistd::setuid(unistd::Uid::from_raw(INTERNAL_USER_UID)).context("Failed to setuid to user")?;
+    rustix::thread::set_thread_groups(&[INTERNAL_USER_GID]).context("Failed to setgroups")?;
+    rustix::thread::set_thread_gid(INTERNAL_USER_GID).context("Failed to setgid to user")?;
+    rustix::thread::set_thread_uid(INTERNAL_USER_UID).context("Failed to setuid to user")?;
     Ok(())
 }

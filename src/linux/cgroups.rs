@@ -4,10 +4,11 @@ use crate::{
 };
 use anyhow::{ensure, Context, Result};
 use crossmist::Object;
-use nix::libc::pid_t;
 use rand::Rng;
+use rustix::fs::{AtFlags, FileType};
+use rustix::io::Errno;
+use rustix::process::{Gid, Pid, RawPid, Signal, Uid};
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::unix::io::AsRawFd;
 use std::time::Duration;
 
 #[derive(Object)]
@@ -136,12 +137,12 @@ impl Cgroup {
             .write(b"+cpu +memory +pids\n")
             .context("Failed to enable cgroup controllers")?;
 
-        nix::unistd::fchownat::<str>(
-            Some(self.core_cgroup_fd.as_raw_fd()),
+        rustix::fs::chownat(
+            &self.core_cgroup_fd,
             &proc_id,
-            Some(nix::unistd::Uid::from_raw(ids::EXTERNAL_ROOT_UID)),
-            Some(nix::unistd::Gid::from_raw(ids::EXTERNAL_ROOT_GID)),
-            nix::unistd::FchownatFlags::NoFollowSymlink,
+            Some(ids::EXTERNAL_ROOT_UID),
+            Some(ids::EXTERNAL_ROOT_GID),
+            AtFlags::SYMLINK_NOFOLLOW,
         )
         .context("Failed to chown <cgroup>")?;
 
@@ -193,7 +194,7 @@ impl ProcCgroup {
 }
 
 impl BoxCgroup {
-    pub fn add_process(&self, pid: pid_t) -> Result<()> {
+    pub fn add_process(&self, pid: RawPid) -> Result<()> {
         self.box_cgroup_fd
             .write_file("cgroup.procs", 0o700)
             .context("Failed to open cgroup.procs for writing")?
@@ -388,17 +389,9 @@ pub fn revert_core_isolation(core: u64) -> Result<()> {
     )
 }
 
-fn chown_cgroup(dir: &OpenAtDir, uid: Option<u32>, gid: Option<u32>) -> Result<()> {
-    let uid = uid.map(nix::unistd::Uid::from_raw);
-    let gid = gid.map(nix::unistd::Gid::from_raw);
-    nix::unistd::fchownat(
-        Some(dir.as_raw_fd()),
-        ".",
-        uid,
-        gid,
-        nix::unistd::FchownatFlags::NoFollowSymlink,
-    )
-    .context("Failed to chown <cgroup>")?;
+fn chown_cgroup(dir: &OpenAtDir, uid: Option<Uid>, gid: Option<Gid>) -> Result<()> {
+    rustix::fs::chownat(dir, ".", uid, gid, AtFlags::SYMLINK_NOFOLLOW)
+        .context("Failed to chown <cgroup>")?;
     for name in [
         "cgroup.freeze",
         "cgroup.kill",
@@ -411,15 +404,9 @@ fn chown_cgroup(dir: &OpenAtDir, uid: Option<u32>, gid: Option<u32>) -> Result<(
         "memory.stat",
         "memory.swap.max",
     ] {
-        if let Err(e) = nix::unistd::fchownat(
-            Some(dir.as_raw_fd()),
-            name,
-            uid,
-            gid,
-            nix::unistd::FchownatFlags::NoFollowSymlink,
-        ) {
+        if let Err(e) = rustix::fs::chownat(dir, name, uid, gid, AtFlags::SYMLINK_NOFOLLOW) {
             // We don't use some of the files on older kernels if they are unavailable
-            if e != nix::errno::Errno::ENOENT {
+            if e != Errno::NOENT {
                 return Err(e).with_context(|| format!("Failed to chown <cgroup>/{name}"));
             }
         }
@@ -432,39 +419,30 @@ fn chown_cgroup(dir: &OpenAtDir, uid: Option<u32>, gid: Option<u32>) -> Result<(
 fn remove_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
     let dir = match parent.sub_dir(dir_name) {
         Ok(dir) => dir,
-        Err(e) => {
-            if e.kind() == std::io::ErrorKind::NotFound {
-                return Ok(());
-            }
-            return Err(e).with_context(|| format!("Failed to open {dir_name:?}"));
-        }
+        Err(Errno::NOENT) => return Ok(()),
+        Err(e) => Err(e).with_context(|| format!("Failed to open {dir_name:?}"))?,
     };
 
     kill_cgroup(parent, dir_name).with_context(|| format!("Failed to kill cgroup {dir_name}"))?;
 
     for entry in dir.list_dir(".").context("Failed to list directory")? {
-        // list_self() is broken
         let entry = entry.context("Failed to list directory")?;
-        if let Some(openat::SimpleType::Dir) = entry.simple_type() {
-            remove_cgroup(
-                &dir,
-                entry.file_name().to_str().context("Invalid cgroup name")?,
-            )?;
+        if entry.file_type() == FileType::Directory {
+            let name = entry.file_name();
+            if name != c"." && name != c".." {
+                remove_cgroup(&dir, name.to_str().context("Invalid cgroup name")?)?;
+            }
         }
     }
 
     let mut backoff = std::time::Duration::from_millis(50);
     let mut times = 0;
-    while let Err(e) = nix::unistd::unlinkat(
-        Some(parent.as_raw_fd()),
-        dir_name,
-        nix::unistd::UnlinkatFlags::RemoveDir,
-    ) {
+    while let Err(e) = rustix::fs::unlinkat(parent, dir_name, AtFlags::REMOVEDIR) {
         // cgroup operations are asynchronous, so deleting a cgroup right after killing children may
         // yield EBUSY
-        if e == nix::errno::Errno::ENOENT {
+        if e == Errno::NOENT {
             break;
-        } else if e == nix::errno::Errno::EBUSY && times < 5 {
+        } else if e == Errno::BUSY && times < 5 {
             log!("Could not delete {dir_name} immediately, sleeping for {backoff:?}");
             std::thread::sleep(backoff);
             backoff *= 2;
@@ -485,13 +463,9 @@ fn kill_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
             file.write(b"1\n").context("Failed to kill cgroup")?;
             return Ok(());
         }
+        Err(Errno::NOENT | Errno::ACCESS) => {}
         Err(e) => {
-            if e.kind() != std::io::ErrorKind::NotFound
-                && e.kind() != std::io::ErrorKind::PermissionDenied
-            {
-                return Err(e)
-                    .with_context(|| format!("Failed to open {dir_name}/cgroup.kill for writing"));
-            }
+            Err(e).with_context(|| format!("Failed to open {dir_name}/cgroup.kill for writing"))?
         }
     }
 
@@ -509,16 +483,13 @@ fn kill_cgroup(parent: &OpenAtDir, dir_name: &str) -> Result<()> {
     .lines()
     {
         let line = line.context("Failed to enumerate cgroup processes")?;
-        let pid: pid_t = line.parse().context("Invalid cgroup.procs format")?;
+        let pid: RawPid = line.parse().context("Invalid cgroup.procs format")?;
         ensure!(
             pid > 0,
             "Found process from another pid namespace in cgroup.procs"
         );
-        nix::sys::signal::kill(
-            nix::unistd::Pid::from_raw(pid),
-            nix::sys::signal::Signal::SIGKILL,
-        )
-        .context("Failed to kill process")?;
+        rustix::process::kill_process(Pid::from_raw(pid).context("Invalid pid")?, Signal::KILL)
+            .context("Failed to kill process")?;
     }
 
     Ok(())

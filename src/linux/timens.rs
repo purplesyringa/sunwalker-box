@@ -1,6 +1,9 @@
 use crate::log;
 use anyhow::{Context, Result};
-use nix::{libc, sched, sys::sysinfo, time::ClockId};
+use rustix::io::Errno;
+use rustix::process::TimeStampCounterReadability;
+use rustix::thread::UnshareFlags;
+use rustix::time::ClockId;
 use std::fs::File;
 use std::io::{Seek, Write};
 
@@ -28,13 +31,10 @@ impl TimeNsController {
     pub fn reset_system_time_for_children(&mut self) -> Result<()> {
         log!("Rewinding clocks");
 
-        self.uptime_shift = sysinfo::sysinfo()
-            .context("Failed to get sysinfo")?
-            .uptime()
-            .as_secs();
+        self.uptime_shift = rustix::system::sysinfo().uptime as u64;
 
         // timens_offsets can only be set if no process has entered the timens before
-        sched::unshare(sched::CloneFlags::from_bits_retain(libc::CLONE_NEWTIME))
+        unsafe { rustix::thread::unshare_unsafe(UnshareFlags::NEWTIME) }
             .context("Failed to unshare timens")?;
 
         // CLOCK_MONOTONIC is similar to CLOCK_MONOTONIC_RAW: both are monotonic, i.e. NTP doesn't
@@ -43,21 +43,17 @@ impl TimeNsController {
         // We want to avoid negative times (should not be a problem with sane programs, but not all
         // of them are), so choose the offset so that all the clocks are positive but stay
         // approximately fixed across runs.
-        let monotonic_offset = -[
-            ClockId::CLOCK_MONOTONIC,
-            ClockId::CLOCK_MONOTONIC_RAW,
-            ClockId::CLOCK_MONOTONIC_COARSE,
+        let monotonic_offset = -*[
+            ClockId::Monotonic,
+            ClockId::MonotonicRaw,
+            ClockId::MonotonicCoarse,
         ]
-        .map(|clock_id| clock_id.now().context("Failed to get monotonic time"))
-        .into_iter()
-        .collect::<Result<Vec<_>>>()?
-        .into_iter()
+        .map(rustix::time::clock_gettime)
+        .iter()
         .min()
         .unwrap();
 
-        let boottime_offset = -ClockId::CLOCK_BOOTTIME
-            .now()
-            .context("Failed to get time since boot")?;
+        let boottime_offset = -rustix::time::clock_gettime(ClockId::Boottime);
 
         self.timens_offsets
             .rewind()
@@ -66,10 +62,10 @@ impl TimeNsController {
             .write_all(
                 format!(
                     "monotonic {} {}\nboottime {} {}\n",
-                    monotonic_offset.tv_sec(),
-                    monotonic_offset.tv_nsec(),
-                    boottime_offset.tv_sec(),
-                    boottime_offset.tv_nsec()
+                    monotonic_offset.tv_sec,
+                    monotonic_offset.tv_nsec,
+                    boottime_offset.tv_sec,
+                    boottime_offset.tv_nsec
                 )
                 .as_ref(),
             )
@@ -82,13 +78,10 @@ impl TimeNsController {
 }
 
 #[cfg(target_arch = "x86_64")]
-pub fn disable_native_instructions() -> Result<()> {
+pub fn disable_native_instructions() -> Result<(), Errno> {
     // TSC is (who would guess?) monotonic
     // XXX(linux-6.12): Maybe drop kernel module because PR_SET_TSC is implemented for arm64
-    if unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) } != 0 {
-        Err(std::io::Error::last_os_error()).context("prctl(PR_SET_TSC) failed")?;
-    }
-    Ok(())
+    rustix::process::set_time_stamp_counter_readability(TimeStampCounterReadability::RaiseSIGSEGV)
 }
 
 #[cfg(target_arch = "aarch64")]

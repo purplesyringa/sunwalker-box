@@ -1,6 +1,6 @@
-use crate::linux::system;
-use anyhow::{bail, ensure, Context, Result};
-use nix::{libc, libc::c_char, sched, unistd};
+use anyhow::{Context, Result, bail, ensure};
+use rustix::mount::{MountFlags, MountPropagationFlags};
+use rustix::thread::UnshareFlags;
 
 pub fn sanity_checks() -> Result<()> {
     // suid_dumpable = 1 means PR_SET_DUMPABLE does not trigger automatically on setuid, which is
@@ -16,12 +16,12 @@ pub fn sanity_checks() -> Result<()> {
     // problem. Cgroup v1 running in v2-compatibility mode could theoretically work, but we use
     // common controllers so it's unlikely that they're all wired to v2 mode instead of v1 but
     // somehow switching to complete v2 is impossible.
-    let fstype = nix::sys::statfs::statfs("/sys/fs/cgroup")
+    let fstype = rustix::fs::statfs("/sys/fs/cgroup")
         .context("cgroups are not available at /sys/fs/cgroup")?
-        .filesystem_type();
-    match fstype.0 as i64 {
-        libc::CGROUP2_SUPER_MAGIC => {}
-        libc::TMPFS_MAGIC => {
+        .f_type;
+    match fstype as u32 {
+        linux_raw_sys::general::CGROUP2_SUPER_MAGIC => {}
+        linux_raw_sys::general::TMPFS_MAGIC => {
             bail!(
                 "cgroups v1 seems to be mounted at /sys/fs/cgroup. sunwalker requires cgroups v2. \
                  Please configure your kernel and/or distribution to use cgroups v2"
@@ -47,22 +47,16 @@ pub fn sanity_checks() -> Result<()> {
 }
 
 pub fn unshare_persistent_namespaces() -> Result<()> {
-    sched::unshare(
-        sched::CloneFlags::CLONE_NEWUTS
-            | sched::CloneFlags::CLONE_SYSVSEM
-            | sched::CloneFlags::CLONE_NEWNET,
-    )
+    unsafe {
+        rustix::thread::unshare_unsafe(
+            UnshareFlags::NEWUTS | UnshareFlags::SYSVSEM | UnshareFlags::NEWNET,
+        )
+    }
     .context("Failed to unshare namespaces")?;
 
     // Configure UTS namespace
-    let domain_name = "sunwalker";
-    if unsafe { libc::setdomainname(domain_name.as_ptr() as *const c_char, domain_name.len()) }
-        == -1
-    {
-        return Err(std::io::Error::last_os_error()).context("Failed to set domain name");
-    }
-
-    unistd::sethostname("box").context("Failed to set host name")?;
+    rustix::system::setdomainname(b"sunwalker").context("Failed to set domain name")?;
+    rustix::system::sethostname(b"box").context("Failed to set host name")?;
 
     // Will a reasonable program ever use a local network interface? Theoretically, I can see a
     // runtime with built-in multiprocessing support use a TCP socket on localhost for IPC, but
@@ -118,11 +112,11 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to create /tmp/sunwalker_box directory")?;
 
     // Mount tmpfs on the working area
-    system::mount(
+    rustix::mount::mount(
         "none",
         "/tmp/sunwalker_box",
         "tmpfs",
-        system::MsFlags::empty(),
+        MountFlags::empty(),
         None,
     )
     .context("Failed to mount tmpfs on /tmp/sunwalker_box")?;
@@ -138,16 +132,19 @@ pub fn enter_working_area() -> Result<()> {
         .context("Failed to mkdir /tmp/sunwalker_box/oldroot")?;
     std::env::set_current_dir("/tmp/sunwalker_box")
         .context("Failed to chdir to /tmp/sunwalker_box")?;
-    nix::unistd::pivot_root(".", "oldroot").context("Failed to pivot_root")?;
+    rustix::process::pivot_root(".", "oldroot").context("Failed to pivot_root")?;
     std::env::set_current_dir("/").context("Failed to chdir to /")?;
 
     // Get /proc working
     std::fs::create_dir("/proc").context("Failed to mkdir /proc")?;
-    system::bind_mount("/oldroot/proc", "/proc")
+    rustix::mount::mount_bind("/oldroot/proc", "/proc")
         .context("Failed to bind-mount /oldroot/proc to /proc")?;
 
-    system::change_propagation("/", system::MsFlags::MS_SHARED | system::MsFlags::MS_REC)
-        .context("Failed to change propagation to shared")?;
+    rustix::mount::mount_change(
+        "/",
+        MountPropagationFlags::SHARED | MountPropagationFlags::REC,
+    )
+    .context("Failed to change propagation to shared")?;
 
     Ok(())
 }
@@ -178,23 +175,23 @@ pub fn create_dev_copy() -> Result<()> {
             std::fs::File::create_new(&target)
                 .with_context(|| format!("Failed to touch {target:?}"))?;
         }
-        system::bind_mount(&source, &target)
+        rustix::mount::mount_bind(&source, &target)
             .with_context(|| format!("Bind-mounting {source} to {target} failed"))?;
     }
 
     // Mount /dev/{pts,ptmx}
     std::fs::create_dir("/dev/pts").context("Failed to mkdir /dev/pts")?;
-    system::mount(
+    rustix::mount::mount(
         "devpts",
         "/dev/pts",
         "devpts",
-        system::MsFlags::MS_NOSUID | system::MsFlags::MS_NOEXEC,
-        Some("mode=666,ptmxmode=666"),
+        MountFlags::NOSUID | MountFlags::NOEXEC,
+        Some(c"mode=666,ptmxmode=666"),
     )
     .context("Failed to mount devpts at /dev/pts")?;
 
     std::fs::write("/dev/ptmx", "").context("Failed to touch /dev/ptmx")?;
-    system::bind_mount("/dev/pts/ptmx", "/dev/ptmx")
+    rustix::mount::mount_bind("/dev/pts/ptmx", "/dev/ptmx")
         .context("Failed to bind-mount /dev/pts/ptmx to /dev/ptmx")?;
 
     // These directories will be mounted onto later

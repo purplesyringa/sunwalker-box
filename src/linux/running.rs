@@ -1,31 +1,34 @@
 use crate::{
-    linux::{cgroups, ipc, rootfs, string_table, system, timens, tracing, userns},
+    linux::{
+        cgroups, ipc, rootfs, string_table, system, system::WaitStatus, timens, tracing, userns,
+    },
     log, syscall,
 };
 use anyhow::{bail, ensure, Context, Result};
 use crossmist::Object;
-use nix::{
-    errno, libc,
-    libc::pid_t,
-    sched,
-    sys::{epoll, ptrace, signal, signalfd, sysinfo, wait},
-    unistd,
-    unistd::Pid,
-};
+use nix::errno; // FIXME(rustix): ptrace wrapper
+use nix::sys::ptrace; // FIXME(rustix): ptrace
+use nix::sys::{signal, signalfd}; // FIXME(rustix): runtime API
+use rustix::event::epoll;
+use rustix::event::epoll::Event;
+use rustix::io::Errno;
+use rustix::process::{Pid, RawPid, Signal, WaitOptions};
+use rustix::thread::UnshareFlags;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{CString, OsStr};
 use std::fs::File;
 use std::io;
 use std::mem::MaybeUninit;
-use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt, io::AsRawFd};
+use std::os::fd::{AsRawFd, OwnedFd};
+use std::os::unix::{ffi::OsStrExt, fs::PermissionsExt};
 use std::time::{Duration, Instant};
 
 pub struct Runner {
     proc_cgroup: cgroups::ProcCgroup,
     timens_controller: timens::TimeNsController,
     sigfd: signalfd::SignalFd,
-    epoll: epoll::Epoll,
+    epoll: OwnedFd,
     exec_wrapper: File,
 }
 
@@ -46,7 +49,7 @@ pub struct Options {
 #[derive(PartialEq, Eq)]
 pub enum Verdict {
     ExitCode(i32),
-    Signaled(i32),
+    Signaled(Signal),
     CPUTimeLimitExceeded,
     RealTimeLimitExceeded,
     IdlenessTimeLimitExceeded,
@@ -79,7 +82,7 @@ struct SingleRun<'a> {
     options: Options,
     results: RunResults,
     box_cgroup: Option<cgroups::BoxCgroup>,
-    main_pid: Pid,
+    main_pid: Option<Pid>,
     start_time: Option<Instant>,
     processes: HashMap<Pid, RefCell<ProcessInfo>>,
     #[cfg(target_arch = "x86_64")]
@@ -97,7 +100,7 @@ enum EmulatedSyscall {
 impl EmulatedSyscall {
     fn result_or_errno(mut result: usize) -> Self {
         if result == usize::MAX {
-            result = -errno::errno() as usize;
+            result = -errno::Errno::last_raw() as usize;
         }
         Self::Result(result)
     }
@@ -121,7 +124,7 @@ impl Runner {
         rootfs::enter_rootfs().context("Failed to enter rootfs")?;
 
         // Unshare IPC namespace now, so that it is owned by the new userns and can be configured
-        sched::unshare(sched::CloneFlags::CLONE_NEWIPC)
+        unsafe { rustix::thread::unshare_unsafe(UnshareFlags::NEWIPC) }
             .context("Failed to unshare IPC namespace")?;
 
         // Create signalfd to watch child's state change
@@ -134,14 +137,14 @@ impl Runner {
         )
         .context("Failed to create signalfd")?;
 
-        let epoll = epoll::Epoll::new(epoll::EpollCreateFlags::EPOLL_CLOEXEC)
-            .context("Failed to create epoll")?;
-        epoll
-            .add(
-                &sigfd,
-                epoll::EpollEvent::new(epoll::EpollFlags::EPOLLIN, 0),
-            )
-            .context("Failed to configure epoll")?;
+        let epoll = epoll::create(epoll::CreateFlags::CLOEXEC).context("Failed to create epoll")?;
+        epoll::add(
+            &epoll,
+            &sigfd,
+            epoll::EventData::new_u64(0),
+            epoll::EventFlags::IN,
+        )
+        .context("Failed to configure epoll")?;
 
         let exec_wrapper = system::make_memfd(
             "exec_wrapper",
@@ -170,7 +173,7 @@ impl Runner {
                 memory: 0,
             },
             box_cgroup: None,
-            main_pid: Pid::from_raw(0),
+            main_pid: None,
             start_time: None,
             processes: HashMap::new(),
             #[cfg(target_arch = "x86_64")]
@@ -248,12 +251,12 @@ impl SingleRun<'_> {
         self.main_pid = Pid::from_raw(user_process.id());
 
         // The child will either exit or trigger SIGTRAP on execve() to exec_wrapper due to ptrace
-        let wait_status = system::waitpid(Some(self.main_pid), wait::WaitPidFlag::empty())
+        let wait_status = system::waitpid(self.main_pid, WaitOptions::empty())
             .context("Failed to waitpid for process")?;
         log!("Worker has stopped on launch with {wait_status:?}");
 
         match wait_status {
-            system::WaitStatus::Exited(_, _) => {
+            WaitStatus::Exited(_, _) => {
                 bail!(
                     "{}",
                     ours.recv()
@@ -261,7 +264,7 @@ impl SingleRun<'_> {
                         .context("The child terminated but did not report any error")?
                 );
             }
-            system::WaitStatus::Stopped(_, libc::SIGTRAP) => {}
+            WaitStatus::Stopped(_, Signal::TRAP) => {}
             _ => {
                 bail!("waitpid returned unexpected status: {wait_status:?}");
             }
@@ -273,10 +276,10 @@ impl SingleRun<'_> {
         self.box_cgroup
             .as_mut()
             .unwrap()
-            .add_process(self.main_pid.as_raw())
+            .add_process(Pid::as_raw(self.main_pid))
             .context("Failed to move the child to user cgroup")?;
 
-        let mut traced_process = tracing::TracedProcess::new(self.main_pid)?;
+        let mut traced_process = tracing::TracedProcess::new(self.main_pid.unwrap())?;
 
         if let Some(cpu_time_limit) = self.options.cpu_time_limit {
             // An additional optimization for finer handling of cpu time limit. An ITIMER_PROF timer
@@ -307,19 +310,16 @@ impl SingleRun<'_> {
         traced_process.resume()?;
 
         // The child will either exit or trigger SIGTRAP on execve() to the real program
-        let wait_status = system::waitpid(Some(self.main_pid), wait::WaitPidFlag::empty())
+        let wait_status = system::waitpid(self.main_pid, WaitOptions::empty())
             .context("Failed to waitpid for process")?;
         log!("Worker has stopped on execve with {wait_status:?}");
 
         match wait_status {
-            system::WaitStatus::Exited(_, exit_code) => {
-                let errno = exit_code;
-                bail!(
-                    "Failed to start program with error {}",
-                    std::io::Error::from_raw_os_error(errno)
-                );
-            }
-            system::WaitStatus::Stopped(_, libc::SIGTRAP) => {
+            WaitStatus::Exited(_, exit_code) => bail!(
+                "Failed to start program with error {}",
+                Errno::from_raw_os_error(exit_code)
+            ),
+            WaitStatus::Stopped(_, Signal::TRAP) => {
                 traced_process.reload_mm()?;
                 Ok(traced_process)
             }
@@ -393,9 +393,9 @@ impl SingleRun<'_> {
             || Self::is_exceeding(self.options.idleness_time_limit, self.results.idleness_time)
     }
 
-    fn compute_verdict(&self, wait_status: system::WaitStatus) -> Result<Verdict> {
+    fn compute_verdict(&self, wait_status: WaitStatus) -> Result<Verdict> {
         if Self::is_exceeding(self.options.cpu_time_limit, self.results.cpu_time) {
-            if let system::WaitStatus::Stopped(_, libc::SIGPROF) = wait_status {
+            if let WaitStatus::Stopped(_, Signal::PROF) = wait_status {
             } else {
                 log!(
                     warn,
@@ -456,39 +456,37 @@ impl SingleRun<'_> {
             return Ok(Verdict::MemoryLimitExceeded);
         }
         match wait_status {
-            system::WaitStatus::Exited(_, exit_code) => Ok(Verdict::ExitCode(exit_code)),
-            system::WaitStatus::Signaled(_, signal) => Ok(Verdict::Signaled(signal)),
+            WaitStatus::Exited(_, exit_code) => Ok(Verdict::ExitCode(exit_code)),
+            WaitStatus::Signaled(_, signal) => Ok(Verdict::Signaled(signal)),
             _ => bail!("waitpid returned unexpected status: {wait_status:?}"),
         }
     }
 
-    fn wait_for_event(&mut self) -> Result<system::WaitStatus> {
+    fn wait_for_event(&mut self) -> Result<WaitStatus> {
         let timeout_ms = self.compute_wait_timeout_ms();
 
         if timeout_ms == -1 {
             // Wait for infinity
-            return system::waitpid(None, system::WaitPidFlag::__WALL)
+            return system::waitpid(None, WaitOptions::empty())
                 .context("Failed to waitpid for process");
         }
 
-        let wait_status = system::waitpid(
-            None,
-            system::WaitPidFlag::__WALL | system::WaitPidFlag::WNOHANG,
-        )
-        .context("Failed to waitpid for process")?;
-        if wait_status != system::WaitStatus::StillAlive {
+        let wait_status =
+            system::waitpid(None, WaitOptions::NOHANG).context("Failed to waitpid for process")?;
+        if wait_status != WaitStatus::StillAlive {
             return Ok(wait_status);
         }
 
-        let mut events = [epoll::EpollEvent::empty()];
-        let n_events = self
-            .runner
-            .epoll
-            .wait(&mut events, timeout_ms as isize)
-            .context("epoll_wait failed")?;
+        let mut capacity = [MaybeUninit::<Event>::uninit(); 1];
+        let (events, _spare) = epoll::wait(
+            &self.runner.epoll,
+            &mut capacity,
+            Some(&Duration::from_millis(timeout_ms as u64).try_into().unwrap()),
+        )
+        .context("epoll_wait failed")?;
 
-        match n_events {
-            0 => Ok(system::WaitStatus::StillAlive),
+        match events.len() {
+            0 => Ok(WaitStatus::StillAlive),
             1 => {
                 while self
                     .runner
@@ -498,14 +496,10 @@ impl SingleRun<'_> {
                     .is_some()
                 {}
 
-                Ok(system::waitpid(
-                    None,
-                    system::WaitPidFlag::__WALL | system::WaitPidFlag::WNOHANG,
-                )
-                .context("Failed to waitpid for process")?)
+                Ok(system::waitpid(None, WaitOptions::NOHANG)
+                    .context("Failed to waitpid for process")?)
             }
-            _ => Err(std::io::Error::last_os_error())
-                .with_context(|| format!("epoll_wait returned {n_events}")),
+            _ => bail!("epoll_wait returned {} events", events.len()),
         }
     }
 
@@ -518,7 +512,7 @@ impl SingleRun<'_> {
 
     fn on_after_fork(&self, process: &mut ProcessInfo) -> Result<()> {
         log!(
-            "Initializing process {} after fork",
+            "Initializing process {:?} after fork",
             process.traced_process.get_pid()
         );
         process.traced_process.init()?;
@@ -528,7 +522,7 @@ impl SingleRun<'_> {
 
     fn on_after_execve(&self, process: &mut ProcessInfo) -> Result<()> {
         log!(
-            "Initializing process {} after execve",
+            "Initializing process {:?} after execve",
             process.traced_process.get_pid()
         );
         // Required to make clock_gettime work, because it would otherwise rely on processor
@@ -554,10 +548,10 @@ impl SingleRun<'_> {
         match self.emulate_syscall(process, syscall_info)? {
             EmulatedSyscall::Result(result) => {
                 if result as isize >= 0 {
-                    log!("Emulating <pid {pid}> {syscall_args} = {result}");
+                    log!("Emulating <{pid:?}> {syscall_args} = {result}");
                 } else {
                     log!(
-                        "Emulating <pid {pid}> {syscall_args} = -{}",
+                        "Emulating <{pid:?}> {syscall_args} = -{}",
                         string_table::errno_to_name(-(result as i32))
                     );
                 }
@@ -566,7 +560,7 @@ impl SingleRun<'_> {
                 process.state = ProcessState::Alive;
             }
             EmulatedSyscall::Redirect(args, state) => {
-                log!("Emulating <pid {pid}> {syscall_args} -> {args} (redirect)");
+                log!("Emulating <{pid:?}> {syscall_args} -> {args} (redirect)");
                 process.traced_process.set_syscall(args)?;
                 process.state = state;
             }
@@ -749,10 +743,10 @@ impl SingleRun<'_> {
                 ))
             }
             libc::SYS_sysinfo => {
-                let our_sysinfo = sysinfo::sysinfo().context("Failed to get sysinfo")?;
+                let our_sysinfo = rustix::system::sysinfo();
 
                 // Don't leak sunwalker's memory in padding bytes
-                let mut user_sysinfo = MaybeUninit::<libc::sysinfo>::zeroed();
+                let mut user_sysinfo = MaybeUninit::<linux_raw_sys::system::sysinfo>::zeroed();
                 let user_sysinfo_mut = unsafe { user_sysinfo.assume_init_mut() };
 
                 let mem = self
@@ -762,14 +756,14 @@ impl SingleRun<'_> {
                     .get_memory_stats()
                     .context("Failed to get memory stats")?;
 
-                user_sysinfo_mut.uptime = (our_sysinfo.uptime()
-                    - Duration::from_secs(self.runner.timens_controller.get_uptime_shift()))
-                .as_secs();
+                user_sysinfo_mut.uptime = our_sysinfo
+                    .uptime
+                    .wrapping_sub(self.runner.timens_controller.get_uptime_shift() as i64);
                 user_sysinfo_mut.loads = [0; 3]; // there's no practical way to replicate LA
                 if let Some(limit) = self.options.memory_limit {
                     user_sysinfo_mut.totalram = limit as u64;
                 } else {
-                    user_sysinfo_mut.totalram = our_sysinfo.ram_total();
+                    user_sysinfo_mut.totalram = our_sysinfo.totalram;
                 }
                 user_sysinfo_mut.freeram =
                     user_sysinfo_mut.totalram - (mem.anon + mem.file + mem.kernel) as u64;
@@ -782,7 +776,7 @@ impl SingleRun<'_> {
                     .as_ref()
                     .unwrap()
                     .get_current_processes()
-                    .context("Failed to get count of runnning processes")?
+                    .context("Failed to get count of running processes")?
                     as u16;
                 user_sysinfo_mut.totalhigh = 0;
                 user_sysinfo_mut.freehigh = 0;
@@ -791,9 +785,7 @@ impl SingleRun<'_> {
                 if process
                     .traced_process
                     .write_memory(syscall_info.args[0] as usize, unsafe {
-                        // We have to force the size to 112 bytes because musl's sysinfo is much
-                        // larger, and we don't want to override user's data
-                        user_sysinfo.as_bytes()[..112].assume_init_ref()
+                        user_sysinfo.as_bytes().assume_init_ref()
                     })
                     .is_ok()
                 {
@@ -835,7 +827,7 @@ impl SingleRun<'_> {
         }
 
         log!("Delivering SIGSEGV");
-        process.traced_process.resume_signal(libc::SIGSEGV)?;
+        process.traced_process.resume_signal(Signal::SEGV)?;
         Ok(())
     }
 
@@ -843,7 +835,7 @@ impl SingleRun<'_> {
     fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
         if !self.emulate_insn(process)? {
             log!("Delivering SIGILL");
-            process.traced_process.resume_signal(libc::SIGILL)?;
+            process.traced_process.resume_signal(Signal::ILL)?;
         }
 
         Ok(())
@@ -891,22 +883,22 @@ impl SingleRun<'_> {
     #[cfg(target_arch = "aarch64")]
     fn handle_sigsegv(&self, process: &mut ProcessInfo) -> Result<()> {
         log!("Delivering SIGSEGV");
-        process.traced_process.resume_signal(libc::SIGSEGV)?;
+        process.traced_process.resume_signal(Signal::SEGV)?;
         Ok(())
     }
 
     #[cfg(target_arch = "aarch64")]
     fn handle_sigill(&self, process: &mut ProcessInfo) -> Result<()> {
         log!("Delivering SIGILL");
-        process.traced_process.resume_signal(libc::SIGILL)?;
+        process.traced_process.resume_signal(Signal::ILL)?;
         Ok(())
     }
 
-    fn _handle_event(&mut self, wait_status: &system::WaitStatus) -> Result<bool> {
+    fn _handle_event(&mut self, wait_status: &WaitStatus) -> Result<bool> {
         match *wait_status {
-            system::WaitStatus::StillAlive => {}
+            WaitStatus::StillAlive => {}
 
-            system::WaitStatus::Exited(pid, _) | system::WaitStatus::Signaled(pid, _) => {
+            WaitStatus::Exited(pid, _) | WaitStatus::Signaled(pid, _) => {
                 // We used to listen to PTRACE_EVENT_EXIT to detect process termination. We would
                 // wait for the event, remove the process from `self.processes`, and then swallow
                 // Exited/Signaled for everyone but the main process. This is error-prone:
@@ -915,13 +907,13 @@ impl SingleRun<'_> {
                 // Therefore, avoid PTRACE_EVENT_EXIT like a plague and rely on Exited/Signaled
                 // only.
                 self.processes.remove(&pid);
-                if pid == self.main_pid {
+                if Some(pid) == self.main_pid {
                     log!("Main process exited");
                     return Ok(true);
                 }
             }
 
-            system::WaitStatus::Stopped(pid, signal) => {
+            WaitStatus::Stopped(pid, signal) => {
                 // Normally, we don't get signals from "unknown" processes, and SIGSTOP, which is
                 // raised immediately after process start is delivered after PtraceEvent(fork). But,
                 // this is not always true. One notable (first google link) example of this is
@@ -958,8 +950,8 @@ impl SingleRun<'_> {
                     Some(process) => process.borrow_mut(),
                     None => {
                         ensure!(
-                            signal == libc::SIGSTOP,
-                            "Unknown pid {pid} while handling Stopped on signal {signal}"
+                            signal == Signal::STOP,
+                            "Unknown pid {pid:?} while handling Stopped on signal {signal:?}"
                         );
 
                         self.processes.insert(
@@ -975,18 +967,18 @@ impl SingleRun<'_> {
                 };
 
                 match signal {
-                    libc::SIGSTOP => {
+                    Signal::STOP => {
                         if process.state == ProcessState::JustStarted {
                             process.state = ProcessState::Alive;
                             self.on_after_fork(&mut process)?;
                             return Ok(false);
                         }
                     }
-                    libc::SIGSEGV => {
+                    Signal::SEGV => {
                         self.handle_sigsegv(&mut process)?;
                         return Ok(false);
                     }
-                    libc::SIGILL => {
+                    Signal::ILL => {
                         self.handle_sigill(&mut process)?;
                         return Ok(false);
                     }
@@ -996,7 +988,7 @@ impl SingleRun<'_> {
                 process.traced_process.resume_signal(signal)?;
             }
 
-            system::WaitStatus::PtraceEvent(pid, _, event) => {
+            WaitStatus::PtraceEvent(pid, _, event) => {
                 if event == libc::PTRACE_EVENT_EXEC {
                     // We might not be aware of the given a pid. Consider the following situation:
                     // - Process with PID 2 starts a thread with PID 3
@@ -1008,7 +1000,8 @@ impl SingleRun<'_> {
                         state: ProcessState::Alive,
                         traced_process: tracing::TracedProcess::new(pid)?,
                     };
-                    let old_pid = Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
+                    let old_pid = Pid::from_raw(process.traced_process.get_event_msg()? as RawPid)
+                        .context("Invalid pid")?;
                     self.processes.remove(&old_pid);
                     self.on_after_execve(&mut process)?;
                     process.traced_process.resume()?;
@@ -1017,7 +1010,7 @@ impl SingleRun<'_> {
                 }
 
                 let Some(process) = self.processes.get(&pid) else {
-                    bail!("Unknown pid {pid} while handling PtraceEvent {event}");
+                    bail!("Unknown pid {pid:?} while handling PtraceEvent {event}");
                 };
 
                 let mut process = process.borrow_mut();
@@ -1028,7 +1021,8 @@ impl SingleRun<'_> {
                     | libc::PTRACE_EVENT_VFORK
                     | libc::PTRACE_EVENT_CLONE => {
                         let child_pid =
-                            Pid::from_raw(process.traced_process.get_event_msg()? as pid_t);
+                            Pid::from_raw(process.traced_process.get_event_msg()? as RawPid)
+                                .context("Invalid pid")?;
                         process.traced_process.resume()?;
                         drop(process);
 
@@ -1040,7 +1034,7 @@ impl SingleRun<'_> {
                                 // See Stopped(SIGSTOP) handling
                                 ensure!(
                                     *state == ProcessState::AwaitingForkNotification,
-                                    "Pid {child_pid} got PtraceEvent(fork-like) with \
+                                    "Pid {child_pid:?} got PtraceEvent(fork-like) with \
                                      inappropriate state {state:?}"
                                 );
 
@@ -1062,7 +1056,7 @@ impl SingleRun<'_> {
                 }
             }
 
-            system::WaitStatus::PtraceSyscall(pid) => {
+            WaitStatus::PtraceSyscall(pid) => {
                 let process = self.processes.get_mut(&pid).unwrap().get_mut();
                 match &process.state {
                     ProcessState::AfterOpenMemfd(path) => {
@@ -1083,7 +1077,7 @@ impl SingleRun<'_> {
         Ok(false)
     }
 
-    fn handle_event(&mut self, wait_status: &system::WaitStatus) -> Result<bool> {
+    fn handle_event(&mut self, wait_status: &WaitStatus) -> Result<bool> {
         log!("Event {wait_status:?}");
 
         // ptrace often reports ESRCH if the process is killed before we notice that
@@ -1115,11 +1109,11 @@ impl SingleRun<'_> {
 
         // We don't really care what happens after, but we have to waitpid() anyway
         loop {
-            match system::waitpid(None, system::WaitPidFlag::__WALL) {
+            match system::waitpid(None, WaitOptions::empty()) {
                 Ok(wait_status) => {
                     self.handle_event(&wait_status)?;
                 }
-                Err(errno::Errno::ECHILD) => break,
+                Err(Errno::CHILD) => break,
                 Err(e) => Err(e).context("Failed to waitpid")?,
             }
         }
@@ -1147,9 +1141,7 @@ impl SingleRun<'_> {
 
             // Round the limit down to page size. This ensures that if the maximum amount of pages
             // is allocated, the limit is exceeded (as opposed to slightly unreachable).
-            let page_size = unistd::sysconf(unistd::SysconfVar::PAGE_SIZE)
-                .context("Failed to get page size")?
-                .context("PAGE_SIZE is unavailable")? as usize;
+            let page_size = rustix::param::page_size();
             self.options.memory_limit = Some(memory_limit & !(page_size - 1));
         }
 
@@ -1170,7 +1162,7 @@ impl SingleRun<'_> {
         self.on_after_execve(&mut main_process)?;
         self.on_after_fork(&mut main_process)?;
         self.processes
-            .insert(self.main_pid, RefCell::new(main_process));
+            .insert(self.main_pid.unwrap(), RefCell::new(main_process));
 
         // If SIGPROF fires because of our actions, we capture Stopped(SIGPROF), continue the
         // process with the signal, immediately recognize that the limit has been exceeded on the
@@ -1182,7 +1174,7 @@ impl SingleRun<'_> {
         //
         // Either way, we're doing the right thing without handling SIGPROF in a special way.
         let result = try {
-            let mut wait_status = system::WaitStatus::StillAlive;
+            let mut wait_status = WaitStatus::StillAlive;
             while !self.is_exceeding_time_limits() {
                 wait_status = self.wait_for_event()?;
                 self.update_metrics()?;
@@ -1238,9 +1230,9 @@ fn executor_worker_impl(
 
     std::env::set_current_dir("/space").context("Failed to chdir to /space")?;
 
-    unistd::dup2(stdin.as_raw_fd(), libc::STDIN_FILENO).context("dup2 for stdin failed")?;
-    unistd::dup2(stdout.as_raw_fd(), libc::STDOUT_FILENO).context("dup2 for stdout failed")?;
-    unistd::dup2(stderr.as_raw_fd(), libc::STDERR_FILENO).context("dup2 for stderr failed")?;
+    rustix::stdio::dup2_stdin(stdin).context("dup2 for stdin failed")?;
+    rustix::stdio::dup2_stdout(stdout).context("dup2 for stdout failed")?;
+    rustix::stdio::dup2_stderr(stderr).context("dup2 for stderr failed")?;
 
     let mut args = Vec::with_capacity(argv.len() + 1);
     args.push(CString::new("exec_wrapper")?);
@@ -1280,5 +1272,5 @@ fn executor_worker_impl(
     // executable to memory already. Instead, we load a dummy executable that's only going to
     // use a tiny bit of memory (at most 172 KiB in practice), enforce the limits, and then let
     // the dummy execute the user program.
-    match unistd::fexecve(exec_wrapper.as_raw_fd(), &args, &envp).context("execv failed")? {}
+    match nix::unistd::fexecve(exec_wrapper.as_raw_fd(), &args, &envp).context("execv failed")? {}
 }

@@ -1,16 +1,16 @@
-use crate::{linux::system, log};
+use crate::log;
 use anyhow::{Context, Result};
-use nix::{
-    libc,
-    libc::{c_int, pid_t},
-    sched,
-};
+use libc::c_int;
+use rustix::mount::MountFlags;
+use rustix::process::RawPid;
+use rustix::thread::ThreadNameSpaceType;
 use std::fs::File;
 use std::io::{BufRead, BufReader};
+use std::os::fd::AsFd;
 use std::os::unix::fs::PermissionsExt;
 
 pub fn mount_mqueue(path: &str) -> Result<()> {
-    system::mount("mqueue", path, "mqueue", system::MsFlags::empty(), None)
+    rustix::mount::mount("mqueue", path, "mqueue", MountFlags::empty(), None)
         .with_context(|| format!("Failed to mount mqueue on {path}"))?;
     // rwxrwxrwt
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o1777))
@@ -18,9 +18,12 @@ pub fn mount_mqueue(path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn join_process_ipc_namespace(pid: pid_t) -> Result<()> {
+pub fn join_process_ipc_namespace(pid: RawPid) -> Result<()> {
     let ipc = File::open(format!("/newroot/proc/{pid}/ns/ipc"))?;
-    sched::setns(ipc, sched::CloneFlags::CLONE_NEWIPC)?;
+    rustix::thread::move_into_thread_name_spaces(
+        ipc.as_fd(),
+        ThreadNameSpaceType::INTER_PROCESS_COMMUNICATION,
+    )?;
     Ok(())
 }
 

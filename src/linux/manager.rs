@@ -6,7 +6,6 @@ use anyhow::{Context, Result};
 use crossmist::Object;
 use miniserde::Serialize;
 use miniserde_enum::Serialize_enum;
-use nix::sys::signal;
 use std::path::PathBuf;
 
 #[derive(Debug, Object)]
@@ -37,7 +36,7 @@ fn manager_impl(
     log!("Manager started");
 
     // Cancel signal blocking by reaper
-    signal::SigSet::empty()
+    nix::sys::signal::SigSet::empty()
         .thread_set_mask()
         .context("Failed to configure signal mask")?;
 
@@ -114,7 +113,9 @@ fn execute_command(
 
             let verdict = match results.verdict {
                 running::Verdict::ExitCode(exit_code) => Verdict::Exited { exit_code },
-                running::Verdict::Signaled(signal_number) => Verdict::Signaled { signal_number },
+                running::Verdict::Signaled(signal_number) => Verdict::Signaled {
+                    signal_number: signal_number.as_raw(),
+                },
                 running::Verdict::CPUTimeLimitExceeded => Verdict::LimitExceeded {
                     limit: Limit::CpuTime,
                 },

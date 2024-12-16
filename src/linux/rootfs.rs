@@ -1,11 +1,14 @@
 use crate::{
-    linux::{ids, procs, system},
+    linux::{ids, procs},
     log,
 };
-use anyhow::{anyhow, ensure, Context, Result};
-use nix::sched;
+use anyhow::{Context, Result, anyhow, ensure};
+use rustix::{
+    mount::{MountFlags, MountPropagationFlags, UnmountFlags},
+    thread::UnshareFlags,
+};
 use std::collections::HashMap;
-use std::ffi::{OsStr, OsString};
+use std::ffi::{CString, OsStr, OsString};
 use std::io::{BufRead, ErrorKind};
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
@@ -36,7 +39,7 @@ pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<Rootf
     // Create the new root directory
     std::fs::create_dir("/newroot").context("Failed to mkdir /newroot")?;
     // Manager needs to be able to create /memfd:... files in root
-    std::os::unix::fs::chown(
+    rustix::fs::chown(
         "/newroot",
         Some(ids::EXTERNAL_ROOT_UID),
         Some(ids::EXTERNAL_ROOT_GID),
@@ -81,14 +84,10 @@ pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<Rootf
                     .with_context(|| format!("Failed to touch {target_path}"))?;
             }
 
-            system::bind_mount(&source_path, &target_path)
+            rustix::mount::mount_bind(&source_path, &target_path)
                 .with_context(|| format!("Failed to bind-mount {source_path} to {target_path}"))?;
-            system::bind_mount_opt(
-                "none",
-                &target_path,
-                system::MsFlags::MS_REMOUNT | system::MsFlags::MS_RDONLY,
-            )
-            .with_context(|| format!("Failed to remount {target_path} read-only"))?;
+            rustix::mount::mount_remount(&target_path, MountFlags::BIND | MountFlags::RDONLY, "")
+                .with_context(|| format!("Failed to remount {target_path} read-only"))?;
         }
     }
 
@@ -103,14 +102,10 @@ pub fn create_rootfs(root: &std::path::Path, quotas: DiskQuotas) -> Result<Rootf
         std::fs::create_dir(path).with_context(|| format!("Failed to mkdir {path}"))?;
     }
     // Mount /dev
-    system::bind_mount_opt("/dev", "/newroot/dev", system::MsFlags::MS_REC)
+    rustix::mount::mount_bind_recursive("/dev", "/newroot/dev")
         .context("Failed to bind-mount /newroot/dev")?;
-    system::bind_mount_opt(
-        "none",
-        "/newroot/dev",
-        system::MsFlags::MS_REMOUNT | system::MsFlags::MS_RDONLY,
-    )
-    .context("Failed to remount /newroot/dev read-only")?;
+    rustix::mount::mount_remount("/newroot/dev", MountFlags::BIND | MountFlags::RDONLY, "")
+        .context("Failed to remount /newroot/dev read-only")?;
 
     // Remember current mounts so that we can restore the state on reset
     let mut state = RootfsState {
@@ -129,10 +124,11 @@ pub fn configure_rootfs() -> Result<()> {
 
     // We want to unmount /oldroot and others, so we need to switch to a new mount namespace. But we
     // don't want mounts to get locked, so the user namespace has to stay the same.
-    sched::unshare(sched::CloneFlags::CLONE_NEWNS).context("Failed to unshare mount namespace")?;
-    system::change_propagation("/oldroot", system::MsFlags::MS_PRIVATE)
+    unsafe { rustix::thread::unshare_unsafe(UnshareFlags::NEWNS) }
+        .context("Failed to unshare mount namespace")?;
+    rustix::mount::mount_change("/oldroot", MountPropagationFlags::PRIVATE)
         .context("Failed to change propagation of /oldroot")?;
-    system::umount_opt("/oldroot", system::MntFlags::MNT_DETACH)
+    rustix::mount::unmount("/oldroot", UnmountFlags::DETACH)
         .context("Failed to unmount /oldroot")?;
 
     Ok(())
@@ -165,11 +161,12 @@ pub fn enter_rootfs() -> Result<()> {
     // chroot, and if we want to obtain the level of security pivot_root might otherwise grant, we
     // have to call pivot_root earlier, in the main process.
 
-    sched::unshare(sched::CloneFlags::CLONE_NEWNS).context("Failed to unshare mount namespace")?;
+    unsafe { rustix::thread::unshare_unsafe(UnshareFlags::NEWNS) }
+        .context("Failed to unshare mount namespace")?;
 
     // Chroot into /newroot
     std::env::set_current_dir("/newroot").context("Failed to chdir to /newroot")?;
-    nix::unistd::chroot(".").context("Failed to chroot into /newroot")?;
+    rustix::process::chroot(".").context("Failed to chroot into /newroot")?;
 
     Ok(())
 }
@@ -199,37 +196,33 @@ pub fn commit(state: &mut RootfsState) -> Result<()> {
     save_space_mounts(state, mounts)?;
 
     // Make a new read-only base
-    system::mount(
-        "none",
+    rustix::mount::mount_remount(
         "/newroot/space",
-        "tmpfs",
-        system::MsFlags::MS_REMOUNT | system::MsFlags::MS_RDONLY | system::MsFlags::MS_NOSUID,
-        Some(
-            format!(
-                "size={},nr_inodes={}",
-                state.quotas.space, state.quotas.max_inodes
-            )
-            .as_ref(),
+        MountFlags::RDONLY | MountFlags::NOSUID,
+        format!(
+            "size={},nr_inodes={}",
+            state.quotas.space, state.quotas.max_inodes
         ),
     )
     .context("Failed to remount /newroot/space read-only")?;
     std::fs::create_dir("/base").context("Failed to mkdir /base")?;
-    system::bind_mount("/newroot/space", "/base")
+    rustix::mount::mount_bind("/newroot/space", "/base")
         .context("Failed to bind-mount /newroot/space to /base")?;
-    system::umount("/newroot/space").context("Failed to unmount /newroot/space")?;
+    rustix::mount::unmount("/newroot/space", UnmountFlags::empty())
+        .context("Failed to unmount /newroot/space")?;
 
     // Mount overlayfs on /newroot/space
     std::fs::create_dir("/staging/upper").context("Failed to mkdir /staging/upper")?;
     std::fs::create_dir("/staging/work").context("Failed to mkdir /staging/work")?;
-    system::mount(
+    rustix::mount::mount(
         "none",
         "/newroot/space",
         "overlay",
-        system::MsFlags::empty(),
-        Some("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work"),
+        MountFlags::empty(),
+        Some(c"lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work"),
     )
     .context("Failed to mount overlayfs on /newroot/space")?;
-    std::os::unix::fs::chown(
+    rustix::fs::chown(
         "/newroot/space",
         Some(ids::EXTERNAL_USER_UID),
         Some(ids::EXTERNAL_USER_GID),
@@ -262,13 +255,14 @@ fn save_space_mounts(state: &mut RootfsState, mounts: Vec<String>) -> Result<()>
                 .with_context(|| format!("Failed to touch {saved_path}"))?;
         }
 
-        system::bind_mount(&path, &saved_path)
+        rustix::mount::mount_bind(&path, &saved_path)
             .with_context(|| format!("Failed to move mount {path} to {saved_path}"))?;
         state.space_mounts_restore_actions.push((saved_path, path));
     }
 
     for (_, path) in state.space_mounts_restore_actions.iter().rev() {
-        system::umount(path).with_context(|| format!("Failed to unmount {path}"))?;
+        rustix::mount::unmount(path, UnmountFlags::empty())
+            .with_context(|| format!("Failed to unmount {path}"))?;
     }
 
     Ok(())
@@ -277,29 +271,31 @@ fn save_space_mounts(state: &mut RootfsState, mounts: Vec<String>) -> Result<()>
 fn restore_space_mounts(state: &RootfsState) -> Result<()> {
     for (saved_path, path) in &state.space_mounts_restore_actions {
         log!("Restoring mount {saved_path} -> {path}");
-        system::bind_mount(saved_path, path)
+        rustix::mount::mount_bind(saved_path, path)
             .with_context(|| format!("Failed to bind-mount {saved_path} to {path}"))?;
     }
     Ok(())
 }
 
 fn mount_user_dir(state: &RootfsState, path: &str) -> Result<()> {
-    system::mount(
+    rustix::mount::mount(
         "none",
         path,
         "tmpfs",
-        system::MsFlags::MS_NOSUID,
+        MountFlags::NOSUID,
         Some(
             format!(
                 "size={},nr_inodes={}",
                 state.quotas.space, state.quotas.max_inodes
             )
+            .parse::<CString>()
+            .unwrap()
             .as_ref(),
         ),
     )
     .with_context(|| format!("Failed to mount tmpfs on {path}"))?;
 
-    std::os::unix::fs::chown(
+    rustix::fs::chown(
         path,
         Some(ids::EXTERNAL_USER_UID),
         Some(ids::EXTERNAL_USER_GID),
@@ -340,20 +336,23 @@ pub fn reset(state: &RootfsState) -> Result<()> {
     }
     for path in paths_to_umount.into_iter().rev() {
         log!("Unmounting {path}");
-        system::umount(&path).with_context(|| format!("Failed to unmount {path}"))?;
+        rustix::mount::unmount(&path, UnmountFlags::empty())
+            .with_context(|| format!("Failed to unmount {path}"))?;
     }
 
     // /staging and (if not committed) /newroot/space have just been unmounted
-    system::mount(
+    rustix::mount::mount(
         "none",
         "/staging",
         "tmpfs",
-        system::MsFlags::MS_NOSUID,
+        MountFlags::NOSUID,
         Some(
             format!(
                 "size={},nr_inodes={}",
                 state.quotas.space, state.quotas.max_inodes
             )
+            .parse::<CString>()
+            .unwrap()
             .as_ref(),
         ),
     )
@@ -363,19 +362,21 @@ pub fn reset(state: &RootfsState) -> Result<()> {
     if state.is_committed {
         std::fs::create_dir("/staging/upper").context("Failed to mkdir /staging/upper")?;
         std::fs::create_dir("/staging/work").context("Failed to mkdir /staging/work")?;
-        system::umount("/newroot/dev/shm").context("Failed to unmount /newroot/dev/shm")?;
-        system::umount("/newroot/tmp").context("Failed to unmount /newroot/tmp")?;
-        system::umount_opt("/newroot/space", system::MntFlags::MNT_DETACH)
+        rustix::mount::unmount("/newroot/dev/shm", UnmountFlags::empty())
+            .context("Failed to unmount /newroot/dev/shm")?;
+        rustix::mount::unmount("/newroot/tmp", UnmountFlags::empty())
+            .context("Failed to unmount /newroot/tmp")?;
+        rustix::mount::unmount("/newroot/space", UnmountFlags::DETACH)
             .context("Failed to unmount /newroot/space")?;
-        system::mount(
+        rustix::mount::mount(
             "none",
             "/newroot/space",
             "overlay",
-            system::MsFlags::empty(),
-            Some("lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work"),
+            MountFlags::empty(),
+            Some(c"lowerdir=/base,upperdir=/staging/upper,workdir=/staging/work"),
         )
         .context("Failed to mount overlayfs on /newroot/space")?;
-        std::os::unix::fs::chown(
+        rustix::fs::chown(
             "/newroot/space",
             Some(ids::EXTERNAL_USER_UID),
             Some(ids::EXTERNAL_USER_GID),
@@ -392,7 +393,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
         ("/newroot/tmp", "/staging/tmp"),
     ] {
         std::fs::create_dir(orig_path).with_context(|| format!("Failed to mkdir {orig_path}"))?;
-        std::os::unix::fs::chown(
+        rustix::fs::chown(
             orig_path,
             Some(ids::EXTERNAL_ROOT_UID),
             Some(ids::EXTERNAL_ROOT_GID),
@@ -403,7 +404,7 @@ pub fn reset(state: &RootfsState) -> Result<()> {
             std::os::unix::fs::PermissionsExt::from_mode(0o1777),
         )
         .with_context(|| format!("Failed to chmod {orig_path}"))?;
-        system::bind_mount(orig_path, path)
+        rustix::mount::mount_bind(orig_path, path)
             .with_context(|| format!("Failed to bind-mount {orig_path} to {path}"))?;
     }
 

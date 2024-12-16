@@ -1,59 +1,10 @@
-use nix::{
-    errno::Errno,
-    libc,
-    libc::{c_int, SYS_pidfd_open},
-    sys::memfd,
-    unistd::Pid,
-};
-
-pub use nix::mount::{MntFlags, MsFlags};
-pub use nix::sys::wait::WaitPidFlag;
-
-use std::ffi::CString;
+use rustix::fs::MemfdFlags;
+use rustix::io::{Errno, Result};
+use rustix::mount::MountFlags;
+use rustix::process::{Pid, Signal, WaitOptions};
 use std::fs::File;
-use std::io::{ErrorKind, Result, Write};
-use std::os::fd::{FromRawFd, OwnedFd, RawFd};
+use std::io::Write;
 use std::path::Path;
-
-pub fn mount<S: AsRef<Path>, T: AsRef<Path>>(
-    source: S,
-    target: T,
-    fs_type: &str,
-    flags: MsFlags,
-    data: Option<&str>,
-) -> Result<()> {
-    Ok(nix::mount::mount(
-        Some(source.as_ref()),
-        target.as_ref(),
-        Some(fs_type),
-        flags,
-        data,
-    )?)
-}
-
-pub fn change_propagation<P: AsRef<Path>>(path: P, flags: MsFlags) -> Result<()> {
-    mount("none", path, "none", flags, None)
-}
-
-pub fn bind_mount_opt<S: AsRef<Path>, T: AsRef<Path>>(
-    source: S,
-    target: T,
-    flags: MsFlags,
-) -> Result<()> {
-    mount(source, target, "none", flags | MsFlags::MS_BIND, None)
-}
-
-pub fn bind_mount<S: AsRef<Path>, T: AsRef<Path>>(source: S, target: T) -> Result<()> {
-    bind_mount_opt(source, target, MsFlags::empty())
-}
-
-pub fn umount_opt<P: AsRef<Path>>(path: P, flags: MntFlags) -> Result<()> {
-    Ok(nix::mount::umount2(path.as_ref(), flags)?)
-}
-
-pub fn umount<P: AsRef<Path>>(path: P) -> Result<()> {
-    Ok(nix::mount::umount(path.as_ref())?)
-}
 
 pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
     // If a filesystem was mounted with NOSUID/NODEV/NOEXEC, we won't be able to remount the
@@ -61,92 +12,88 @@ pub fn remount_readonly<P: AsRef<Path>>(path: P) -> Result<()> {
     // isn't going to be triggered often in production anyway, so we just use the shotgun approach
     // for now, bruteforcing the flags in the order of most likeliness.
     for flags in [
-        MsFlags::empty(),
-        MsFlags::MS_NOSUID,
-        MsFlags::MS_NODEV,
-        MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
-        MsFlags::MS_NOEXEC,
-        MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID,
-        MsFlags::MS_NOEXEC | MsFlags::MS_NODEV,
-        MsFlags::MS_NOEXEC | MsFlags::MS_NOSUID | MsFlags::MS_NODEV,
+        MountFlags::empty(),
+        MountFlags::NOSUID,
+        MountFlags::NODEV,
+        MountFlags::NOSUID | MountFlags::NODEV,
+        MountFlags::NOEXEC,
+        MountFlags::NOEXEC | MountFlags::NOSUID,
+        MountFlags::NOEXEC | MountFlags::NODEV,
+        MountFlags::NOEXEC | MountFlags::NOSUID | MountFlags::NODEV,
     ] {
-        match bind_mount_opt(
-            "none",
+        match rustix::mount::mount_remount(
             path.as_ref(),
-            MsFlags::MS_REMOUNT | MsFlags::MS_RDONLY | flags,
+            MountFlags::BIND | MountFlags::RDONLY | flags,
+            "",
         ) {
-            Err(e) if e.kind() == ErrorKind::PermissionDenied => continue,
+            Err(Errno::PERM) => continue,
             result => return result,
         }
     }
-    Err(std::io::Error::last_os_error())
+    Err(Errno::PERM)
 }
 
-pub fn make_memfd(name: &str, contents: &[u8]) -> Result<File> {
-    let mut file = File::from(memfd::memfd_create(
-        &CString::new(name)?,
-        memfd::MemFdCreateFlag::MFD_CLOEXEC,
-    )?);
+pub fn make_memfd(name: &str, contents: &[u8]) -> std::io::Result<File> {
+    let mut file = File::from(rustix::fs::memfd_create(name, MemfdFlags::CLOEXEC)?);
     file.write_all(contents)?;
     Ok(file)
 }
 
-pub fn open_pidfd(pid: Pid) -> Result<OwnedFd> {
-    let pidfd = unsafe { libc::syscall(SYS_pidfd_open, pid, 0) } as RawFd;
-    if pidfd >= 0 {
-        Ok(unsafe { OwnedFd::from_raw_fd(pidfd) })
-    } else {
-        Err(std::io::Error::last_os_error())
-    }
-}
-
-// We need to roll our own nix::wait because nix's version doesn't support realtime signals -- and
-// not only does it not support them, it also fails to handle waitpid() in this case, making Mono
-// runtime die.
+// We need to roll our own rustix::wait because rustix's version doesn't provide convenient API
 #[derive(Debug, PartialEq)]
 pub enum WaitStatus {
     Exited(Pid, i32),
-    Signaled(Pid, i32),
-    Stopped(Pid, i32),
-    PtraceEvent(Pid, i32, c_int),
+    Signaled(Pid, Signal),
+    Stopped(Pid, Signal),
+    PtraceEvent(Pid, Signal, i32),
     PtraceSyscall(Pid),
     Continued(Pid),
     StillAlive,
 }
 
-pub fn waitpid(pid: Option<Pid>, options: WaitPidFlag) -> nix::Result<WaitStatus> {
-    let mut status: i32 = 0;
-    let res = unsafe {
-        libc::waitpid(
-            pid.unwrap_or(Pid::from_raw(-1)).into(),
-            &mut status as *mut c_int,
-            options.bits(),
-        )
+pub fn waitpid(pid: Option<Pid>, options: WaitOptions) -> Result<WaitStatus> {
+    let res = match pid {
+        Some(_) => rustix::process::waitpid(pid, options),
+        None => rustix::process::wait(options),
+    }?;
+
+    let Some((pid, ws)) = res else {
+        return Ok(WaitStatus::StillAlive);
     };
-
-    let pid = Pid::from_raw(res);
-
-    if res == -1 {
-        return Err(Errno::last());
-    }
-
-    Ok(if res == 0 {
-        WaitStatus::StillAlive
-    } else if libc::WIFEXITED(status) {
-        WaitStatus::Exited(pid, libc::WEXITSTATUS(status))
-    } else if libc::WIFSIGNALED(status) {
-        WaitStatus::Signaled(pid, libc::WTERMSIG(status))
-    } else if libc::WIFSTOPPED(status) {
-        if libc::WSTOPSIG(status) == libc::SIGTRAP | 0x80 {
+    Ok(if ws.exited() {
+        WaitStatus::Exited(pid, ws.exit_status().ok_or(Errno::INVAL)?)
+    } else if ws.signaled() {
+        WaitStatus::Signaled(pid, unsafe {
+            Signal::from_raw_unchecked(ws.terminating_signal().ok_or(Errno::INVAL)?)
+        })
+    } else if ws.stopped() {
+        let stopsig =
+            unsafe { Signal::from_raw_unchecked(ws.stopping_signal().ok_or(Errno::INVAL)?) };
+        let raw = ws.as_raw();
+        if stopsig.as_raw() == Signal::TRAP.as_raw() | 0x80 {
             WaitStatus::PtraceSyscall(pid)
-        } else if status >> 16 == 0 {
-            WaitStatus::Stopped(pid, libc::WSTOPSIG(status))
+        } else if raw >> 16 == 0 {
+            WaitStatus::Stopped(pid, stopsig)
         } else {
-            WaitStatus::PtraceEvent(pid, libc::WSTOPSIG(status), status >> 16)
+            WaitStatus::PtraceEvent(pid, stopsig, raw >> 16)
         }
-    } else if libc::WIFCONTINUED(status) {
+    } else if ws.continued() {
         WaitStatus::Continued(pid)
     } else {
-        return Err(Errno::EINVAL);
+        return Err(Errno::INVAL);
     })
+}
+
+impl WaitStatus {
+    pub fn pid(&self) -> Option<Pid> {
+        match self {
+            Self::Exited(pid, _)
+            | Self::Signaled(pid, _)
+            | Self::Stopped(pid, _)
+            | Self::PtraceEvent(pid, _, _)
+            | Self::PtraceSyscall(pid)
+            | Self::Continued(pid) => Some(*pid),
+            Self::StillAlive => None,
+        }
+    }
 }

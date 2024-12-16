@@ -3,8 +3,10 @@ use crate::{
     linux::{cgroups, manager, reaper, rootfs, sandbox, system},
     log,
 };
-use anyhow::{anyhow, Context, Result};
-use nix::{sched, sys::resource};
+use anyhow::{Context, Result, anyhow};
+use rustix::mount::MountPropagationFlags;
+use rustix::process::{PidfdFlags, Resource, Rlimit};
+use rustix::thread::UnshareFlags;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 
@@ -24,8 +26,14 @@ impl Controller {
 
         // Core dumps are dangerous if the box dumps in a user-controlled directory. They are incur
         // a penalty on runtime errors.
-        resource::setrlimit(resource::Resource::RLIMIT_CORE, 0, 0)
-            .context("Failed to disable core dumps")?;
+        rustix::process::setrlimit(
+            Resource::Core,
+            Rlimit {
+                current: Some(0),
+                maximum: Some(0),
+            },
+        )
+        .context("Failed to disable core dumps")?;
 
         Ok(Self {
             quotas,
@@ -63,11 +71,14 @@ impl Controller {
 
         // Do whatever cannot be done inside the userns. This mostly amounts to mounting stuff.
         // Create an isolated mountns for a dedicated /tmp/sunwalker_box directory
-        sched::unshare(sched::CloneFlags::CLONE_NEWNS)
+        unsafe { rustix::thread::unshare_unsafe(UnshareFlags::NEWNS) }
             .context("Failed to unshare mount namespace")?;
         // Ensure our working area is ours only
-        system::change_propagation("/", system::MsFlags::MS_PRIVATE | system::MsFlags::MS_REC)
-            .context("Failed to change propagation to private")?;
+        rustix::mount::mount_change(
+            "/",
+            MountPropagationFlags::PRIVATE | MountPropagationFlags::REC,
+        )
+        .context("Failed to change propagation to private")?;
         // Create the dedicated /tmp/sunwalker_box
         sandbox::enter_working_area().context("Failed to enter working area")?;
         // Create a copy of /dev
@@ -112,14 +123,14 @@ impl Controller {
 
         // Run a child in a new PID namespace
         log!("Unsharing pidns");
-        sched::unshare(sched::CloneFlags::CLONE_NEWPID)
+        unsafe { rustix::thread::unshare_unsafe(UnshareFlags::NEWPID) }
             .context("Failed to unshare pid namespace")?;
 
         // We need to pass a reference to ourselves to the child for monitoring, but cross-pid-namespace
         // communication doesn't work well, so we use pidfd. As a side note, pidfd_open sets O_CLOEXEC
         // automatically.
-        let pidfd =
-            system::open_pidfd(nix::unistd::getpid()).context("Failed to get pidfd of self")?;
+        let pidfd = rustix::process::pidfd_open(rustix::process::getpid(), PidfdFlags::empty())
+            .context("Failed to get pidfd of self")?;
 
         let cgroup = self
             .cgroup
@@ -182,8 +193,8 @@ impl Controller {
         ro: bool,
     ) -> Result<()> {
         let internal_abs = rootfs::resolve_abs_box_root(&internal)?;
-        system::bind_mount(rootfs::resolve_abs_old_root(external)?, &internal_abs)?;
-        system::change_propagation(&internal_abs, system::MsFlags::MS_PRIVATE)?; // linux@d29216842a85
+        rustix::mount::mount_bind(rootfs::resolve_abs_old_root(external)?, &internal_abs)?;
+        rustix::mount::mount_change(&internal_abs, MountPropagationFlags::PRIVATE)?; // linux@d29216842a85
         if ro {
             system::remount_readonly(&internal_abs)
                 .with_context(|| format!("Failed to remount {internal_abs:?} read-only"))?;

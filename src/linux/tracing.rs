@@ -1,10 +1,19 @@
 use crate::linux::string_table;
 use anyhow::{Context, Result};
-use nix::{errno::Errno, libc, libc::c_void, sys::ptrace, unistd::Pid};
+use libc::c_void;
+use nix::{errno::Errno, sys::ptrace};
+use rustix::process::{Pid, Signal};
 use std::ffi::CString;
 use std::fs::File;
 use std::io;
 use std::os::unix::fs::FileExt;
+
+// XXX: Transition from nix to rustix
+macro_rules! pid {
+    ($($pid:tt)*) => {
+        nix::unistd::Pid::from_raw(Pid::as_raw($($pid)*))
+    };
+}
 
 pub struct TracedProcess {
     pid: Pid,
@@ -161,6 +170,7 @@ impl TracedProcess {
     }
 
     fn open_mem(pid: Pid) -> Result<File> {
+        let pid = Pid::as_raw(Some(pid));
         File::options()
             .read(true)
             .write(true)
@@ -170,7 +180,7 @@ impl TracedProcess {
 
     pub fn init(&self) -> Result<()> {
         ptrace::setoptions(
-            self.pid,
+            pid!(Some(self.pid)),
             ptrace::Options::PTRACE_O_TRACECLONE
                 | ptrace::Options::PTRACE_O_TRACEFORK
                 | ptrace::Options::PTRACE_O_TRACEVFORK
@@ -282,22 +292,22 @@ impl TracedProcess {
 
     pub fn resume(&mut self) -> Result<()> {
         self._store_registers()?;
-        ptrace::cont(self.pid, None).context("Failed to ptrace-resume the child")
+        ptrace::cont(pid!(Some(self.pid)), None).context("Failed to ptrace-resume the child")
     }
     pub fn resume_syscall(&mut self) -> Result<()> {
         self._store_registers()?;
-        ptrace::syscall(self.pid, None).context("Failed to ptrace-resume the child")
+        ptrace::syscall(pid!(Some(self.pid)), None).context("Failed to ptrace-resume the child")
     }
     // We need to support realtime signals, which nix doesn't support -- that's why we're using i32
     // and wrapping libc here
-    pub fn resume_signal(&mut self, signal: i32) -> Result<()> {
+    pub fn resume_signal(&mut self, signal: Signal) -> Result<()> {
         self._store_registers()?;
         if unsafe {
             libc::ptrace(
                 libc::PTRACE_CONT,
                 self.pid,
                 std::ptr::null_mut::<c_void>(),
-                signal as *mut c_void,
+                signal.as_raw() as *mut c_void,
             )
         } == -1
         {
@@ -308,17 +318,17 @@ impl TracedProcess {
     }
 
     pub fn get_signal_info(&self) -> Result<libc::siginfo_t> {
-        ptrace::getsiginfo(self.pid).context("Failed to get signal info")
+        ptrace::getsiginfo(pid!(Some(self.pid))).context("Failed to get signal info")
     }
     pub fn get_event_msg(&self) -> Result<libc::c_long> {
-        ptrace::getevent(self.pid).context("Failed to get event")
+        ptrace::getevent(pid!(Some(self.pid))).context("Failed to get event")
     }
     pub fn get_syscall_info(&self) -> Result<ptrace_syscall_info> {
         let mut data = std::mem::MaybeUninit::<ptrace_syscall_info>::uninit();
         if unsafe {
             libc::ptrace(
                 linux_raw_sys::ptrace::PTRACE_GET_SYSCALL_INFO as _,
-                self.pid.as_raw(),
+                Pid::as_raw(Some(self.pid)),
                 std::mem::size_of_val(&data) as *const c_void,
                 data.as_mut_ptr(),
             )
@@ -331,7 +341,7 @@ impl TracedProcess {
 
     #[cfg(target_arch = "x86_64")]
     fn _get_registers(pid: Pid) -> Result<Registers, Errno> {
-        ptrace::getregs(pid).map(Registers)
+        ptrace::getregs(pid!(Some(pid))).map(Registers)
     }
     #[cfg(target_arch = "aarch64")]
     fn _get_registers(pid: Pid) -> Result<Registers, Errno> {
@@ -343,7 +353,7 @@ impl TracedProcess {
         if unsafe {
             libc::ptrace(
                 libc::PTRACE_GETREGSET,
-                pid.as_raw(),
+                Pid::as_raw(Some(self.pid)),
                 libc::NT_PRSTATUS as *mut c_void,
                 &mut iovec,
             )
@@ -359,7 +369,8 @@ impl TracedProcess {
 
     #[cfg(target_arch = "x86_64")]
     fn _set_registers(&self, regs: Registers) -> Result<()> {
-        ptrace::setregs(self.pid, *regs).context("Failed to store registers of the child")
+        ptrace::setregs(pid!(Some(self.pid)), *regs)
+            .context("Failed to store registers of the child")
     }
     #[cfg(target_arch = "aarch64")]
     fn _set_registers(&self, regs: Registers) -> Result<()> {

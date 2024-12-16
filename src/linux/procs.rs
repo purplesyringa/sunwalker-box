@@ -1,9 +1,10 @@
-use crate::{linux::system, log};
+use crate::log;
 use anyhow::{Context, Result};
+use rustix::mount::MountFlags;
 use std::path::PathBuf;
 
 pub fn mount_procfs(proc_path: &str) -> Result<()> {
-    system::mount("none", proc_path, "proc", system::MsFlags::empty(), None)?;
+    rustix::mount::mount("none", proc_path, "proc", MountFlags::empty(), None)?;
 
     log!("Hiding dangerous files under /proc");
 
@@ -113,14 +114,10 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
             "/emptyfile" // /dev/null cannot be bound read-only
         };
 
-        system::bind_mount(source, &target)
+        rustix::mount::mount_bind(source, &target)
             .with_context(|| format!("Failed to hide .../proc/{path}"))?;
-        system::bind_mount_opt(
-            "none",
-            target,
-            system::MsFlags::MS_REMOUNT | system::MsFlags::MS_RDONLY,
-        )
-        .with_context(|| format!("Failed to remount .../proc/{path} read-only"))?;
+        rustix::mount::mount_remount(target, MountFlags::BIND | MountFlags::RDONLY, "")
+            .with_context(|| format!("Failed to remount .../proc/{path} read-only"))?;
     }
 
     Ok(())
