@@ -1,7 +1,10 @@
+RUSTUP_HOME ?= ${HOME}/.rustup
+CARGO_HOME ?= ${HOME}/.cargo
+
 ARCH := $(shell $(CC) -dumpmachine | cut -d- -f1)
 TARGET := $(ARCH)-unknown-linux-musl
 
-RUSTFLAGS := $(RUSTFLAGSADD) --remap-path-prefix ${HOME}/.rustup=~/.rustup --remap-path-prefix ${HOME}/.cargo=~/.cargo --remap-path-prefix $(shell pwd)=.
+RUSTFLAGS := $(RUSTFLAGSADD) --remap-path-prefix $(RUSTUP_HOME)=~/.rustup --remap-path-prefix $(CARGO_HOME)=~/.cargo --remap-path-prefix $(shell pwd)=.
 
 ifeq ($(ARCH),aarch64)
 RUSTFLAGS += -C link-arg=-lgcc
