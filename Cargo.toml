@@ -16,6 +16,7 @@ nix = { version = "0.27.1", features = ["resource", "sched", "kmod", "ptrace", "
 openat = "0.1.21"
 rand = "0.8.5"
 miniserde = "0.1"
+libc = "0.2.153"
 
 [patch.crates-io]
 libc = { git = "https://github.com/yuki0iq/libc", branch = "libc-0.2" }
