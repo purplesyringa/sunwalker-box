@@ -80,7 +80,7 @@ fn reaper_impl(
     mask.add(signal::Signal::SIGIO);
     mask.add(signal::Signal::SIGCHLD);
     mask.thread_block()
-        .context("Failed to configure signal mask: {e}")?;
+        .context("Failed to configure signal mask")?;
 
     // PID 1 can't be killed, not even by suicide. Unfortunately, that's exactly what panic! does,
     // so every time panic! is called, it attempts to call abort(2), silently fails and gets stuck
