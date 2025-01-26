@@ -793,7 +793,7 @@ impl SingleRun<'_> {
                     .write_memory(syscall_info.args[0] as usize, unsafe {
                         // We have to force the size to 112 bytes because musl's sysinfo is much
                         // larger, and we don't want to override user's data
-                        MaybeUninit::slice_assume_init_ref(&user_sysinfo.as_bytes()[..112])
+                        user_sysinfo.as_bytes()[..112].assume_init_ref()
                     })
                     .is_ok()
                 {
