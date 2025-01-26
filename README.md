@@ -70,6 +70,7 @@ For aarch64, or if you don't want to use Docker, you will need to install the fo
 - `gem`, provided on Ubuntu by `ruby-rubygems`
 - Ruby headers, provided on Ubuntu by `ruby-dev`
 - `seccomp-tools`, provided by `gem install seccomp-tools`
+- `racc` (dependency of `seccomp-tools`), provided by `gem install racc`
 - (aarch64 only) Linux kernel headers, provided on Ubuntu by `linux-headers-$(uname -r)`,
 - (sandbox-tests only) `musl-gcc`, provided on Ubuntu by `musl-tools`,
 - (sandbox-tests only) `pyyaml` python package, provided on Alpine by `py3-yaml`

@@ -4,6 +4,7 @@ RUN \
 	apk update && \
 	apk add bash binutils curl g++ git linux-headers make musl-dev nasm ruby-dev python3 linux-headers && \
 	gem install seccomp-tools && \
+	gem install racc && \
 	curl --proto '=https' --tlsv1.3 https://sh.rustup.rs -sSf | \
 	bash -s -- \
 		-y \
