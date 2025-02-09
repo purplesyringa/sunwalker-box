@@ -84,6 +84,7 @@ impl TimeNsController {
 #[cfg(target_arch = "x86_64")]
 pub fn disable_native_instructions() -> Result<()> {
     // TSC is (who would guess?) monotonic
+    // XXX(linux-6.12): Maybe drop kernel module because PR_SET_TSC is implemented for arm64
     if unsafe { libc::prctl(libc::PR_SET_TSC, libc::PR_TSC_SIGSEGV) } != 0 {
         Err(std::io::Error::last_os_error()).context("prctl(PR_SET_TSC) failed")?;
     }
