@@ -1,7 +1,7 @@
 #![feature(
-    concat_idents,
     io_error_more,
     let_chains,
+    macro_metavar_expr_concat,
     maybe_uninit_as_bytes,
     maybe_uninit_slice,
     never_type,

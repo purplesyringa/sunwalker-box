@@ -134,7 +134,7 @@ macro_rules! syscall {
             let mut args6 = [0; 6];
             args6[..args.len()].copy_from_slice(&args);
             $crate::linux::tracing::SyscallArgs {
-                syscall_no: concat_idents!(SYS_, $name) as i32,
+                syscall_no: ${ concat(SYS_, $name) } as i32,
                 args: args6,
             }
         }
