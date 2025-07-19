@@ -158,8 +158,7 @@ impl CliCommand for Ls {
                         len: metadata.len(),
                         mode: permissions.mode(),
                     },
-                )
-                .unwrap();
+                );
         }
         Ok(Some(json::to_string(&entries)))
     }
