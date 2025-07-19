@@ -98,13 +98,12 @@ pub fn mount_procfs(proc_path: &str) -> Result<()> {
 
         let metadata = std::fs::metadata(&target);
 
-        if let Err(ref e) = metadata {
-            if let std::io::ErrorKind::NotFound = e.kind() {
+        if let Err(ref e) = metadata
+            && let std::io::ErrorKind::NotFound = e.kind() {
                 // If a file does not exist, there's nothing to hide
                 log!("Skipping /proc/{path} because it's missing");
                 continue;
             }
-        }
 
         let metadata = metadata.with_context(|| format!("Failed to stat {target:?}"))?;
 

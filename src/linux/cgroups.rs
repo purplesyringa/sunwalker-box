@@ -374,11 +374,10 @@ impl BoxCgroup {
 
 impl Drop for BoxCgroup {
     fn drop(&mut self) {
-        if !self.dropped {
-            if let Err(e) = self._destroy() {
+        if !self.dropped
+            && let Err(e) = self._destroy() {
                 eprintln!("Error in Drop: {e:?}");
             }
-        }
     }
 }
 

@@ -414,13 +414,12 @@ pub fn reset(state: &RootfsState) -> Result<()> {
         std::fs::read_dir("/newroot/dev/pts").context("Failed to readdir /newroot/dev/pts")?
     {
         let entry = entry.context("Failed to readdir /newroot/dev/pts")?;
-        if let Ok(file_name) = entry.file_name().into_string() {
-            if file_name.parse::<u64>().is_ok() {
+        if let Ok(file_name) = entry.file_name().into_string()
+            && file_name.parse::<u64>().is_ok() {
                 log!("Removing pty #{file_name}");
                 std::fs::remove_file(entry.path())
                     .with_context(|| format!("Failed to rm {:?}", entry.path()))?;
             }
-        }
     }
 
     Ok(())

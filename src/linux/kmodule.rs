@@ -7,11 +7,10 @@ pub fn install() -> Result<()> {
     let kmodule = include_bytes!("../../target/sunwalker.ko");
     if !kmodule.is_empty() {
         log!("Loading kernel module");
-        if let Err(e) = init_module(kmodule, &CString::new("").unwrap()) {
-            if e != Errno::EEXIST {
+        if let Err(e) = init_module(kmodule, &CString::new("").unwrap())
+            && e != Errno::EEXIST {
                 Err(e)?;
             }
-        }
     }
     Ok(())
 }
