@@ -23,7 +23,7 @@ CXX_OPTIONS := -nostartfiles -nostdlib -O2 -std=c++20 -fno-asynchronous-unwind-t
 
 CARGO_TARGET := $(shell echo "$(TARGET)" | tr a-z- A-Z_)
 CARGO := CARGO_TARGET_$(CARGO_TARGET)_LINKER="$(CC)" RUSTFLAGS="$(RUSTFLAGS)" cargo +nightly
-CARGO_OPTIONS_RELEASE := --target $(TARGET) -Z build-std=std,panic_abort -Z build-std-features=panic_immediate_abort --release
+CARGO_OPTIONS_RELEASE := --target $(TARGET) -Z build-std=std,panic_abort --release
 CARGO_OPTIONS_DEBUG := --target $(TARGET)
 
 SECCOMP_FILTERS := filter
