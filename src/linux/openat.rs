@@ -2,7 +2,7 @@ use crossmist::{Deserializer, NonTrivialObject, Serializer};
 use std::io::Result;
 use std::ops::Deref;
 use std::os::fd::{IntoRawFd, OwnedFd};
-use std::os::unix::io::{AsRawFd, FromRawFd};
+use std::os::unix::io::{AsRawFd, BorrowedFd, FromRawFd};
 
 pub struct OpenAtDir(openat::Dir);
 
@@ -32,8 +32,8 @@ impl Deref for OpenAtDir {
 
 unsafe impl NonTrivialObject for OpenAtDir {
     fn serialize_self_non_trivial(&self, s: &mut Serializer) {
-        let handle = s.add_handle(self.0.as_raw_fd());
-        s.serialize(&handle)
+        let fd = unsafe { BorrowedFd::borrow_raw(self.0.as_raw_fd()) };
+        s.serialize_handle(fd);
     }
     unsafe fn deserialize_self_non_trivial(d: &mut Deserializer) -> Result<Self> {
         Ok(Self(unsafe {

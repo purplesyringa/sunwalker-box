@@ -3,7 +3,7 @@ use crate::{
     linux::{cgroups, ipc, manager, procs},
     log,
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use crossmist::Object;
 use nix::{
     fcntl, libc,
@@ -162,7 +162,8 @@ fn reaper_impl(
             return Err(std::io::Error::last_os_error()).context("Failed to F_SETOWN");
         }
 
-        if unsafe { libc::fcntl(channel.as_raw_fd(), libc::F_SETSIG, signal as i32) } == -1 {
+        const F_SETSIG: c_int = linux_raw_sys::general::F_SETSIG as _;
+        if unsafe { libc::fcntl(channel.as_raw_fd(), F_SETSIG, signal as i32) } == -1 {
             return Err(std::io::Error::last_os_error()).context("Failed to F_SETSIG");
         }
 

@@ -317,7 +317,7 @@ impl TracedProcess {
         let mut data = std::mem::MaybeUninit::<ptrace_syscall_info>::uninit();
         if unsafe {
             libc::ptrace(
-                libc::PTRACE_GET_SYSCALL_INFO,
+                linux_raw_sys::ptrace::PTRACE_GET_SYSCALL_INFO as _,
                 self.pid.as_raw(),
                 std::mem::size_of_val(&data) as *const c_void,
                 data.as_mut_ptr(),
