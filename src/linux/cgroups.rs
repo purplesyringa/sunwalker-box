@@ -2,7 +2,7 @@ use crate::{
     linux::{ids, openat::OpenAtDir},
     log,
 };
-use anyhow::{ensure, Context, Result};
+use anyhow::{Context, Result, ensure};
 use crossmist::Object;
 use rand::Rng;
 use rustix::fs::{AtFlags, FileType};
@@ -376,9 +376,10 @@ impl BoxCgroup {
 impl Drop for BoxCgroup {
     fn drop(&mut self) {
         if !self.dropped
-            && let Err(e) = self._destroy() {
-                eprintln!("Error in Drop: {e:?}");
-            }
+            && let Err(e) = self._destroy()
+        {
+            eprintln!("Error in Drop: {e:?}");
+        }
     }
 }
 

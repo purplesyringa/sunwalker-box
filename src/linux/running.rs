@@ -4,7 +4,7 @@ use crate::{
     },
     log, syscall,
 };
-use anyhow::{bail, ensure, Context, Result};
+use anyhow::{Context, Result, bail, ensure};
 use crossmist::Object;
 use nix::errno; // FIXME(rustix): ptrace wrapper
 use nix::sys::ptrace; // FIXME(rustix): ptrace
@@ -631,116 +631,114 @@ impl SingleRun<'_> {
                 }))
             }
             libc::SYS_memfd_create => {
-                Ok(EmulatedSyscall::redirect_with_errno(
-                    try {
-                        let mut open_flags = libc::O_RDWR;
-                        if syscall_info.args[1] & (libc::MFD_CLOEXEC as u64) != 0 {
-                            open_flags |= libc::O_CLOEXEC;
-                        }
-                        // TODO: sealing
-                        if syscall_info.args[1]
-                            & !(libc::MFD_CLOEXEC
-                                | libc::MFD_HUGETLB
-                                | (libc::MFD_HUGE_MASK << libc::MFD_HUGE_SHIFT))
-                                as u64
-                            != 0
-                        {
-                            Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
-                        }
+                Ok(EmulatedSyscall::redirect_with_errno(try {
+                    let mut open_flags = libc::O_RDWR;
+                    if syscall_info.args[1] & (libc::MFD_CLOEXEC as u64) != 0 {
+                        open_flags |= libc::O_CLOEXEC;
+                    }
+                    // TODO: sealing
+                    if syscall_info.args[1]
+                        & !(libc::MFD_CLOEXEC
+                            | libc::MFD_HUGETLB
+                            | (libc::MFD_HUGE_MASK << libc::MFD_HUGE_SHIFT))
+                            as u64
+                        != 0
+                    {
+                        Err(std::io::Error::from_raw_os_error(libc::EINVAL))?;
+                    }
 
-                        let mut name = process
-                            .traced_process
-                            .read_cstring(syscall_info.args[0] as usize, 249)?
-                            .into_bytes();
+                    let mut name = process
+                        .traced_process
+                        .read_cstring(syscall_info.args[0] as usize, 249)?
+                        .into_bytes();
 
-                        // Sanitization
-                        name.retain(|&c| c != b'/');
+                    // Sanitization
+                    name.retain(|&c| c != b'/');
 
-                        let mut path = Vec::from(b"/memfd:");
-                        path.append(&mut name);
+                    let mut path = Vec::from(b"/memfd:");
+                    path.append(&mut name);
 
-                        // This attempts to create a file named memfd:... in the root tmpfs. This
-                        // ensures the path shown in /proc/.../maps matches the name memfd_create
-                        // would generate unless the filename contains /. This can theoretically
-                        // collide with an existing file in the chroot, but that would be rather
-                        // stupid from the rootfs generator, and we believe our users are not
-                        // morons.
-                        let mut file = File::create_new(OsStr::from_bytes(&path));
-                        if let Err(ref e) = file
-                            && e.kind() == io::ErrorKind::AlreadyExists
-                        {
-                            // Either the chroot creator is, in fact, a moron, or some of our
-                            // processes is in a racy "openat is just about to run" state.
-                            log!(
-                                warn,
-                                "A file matching the pattern /memfd:... exists in the root \
-                                 filesystem. This indicated either that a race condition in \
-                                 memfd_create logic was triggered, or that such a file exists in \
-                                 the chroot passed to sunwalker-box. In the former case, please \
-                                 report this if it happens in the wild so that we can workaround \
-                                 it or prioritize a proper fix. In the latter case, please remove \
-                                 or rename the file."
-                            );
-                            // Assume the latter and rename the file to something random.
-                            path = Vec::from(b"/memfd:fallback");
-                            path.extend(rand::random::<u64>().to_string().as_bytes());
-                            file = File::create_new(OsStr::from_bytes(&path));
-                        }
+                    // This attempts to create a file named memfd:... in the root tmpfs. This
+                    // ensures the path shown in /proc/.../maps matches the name memfd_create
+                    // would generate unless the filename contains /. This can theoretically
+                    // collide with an existing file in the chroot, but that would be rather
+                    // stupid from the rootfs generator, and we believe our users are not
+                    // morons.
+                    let mut file = File::create_new(OsStr::from_bytes(&path));
+                    if let Err(ref e) = file
+                        && e.kind() == io::ErrorKind::AlreadyExists
+                    {
+                        // Either the chroot creator is, in fact, a moron, or some of our
+                        // processes is in a racy "openat is just about to run" state.
+                        log!(
+                            warn,
+                            "A file matching the pattern /memfd:... exists in the root \
+                             filesystem. This indicated either that a race condition in \
+                             memfd_create logic was triggered, or that such a file exists in the \
+                             chroot passed to sunwalker-box. In the former case, please report \
+                             this if it happens in the wild so that we can workaround it or \
+                             prioritize a proper fix. In the latter case, please remove or rename \
+                             the file."
+                        );
+                        // Assume the latter and rename the file to something random.
+                        path = Vec::from(b"/memfd:fallback");
+                        path.extend(rand::random::<u64>().to_string().as_bytes());
+                        file = File::create_new(OsStr::from_bytes(&path));
+                    }
 
-                        // Any other error isn't supposed to happen under any condition.
-                        if file.is_err() {
-                            log!(
-                                impossible,
-                                "An attempt to create /memfd:... failed. This is a bug in \
-                                 sunwalker-box."
-                            );
-                            Err(std::io::Error::from_raw_os_error(libc::ENOMEM))?;
-                        }
+                    // Any other error isn't supposed to happen under any condition.
+                    if file.is_err() {
+                        log!(
+                            impossible,
+                            "An attempt to create /memfd:... failed. This is a bug in \
+                             sunwalker-box."
+                        );
+                        Err(std::io::Error::from_raw_os_error(libc::ENOMEM))?;
+                    }
 
-                        if std::fs::set_permissions(
-                            OsStr::from_bytes(&path),
-                            PermissionsExt::from_mode(0o666),
-                        )
-                        .is_err()
-                        {
-                            log!(
-                                impossible,
-                                "An attempt to chmod /memfd:... failed. This is a bug in \
-                                 sunwalker-box."
-                            );
-                            Err(std::io::Error::from_raw_os_error(libc::ENOMEM))?;
-                        }
+                    if std::fs::set_permissions(
+                        OsStr::from_bytes(&path),
+                        PermissionsExt::from_mode(0o666),
+                    )
+                    .is_err()
+                    {
+                        log!(
+                            impossible,
+                            "An attempt to chmod /memfd:... failed. This is a bug in \
+                             sunwalker-box."
+                        );
+                        Err(std::io::Error::from_raw_os_error(libc::ENOMEM))?;
+                    }
 
-                        // Open the same path in the user process
-                        path.push(b'\0');
+                    // Open the same path in the user process
+                    path.push(b'\0');
 
-                        // Account for red zone
-                        let file_name_addr =
-                            (process.traced_process.get_stack_pointer()? - 128) - path.len();
+                    // Account for red zone
+                    let file_name_addr =
+                        (process.traced_process.get_stack_pointer()? - 128) - path.len();
 
-                        process.traced_process.write_memory(file_name_addr, &path)?;
+                    process.traced_process.write_memory(file_name_addr, &path)?;
 
-                        // Note that files created in / are not accounted for by the tmpfs quotas.
-                        // Therefore memfds are not subject to disk quotas, which are typically
-                        // lower than the memory limit. This behavior has caused problems before,
-                        // see e.g. https://github.com/purplesyringa/sunwalker-box/issues/7.
-                        //
-                        // However, these files *are* accounted for by the cgroup. Indeed, any
-                        // attempt to write to the memfd (initially empty) by a user process will
-                        // allocate pages, and shmem_alloc_and_add_folio charges the pages to the
-                        // memory cgroup of the current process (see e.g.
-                        // mm/shmem.c:mem_cgroup_charge:1679 on Linux v6.7.9). Therefore, memfd is
-                        // effectively treated as an extension to RAM, which is what it is supposed
-                        // to be anyway.
+                    // Note that files created in / are not accounted for by the tmpfs quotas.
+                    // Therefore memfds are not subject to disk quotas, which are typically
+                    // lower than the memory limit. This behavior has caused problems before,
+                    // see e.g. https://github.com/purplesyringa/sunwalker-box/issues/7.
+                    //
+                    // However, these files *are* accounted for by the cgroup. Indeed, any
+                    // attempt to write to the memfd (initially empty) by a user process will
+                    // allocate pages, and shmem_alloc_and_add_folio charges the pages to the
+                    // memory cgroup of the current process (see e.g.
+                    // mm/shmem.c:mem_cgroup_charge:1679 on Linux v6.7.9). Therefore, memfd is
+                    // effectively treated as an extension to RAM, which is what it is supposed
+                    // to be anyway.
 
-                        path.pop().unwrap();
+                    path.pop().unwrap();
 
-                        (
-                            syscall!(openat(AT_FDCWD, file_name_addr, open_flags, 0)),
-                            ProcessState::AfterOpenMemfd(path),
-                        )
-                    },
-                ))
+                    (
+                        syscall!(openat(AT_FDCWD, file_name_addr, open_flags, 0)),
+                        ProcessState::AfterOpenMemfd(path),
+                    )
+                }))
             }
             libc::SYS_sysinfo => {
                 let our_sysinfo = rustix::system::sysinfo();
