@@ -142,7 +142,7 @@ class PyTest(Test):
             return
 
         path = f"/space/{self.slug}.py"
-        self.argv = ["/usr/bin/python3", path]
+        self.argv = [sys.executable, path]
         box.touch(path)
         box.bind(os.path.abspath(f"tests/{self.slug}.py"), path, readonly=True)
 
