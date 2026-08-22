@@ -2,7 +2,6 @@
     io_error_more,
     macro_metavar_expr_concat,
     maybe_uninit_as_bytes,
-    maybe_uninit_slice,
     never_type,
     try_blocks,
     unwrap_infallible
