@@ -10,6 +10,7 @@ with pkgs; let
     fileset = fs.difference src (
       fs.unions [
         (fs.maybeMissing ./result)
+        (fs.maybeMissing ./target)
         ./sandbox_tests
       ]
     );
