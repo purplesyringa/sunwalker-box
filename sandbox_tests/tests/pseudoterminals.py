@@ -9,6 +9,7 @@ script: |
 
 import os
 import pty
+import shutil
 import sys
 
 
@@ -30,6 +31,6 @@ pty.openpty()
 print(os.listdir("/dev/pts"), file=sys.stderr)
 
 
-pty.spawn(["/bin/echo", "Hello, world!"], read)
+pty.spawn([shutil.which("echo"), "Hello, world!"], read)
 
 assert result == b"Hello, world!\r\n", result

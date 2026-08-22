@@ -1,7 +1,7 @@
 description: lo is the only interface and is down
 script: |
-    import os, subprocess
-    ip = "/sbin/ip"
+    import os, shutil, subprocess
+    ip = shutil.which("ip")
     busybox = subprocess.run([os.path.realpath(ip), "echo", "1"], capture_output=True).stdout == b'1\n'
 
     if busybox:

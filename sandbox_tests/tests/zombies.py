@@ -8,6 +8,7 @@ script: |
 """
 
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -18,7 +19,7 @@ def list_pids():
 
 
 if sys.argv[-1] == "stage2":
-    subprocess.Popen(["/bin/true"])
+    subprocess.Popen([shutil.which("true")])
 else:
     old_pids = list_pids()
     subprocess.run([sys.executable] + sys.argv + ["stage2"], check=True)

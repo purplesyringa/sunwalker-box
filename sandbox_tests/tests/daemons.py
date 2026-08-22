@@ -8,6 +8,7 @@ script: |
 """
 
 import os
+import shutil
 import subprocess
 
 
@@ -15,6 +16,6 @@ def list_pids():
     return [int(pid) for pid in os.listdir("/proc") if pid.isdigit()]
 
 
-subprocess.Popen(["/bin/sleep", "inf"])
+subprocess.Popen([shutil.which("sleep"), "inf"])
 
 print(list_pids())

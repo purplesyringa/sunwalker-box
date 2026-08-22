@@ -10,7 +10,7 @@ from typing import Callable, Optional, Tuple
 
 DEFAULT_ENV = {
     "LD_LIBRARY_PATH": "/usr/local/lib64:/usr/local/lib:/usr/lib64:/usr/lib:/lib64:/lib",
-    "PATH": "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
+    "PATH": os.environ["PATH"] or "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin",
     "LANGUAGE": "en_US",
     "LC_ALL": "en_US.UTF-8",
     "LC_ADDRESS": "en_US.UTF-8",
